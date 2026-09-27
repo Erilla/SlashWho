@@ -3,9 +3,11 @@ import { specIconUrl, type CharacterKey } from "@slashwho/domain";
 import { MYTHIC_DIFFICULTY } from "../queries";
 import type {
   WarcraftLogsLimitation,
+  WarcraftLogsParseGroup,
   WarcraftLogsParseMetric,
   WarcraftLogsPerformance,
-  WarcraftLogsTierBestParse
+  WarcraftLogsTierBestParse,
+  WarcraftLogsTierZone
 } from "../types";
 import {
   isLimitation,
@@ -42,18 +44,7 @@ type RankingRow = Readonly<{
  * `fights` records what each fight is expected to be so a returned row can be
  * rejected if it describes a different encounter or difficulty.
  */
-export type RankingScope = Readonly<{
-  reportCode: string;
-  fights: ReadonlyMap<
-    number,
-    Readonly<{ encounterId: number; difficulty: number }>
-  >;
-  earliestKilledAt: string;
-  /** The most recent kill in this report, used to favour the current tier. */
-  latestKilledAt: string;
-  /** Whether this report carries the first kill of any boss. */
-  hasFirstKill: boolean;
-}>;
+export type RankingScope = WarcraftLogsParseGroup;
 
 const unavailableParseMetric: WarcraftLogsParseMetric = {
   state: "unavailable"
@@ -355,7 +346,7 @@ function reportedClassName(value: unknown): string | null {
 function specPerformance(
   identity: SpecIdentity | null,
   knownClassName?: string
-): WarcraftLogsPerformance["spec"] {
+): Exclude<WarcraftLogsPerformance["spec"], undefined> {
   if (identity === null) return null;
   const iconUrl = specIconUrl(
     identity.specName,
@@ -406,13 +397,7 @@ export function normalizedPerformance(
   return performance;
 }
 
-export type ZoneScope = Readonly<{
-  /** The Warcraft Logs zone id, as the fights themselves report it. */
-  zoneId: number;
-  raidName: string;
-  /** The most recent displayed kill in this zone, used to favour live tiers. */
-  latestKilledAt: string;
-}>;
+export type ZoneScope = WarcraftLogsTierZone;
 
 function characterRankingsUrl(
   key: CharacterKey,

@@ -23,10 +23,12 @@ export const PROVIDER_TIMEOUT_MS = 15_000;
  * another's results.
  */
 export type DossierGatewayOverrides = Readonly<{
-  blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
-  raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter">;
-  wclCredentials?: WclCredentials | null;
-  wclCredentialRef?: { accountId: string; credentialVersion: number };
+  blizzard?: Pick<BlizzardGateway, "getCompletedAchievements"> | undefined;
+  raiderio?:
+    Pick<RaiderIoGateway, "getMythicBossRankings" | "getCharacter"> | undefined;
+  wclCredentials?: WclCredentials | null | undefined;
+  wclCredentialRef?:
+    { accountId: string; credentialVersion: number } | undefined;
 }>;
 
 export type WclCredentials = Readonly<{
@@ -98,7 +100,7 @@ export function createDossierGateways(options: {
     ApplicationConfig,
     "NEGATIVE_CACHE_TTL_MS" | "DOSSIER_PROVIDER_CONCURRENCY"
   >;
-  onCacheEvent?: (source: string, event: string) => void;
+  onCacheEvent?: ((source: string, event: string) => void) | undefined;
 }) {
   const achievements = createBoundedCache<
     Awaited<ReturnType<BlizzardGateway["getCompletedAchievements"]>>

@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 const root = { region: "eu", realm: "silvermoon", name: "ryii" } as const;
 const characterUrl = "https://raider.io/characters/eu/silvermoon/ryii";
 
-const enqueued: Array<{ correlationId?: string }> = [];
+const enqueued: Array<{ correlationId?: string | undefined }> = [];
 const queue: Pick<DiscoveryQueue, "enqueue"> = {
   async enqueue(payload) {
     enqueued.push(payload);

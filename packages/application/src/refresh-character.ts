@@ -68,7 +68,7 @@ export async function refreshCharacter(options: {
   cooldownMs: number;
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-  credentials?: { accountId: string; credentialVersion: number };
+  credentials?: { accountId: string; credentialVersion: number } | undefined;
   /**
    * Refresh is the one path a reader can trigger collection from, so its
    * database work is measured like every other endpoint's rather than leaving

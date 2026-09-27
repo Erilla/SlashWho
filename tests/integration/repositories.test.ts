@@ -3191,21 +3191,30 @@ describe("PostgreSQL repositories", () => {
     });
     const getFirstKillReports = async (
       _key: typeof rootKey,
-      options: {
-        hydratedFightUrls?: ReadonlySet<string>;
-        terminalRaidIds?: {
-          kills: ReadonlySet<string>;
-          parses: ReadonlySet<string>;
-          tierBests: ReadonlySet<string>;
-        };
-      }
+      options: Parameters<WarcraftLogsGateway["getFirstKillReports"]>[1]
     ) => {
-      expect(options.hydratedFightUrls).not.toContain(oldParse.fightUrl);
-      expect(options.terminalRaidIds).toEqual({
-        kills: new Set([oldParse.raidId]),
-        parses: new Set(),
-        tierBests: new Set([oldParse.raidId])
+      // The old parse's fight, in a raid window the plan spends on, so only
+      // what is stored decides whether it gets a request.
+      const planned = {
+        ...oldParse,
+        raidName: "The Eternal Palace",
+        bossId: "2299",
+        killedAt: "2020-01-14T20:34:49.222Z",
+        reportCode: "example",
+        fightId: 1,
+        difficulty: 5,
+        guild: null
+      };
+      // The old parse is fetched again: neither stored as hydrated nor
+      // terminal for parses any more.
+      expect(options.plan.parseGroups([planned]).groups).toHaveLength(1);
+      // Tier bests stay terminal, so the zone costs no request.
+      expect(options.plan.tierZones([planned], 24)).toEqual({
+        zones: [],
+        unreached: []
       });
+      // Kills stay terminal, so the stored kill's report is not re-read.
+      expect(options.storedKillReportCodes).toEqual([]);
       return {
         kind: "evidence" as const,
         parsedFightUrls: [refreshed.fightUrl],

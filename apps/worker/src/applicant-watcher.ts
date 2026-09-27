@@ -17,9 +17,9 @@ import type { WorkerConfig } from "./config";
 const source = "applicant_sheet";
 
 export type NewApplicant = {
-  battletag?: string;
-  discordId?: string;
-  characterName?: string;
+  battletag?: string | undefined;
+  discordId?: string | undefined;
+  characterName?: string | undefined;
   characterUrl: string;
   dossierPath?: string;
 };

@@ -18,7 +18,7 @@ export function createConcurrencyLimiter(
   const pending: Array<{
     work: () => Promise<unknown>;
     queuedAt: number;
-    onWait?: (waitedMs: number) => void;
+    onWait?: ((waitedMs: number) => void) | undefined;
     resolve: (value: unknown) => void;
     reject: (error: unknown) => void;
   }> = [];

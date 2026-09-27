@@ -10,7 +10,7 @@ import type { WorkerConfig } from "./config";
 import { postWebhook } from "./webhook";
 
 export type NotifierOptions = {
-  logger?: DiscoveryLogger;
+  logger?: DiscoveryLogger | undefined;
   fetch?: typeof globalThis.fetch;
   timeoutMs?: number;
 };

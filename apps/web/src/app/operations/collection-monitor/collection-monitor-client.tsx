@@ -190,7 +190,7 @@ export function CollectionMonitorView({
   /** False after a failed page, so only a deliberate press retries it. */
   autoLoadMoreCompleted?: boolean;
   /** Absent when no older completed runs can be loaded. */
-  onLoadMoreCompleted?: () => void;
+  onLoadMoreCompleted?: (() => void) | undefined;
 }>) {
   const completedScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLButtonElement>(null);

@@ -59,7 +59,7 @@ export type Recording = Readonly<{
    * paths only, never values. It is the baseline the drift check compares the
    * fields we ignore against. Absent from recordings made before it existed.
    */
-  ignored?: readonly string[];
+  ignored?: readonly string[] | undefined;
 }>;
 
 export const playableClassNames = [

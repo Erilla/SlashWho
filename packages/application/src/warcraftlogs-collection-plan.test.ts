@@ -1,14 +1,11 @@
+import type { WarcraftLogsFirstKillEvidence } from "@slashwho/warcraftlogs";
 import { describe, expect, it } from "vitest";
 
 import {
+  createWarcraftLogsCollectionPlan,
   parseGroupPlan,
-  tierZonePlan,
-  uncoveredVerifiedKills
-} from "./collection-plan";
-import type {
-  WarcraftLogsFirstKillEvidence,
-  WarcraftLogsVerifiedKill
-} from "./types";
+  tierZonePlan
+} from "./warcraftlogs-collection-plan";
 
 function kill(
   overrides: Partial<WarcraftLogsFirstKillEvidence> &
@@ -156,24 +153,33 @@ describe("parseGroupPlan", () => {
   });
 });
 
-describe("uncoveredVerifiedKills", () => {
-  const verified = (at: string): WarcraftLogsVerifiedKill => ({
-    at,
-    guild: { name: "Guild", realm: "realm", region: "eu" }
+describe("createWarcraftLogsCollectionPlan", () => {
+  it("measures the zone budget against the cap the gateway holds", () => {
+    const kills = [
+      kill({ ...nerubar, killedAt: "2024-10-01T00:00:00.000Z" }),
+      kill({ ...manaforge, killedAt: "2025-09-01T00:00:00.000Z" })
+    ];
+    const plan = createWarcraftLogsCollectionPlan({
+      terminalRaidIds: { parses: new Set(), tierBests: new Set(["103"]) }
+    });
+    expect(plan.tierZones(kills, 5)).toEqual(
+      tierZonePlan(kills, {
+        parseRequestCap: 5,
+        terminalRaidIds: { tierBests: new Set(["103"]) }
+      })
+    );
+    expect(plan.tierZones(kills, 2).zones).toEqual([]);
   });
-  const start = Date.parse("2025-04-01T19:00:00.000Z");
-  const span = { start, end: start + 3 * 60 * 60 * 1_000 };
 
-  it("leaves a kill inside a scanned report, allowing for clock slack", () => {
-    expect(
-      uncoveredVerifiedKills([verified("2025-04-01T23:30:00.000Z")], [span])
-    ).toEqual([]);
-  });
-
-  it("returns a kill no scanned report reaches", () => {
-    const wanted = verified("2025-04-08T20:00:00.000Z");
-    expect(uncoveredVerifiedKills([wanted], [span])).toEqual([
-      { verified: wanted, at: Date.parse(wanted.at) }
-    ]);
+  it("groups fights with the options it was built with", () => {
+    const stored = kill({
+      ...undermine,
+      killedAt: "2025-04-01T00:00:00.000Z",
+      reportCode: "stored"
+    });
+    const plan = createWarcraftLogsCollectionPlan({
+      hydratedFightUrls: new Set([stored.fightUrl])
+    });
+    expect(plan.parseGroups([stored]).groups).toEqual([]);
   });
 });

@@ -13,12 +13,12 @@ import type { AccountMailConfig } from "./account-mail";
 export type WorkerConfig = {
   applicantWatcher: {
     enabled: boolean;
-    sheetId?: string;
+    sheetId?: string | undefined;
     column: string;
-    dossierBaseUrl?: string;
-    apiKey?: string;
-    serviceAccountEmail?: string;
-    privateKey?: string;
+    dossierBaseUrl?: string | undefined;
+    apiKey?: string | undefined;
+    serviceAccountEmail?: string | undefined;
+    privateKey?: string | undefined;
     cadenceMs: number;
     perTick: number;
     perDay: number;
@@ -39,8 +39,8 @@ export type WorkerConfig = {
   negativeCacheTtlMs: number;
   raiderIoBaseUrl: string;
   raiderIoTimeoutMs: number;
-  raiderIoAccessKey?: string;
-  discoveryWebhookUrl?: string;
+  raiderIoAccessKey?: string | undefined;
+  discoveryWebhookUrl?: string | undefined;
   blizzardClientId: string;
   blizzardClientSecret: string;
   warcraftLogsClientId: string;
@@ -56,13 +56,13 @@ export type WorkerConfig = {
   evidenceKillSettleDays: number;
   evidenceRetryCostCeiling: number;
   evidenceFailureCooldownMs: number;
-  blizzardBaseUrl?: string;
+  blizzardBaseUrl?: string | undefined;
   blizzardSweepRequestCap: number;
   blizzardHourlyRequestBudget: number;
   fingerprintMinimumCommon: number;
   fingerprintMinimumIdenticalPercent: number;
   fingerprintSweepCadenceHours: number;
-  maintainerAlertWebhookUrl?: string;
+  maintainerAlertWebhookUrl?: string | undefined;
   evidenceJobCredentialEncryptionKey: Buffer;
 };
 

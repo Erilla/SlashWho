@@ -218,7 +218,7 @@ export function createTransport(
           "Content-Type": "application/json"
         },
         body: JSON.stringify({ query, variables }),
-        signal
+        signal: signal ?? null
       });
     } catch {
       if (signal?.aborted) throw signal.reason;

@@ -113,7 +113,7 @@ it("does not let an applicant alert failure interrupt intake", async () => {
 it("continues notifying later applicants when one delivery throws", async () => {
   const received: string[] = [];
   const notify = vi.fn(
-    async (alert: { applicant?: { battletag?: string } }) => {
+    async (alert: { applicant?: { battletag?: string | undefined } }) => {
       received.push(alert.applicant?.battletag ?? "");
       if (received.length === 1) throw new Error("webhook unavailable");
     }

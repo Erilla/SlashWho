@@ -1,4 +1,3 @@
-import { tierZonePlan } from "../collection-plan";
 import { isLimitation } from "../decode/primitives";
 import { decodeZoneRankings, type ZoneScope } from "../decode/rankings";
 import { toParseLimitation, type ParseLedger } from "../parse-ledger";
@@ -7,16 +6,19 @@ import type { WarcraftLogsTierBestParse } from "../types";
 import { unavailableOnTimeout, type CollectionRun } from "./context";
 
 /**
- * The best parse per boss in each zone the run's kills reach, one request a
- * zone. Spends from `parseRequestCap`, leaving the rest for per-fight
- * hydration.
+ * The best parse per boss in each zone the caller's plan picks from the
+ * run's kills, one request a zone. Spends from `parseRequestCap`, leaving the
+ * rest for per-fight hydration.
  */
 export async function collectTierBests(
   run: CollectionRun,
   ledger: ParseLedger
 ): Promise<readonly WarcraftLogsTierBestParse[]> {
   const { key, lookup, options } = run;
-  const plan = tierZonePlan(run.kills.values(), options);
+  const plan = options.plan.tierZones(
+    [...run.kills.values()],
+    options.parseRequestCap
+  );
   const tierBests: WarcraftLogsTierBestParse[] = [];
   // Zones the loop stopped before reaching were read by nobody, so none of
   // them may settle on the strength of this run.

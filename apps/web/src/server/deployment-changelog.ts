@@ -35,7 +35,7 @@ type ChangelogLoadOptions = Readonly<{
   environments?: readonly string[];
   maxEntries?: number;
   fetch?: typeof globalThis.fetch;
-  githubToken?: string;
+  githubToken?: string | undefined;
   maxDeploymentsPerEnvironment?: number;
 }>;
 
@@ -117,7 +117,7 @@ function parseChangelogOptions(input: ChangelogLoadOptions): {
   maxEntries: number;
   maxDeploymentsPerEnvironment: number;
   fetch: typeof globalThis.fetch;
-  githubToken?: string;
+  githubToken?: string | undefined;
 } {
   const source = input.environment ?? process.env;
   const repository = (

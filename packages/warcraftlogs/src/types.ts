@@ -272,14 +272,15 @@ export type WarcraftLogsReportResult =
       scanSkipped?: boolean;
       /**
        * The next report page after the newest contiguous prefix decoded by a
-       * limited scan. It is absent unless a cleanly decoded page proves it.
+       * limited scan. It is absent (or undefined) unless a cleanly decoded
+       * page proves it.
        */
-      historyScanResumePage?: number;
+      historyScanResumePage?: number | undefined;
       /**
        * The last report code on the final proved page. It validates that the
        * page offset has not moved before a later run resumes below it.
        */
-      historyScanResumeBoundaryReportCode?: string;
+      historyScanResumeBoundaryReportCode?: string | undefined;
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];
@@ -297,8 +298,8 @@ export type WarcraftLogsReportResult =
        * response the decoder rejected -- is absent, because nothing was
        * learned about it.
        *
-       * Fights skipped through `hydratedFightUrls` are absent too: this read
-       * did not ask about them, and what is already stored for them stands.
+       * Fights the plan left out are absent too: this read did not ask about
+       * them, and what is already stored for them stands.
        */
       parsedFightUrls: readonly string[];
       /**
@@ -367,6 +368,74 @@ export type WarcraftLogsReportResult =
     }>
   | WarcraftLogsLimitation;
 
+/** One raid zone whose tier bests a run requests, one request a zone. */
+export type WarcraftLogsTierZone = Readonly<{
+  /** The Warcraft Logs zone id, as the fights themselves report it. */
+  zoneId: number;
+  raidName: string;
+  /** The most recent displayed kill in this zone, used to favour live tiers. */
+  latestKilledAt: string;
+}>;
+
+/** One report whose fight rankings a run requests, one request a report. */
+export type WarcraftLogsParseGroup = Readonly<{
+  reportCode: string;
+  /** The fights to ask about, keyed by fight id within the report. */
+  fights: ReadonlyMap<
+    number,
+    Readonly<{ encounterId: number; difficulty: number }>
+  >;
+  earliestKilledAt: string;
+  /** The most recent kill in this report, used to favour the current tier. */
+  latestKilledAt: string;
+  /** Whether this report carries the first kill of any boss. */
+  hasFirstKill: boolean;
+}>;
+
+export type WarcraftLogsParseGroupPlan = Readonly<{
+  /** Report groups in the order the budget should reach them. */
+  groups: readonly WarcraftLogsParseGroup[];
+  /** Every raid a group's fights belong to, keyed by report code. */
+  raidIds: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * The fights each group covers, by URL, so a group that reaches an answer
+   * can say which fights were answered. The group itself is keyed by fight id
+   * within a report, and only the kill carries the URL a caller stores.
+   */
+  fightUrls: ReadonlyMap<string, ReadonlySet<string>>;
+}>;
+
+/**
+ * What a `getFirstKillReports` run spends its parse budget on, decided by the
+ * caller. Both are asked once, after discovery, with every kill the run holds:
+ * stored, scanned, recovered from attendance and found by a tier search or the
+ * ranked walk alike, since none of those are known before the run.
+ */
+export type WarcraftLogsCollectionPlan = Readonly<{
+  /**
+   * The zones whose tier bests to request, in order, and the ones the budget
+   * will not reach. Given the run's `parseRequestCap` so the zones' share of
+   * it is measured against the budget the gateway actually holds. The gateway
+   * spends one request per zone returned and marks every unreached zone
+   * troubled.
+   */
+  tierZones(
+    kills: readonly WarcraftLogsFirstKillEvidence[],
+    parseRequestCap: number
+  ): Readonly<{
+    zones: readonly WarcraftLogsTierZone[];
+    unreached: readonly WarcraftLogsTierZone[];
+  }>;
+  /**
+   * The reports whose fight rankings to request, in the order the budget
+   * should reach them. The gateway holds one request of the cap back for the
+   * identity lookup whatever the plan says.
+   */
+  parseGroups(
+    kills: readonly WarcraftLogsFirstKillEvidence[]
+  ): WarcraftLogsParseGroupPlan;
+}>;
+
 export interface WarcraftLogsGateway {
   getRankedKillReports(
     key: CharacterKey,
@@ -374,7 +443,7 @@ export interface WarcraftLogsGateway {
       journalRaidId: string;
       requestCap: number;
       characterId?: number;
-      cursor?: WarcraftLogsRankedBackfillCursor;
+      cursor?: WarcraftLogsRankedBackfillCursor | undefined;
       onRequest?(event: WarcraftLogsRequestEvent): void;
       /**
        * Called when the walk stops short, naming the read that stopped it:
@@ -418,32 +487,13 @@ export interface WarcraftLogsGateway {
       /** The character's known class, used to settle shared specialisation names. */
       className?: string;
       /**
-       * Fight URLs whose parses are already stored, so a budget-limited run
-       * spends its requests on what is still missing.
+       * Which zones and fights this run spends its parse budget on. It is the
+       * caller's: the content window, what is already stored, which raids are
+       * terminal and how the budget divides between zones and fights all live
+       * with them. The gateway asks it once discovery is done, with every kill
+       * the run holds, and requests exactly what it returns.
        */
-      hydratedFightUrls?: ReadonlySet<string>;
-      /**
-       * When each zone's tier bests were last collected, keyed by raid id. A
-       * zone collected after its newest kill has nothing left to fetch, so it
-       * neither spends a request nor counts towards the zone budget -- without
-       * this a veteran's zone list always exceeds the budget and the run
-       * raises `parse_request_cap` forever, however saturated it is.
-       */
-      collectedTierZones?: ReadonlyMap<string, string>;
-      /**
-       * Raids this character is finished with, per collection domain. A
-       * terminal raid costs no request: its zone is dropped before the zone
-       * budget is measured, and its kills are never grouped for hydration.
-       *
-       * Whether a raid is terminal is entirely the caller's policy -- the
-       * content window, the settling period and the clean-read rule all live
-       * with them. The gateway only spends, or does not spend, requests.
-       */
-      terminalRaidIds?: Readonly<{
-        kills: ReadonlySet<string>;
-        parses: ReadonlySet<string>;
-        tierBests: ReadonlySet<string>;
-      }>;
+      plan: WarcraftLogsCollectionPlan;
       /**
        * The instant below which the report scan may stop, as an ISO string.
        * Set when every tier that closed before it is terminal for kills, so
@@ -487,21 +537,13 @@ export interface WarcraftLogsGateway {
        * tier search, the ranked walk and parse work can limit the result.
        */
       targetedOnly?: boolean;
-      /**
-       * The one Journal raid whose kills are parsed. A targeted search's
-       * reports can hold another raid's fights from the same nights, and
-       * parsing them would spend its budget on work it does not publish.
-       * Resolved by boss as well as zone, so a combined zone's kills are
-       * placed in their own raid.
-       */
-      parseJournalRaidId?: string;
       /** An explicit search of one tier's guild attendance (#435). */
       tierSearch?: WarcraftLogsTierSearch;
       /** Ranked reports for the same explicit tier search, with durable resume. */
       rankedBackfill?: Readonly<{
         journalRaidId: string;
         requestCap: number;
-        cursor?: WarcraftLogsRankedBackfillCursor;
+        cursor?: WarcraftLogsRankedBackfillCursor | undefined;
       }>;
       /**
        * Called once per upstream request this call issues, naming the class of

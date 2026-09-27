@@ -10,6 +10,8 @@ import type {
 } from "@slashwho/database";
 import {
   createWarcraftLogsClient,
+  type WarcraftLogsCollectionPlan,
+  type WarcraftLogsFirstKillEvidence,
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
 import type { BlizzardGateway } from "@slashwho/blizzard";
@@ -39,6 +41,51 @@ const run = {
   wclClientSecretEncrypted: null as string | null,
   className: null as string | null
 };
+
+/** The collection plan a run handed the gateway on one call. */
+function planOf(
+  getFirstKillReports: { mock: { calls: readonly (readonly unknown[])[] } },
+  call = 0
+): WarcraftLogsCollectionPlan {
+  return (
+    getFirstKillReports.mock.calls[call]![1] as {
+      plan: WarcraftLogsCollectionPlan;
+    }
+  ).plan;
+}
+
+/**
+ * A Mythic kill any plan spends on -- inside its raid's content window, in a
+ * raid with Mythic rankings -- unless told the fight or its raid is settled.
+ * Filed under `raidId`, so a test names the raid it is about.
+ */
+function plannableKill(
+  raidId: string,
+  code = `report${raidId}`,
+  fightId = 4
+): WarcraftLogsFirstKillEvidence {
+  const reportUrl = `https://www.warcraftlogs.com/reports/${code}`;
+  return {
+    raidId,
+    raidName: "The Eternal Palace",
+    bossId: "2299",
+    bossName: "Queen Azshara",
+    journalBossId: "2361",
+    bossOrder: 8,
+    killedAt: "2020-01-14T20:34:49.222Z",
+    reportCode: code,
+    fightId,
+    difficulty: 5,
+    performance: {
+      damage: { state: "unavailable" },
+      healing: { state: "unavailable" },
+      bossDamage: { state: "unavailable" }
+    },
+    reportUrl,
+    fightUrl: `${reportUrl}#fight=${fightId}`,
+    guild: null
+  };
+}
 
 // Keeps the admission gate open for every test that is not about the budget:
 // the handler now reads the allowance before it collects anything.
@@ -305,19 +352,17 @@ describe("applicant evidence job handler", () => {
     expect(getFirstKillReports).toHaveBeenCalledWith(key, {
       requestCap: 300,
       parseRequestCap: 8,
-      hydratedFightUrls: new Set(),
-      collectedTierZones: new Map(),
-      terminalRaidIds: {
-        kills: new Set(),
-        parses: new Set(),
-        tierBests: new Set()
-      },
+      plan: expect.any(Object),
       // Nothing stored yet, so nothing to re-read.
       storedKillReportCodes: [],
       onLimitation: expect.any(Function),
       onRequest: expect.any(Function),
       signal: expect.any(AbortSignal)
     });
+    // Nothing stored, so nothing the plan may skip.
+    const plan = planOf(getFirstKillReports);
+    expect(plan.tierZones([plannableKill("23")], 8).zones).toHaveLength(1);
+    expect(plan.parseGroups([plannableKill("23")]).groups).toHaveLength(1);
     expect(evidence.published).toEqual([
       {
         runId: run.id,
@@ -1298,14 +1343,13 @@ describe("applicant evidence job handler", () => {
       signal: new AbortController().signal
     });
 
-    expect(getFirstKillReports).toHaveBeenCalledWith(
-      key,
-      expect.objectContaining({
-        hydratedFightUrls: new Set([
-          "https://www.warcraftlogs.com/reports/example#fight=1"
-        ])
-      })
-    );
+    const plan = planOf(getFirstKillReports);
+    expect(
+      plan.parseGroups([plannableKill("23", "example", 1)]).groups
+    ).toEqual([]);
+    expect(
+      plan.parseGroups([plannableKill("23", "example", 2)]).groups
+    ).toHaveLength(1);
   });
 
   it("reads only the most recent reports for a light refresh", async () => {
@@ -3622,16 +3666,11 @@ describe("applicant evidence job handler", () => {
 
       await handler.execute(run.id);
 
-      expect(getFirstKillReports).toHaveBeenCalledWith(
-        key,
-        expect.objectContaining({
-          terminalRaidIds: {
-            kills: new Set(["42"]),
-            parses: new Set(),
-            tierBests: new Set(["42"])
-          }
-        })
-      );
+      const plan = planOf(getFirstKillReports);
+      // Terminal for tier bests only: its fights are still hydrated.
+      expect(plan.tierZones([plannableKill("42")], 24).zones).toEqual([]);
+      expect(plan.parseGroups([plannableKill("42")]).groups).toHaveLength(1);
+      expect(plan.tierZones([plannableKill("43")], 24).zones).toHaveLength(1);
     });
 
     it("tells the gateway how far back it still needs to page", async () => {
@@ -5730,24 +5769,17 @@ describe("searching one tier from the dossier", () => {
     expect(window.to.startsWith("2020-")).toBe(true);
   });
 
-  it("ignores the tier's parse marks for the one run, and keeps its kill marks", async () => {
-    // A kill recovered in a settled tier would otherwise never be parsed;
-    // and dropping the kill marks would let a complete publish discard the
-    // tier's stored kills, and drop the scan floor to the tier's first night.
+  it("ignores the tier's parse marks for the one run", async () => {
+    // A kill recovered in a settled tier would otherwise never be parsed.
+    // Its kill marks are the publish's and never reach the gateway.
     const evidence = withStoredTier(store(tierRun as typeof run));
     const getFirstKillReports = vi.fn(evidenceFound);
 
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
 
-    const options = (getFirstKillReports.mock.calls[0] as unknown[])[1] as {
-      terminalRaidIds: Record<
-        "kills" | "parses" | "tierBests",
-        ReadonlySet<string>
-      >;
-    };
-    expect(options.terminalRaidIds.kills.has("23")).toBe(true);
-    expect(options.terminalRaidIds.parses.has("23")).toBe(false);
-    expect(options.terminalRaidIds.tierBests.has("23")).toBe(false);
+    const plan = planOf(getFirstKillReports);
+    expect(plan.parseGroups([plannableKill("23")]).groups).toHaveLength(1);
+    expect(plan.tierZones([plannableKill("23")], 24).zones).toHaveLength(1);
   });
 
   it("records the search on the run's cost row", async () => {
@@ -5955,13 +5987,11 @@ describe("searching one tier from the dossier", () => {
     );
     const options = (getFirstKillReports.mock.calls[0] as unknown[])[1] as {
       requestCap: number;
-      terminalRaidIds: Record<
-        "kills" | "parses" | "tierBests",
-        ReadonlySet<string>
-      >;
     };
     expect(options.requestCap).toBe(300);
-    expect(options.terminalRaidIds.parses.has("23")).toBe(true);
+    expect(
+      planOf(getFirstKillReports).parseGroups([plannableKill("23")]).groups
+    ).toEqual([]);
     expect(evidence.costs.at(-1)).toMatchObject({
       mode: "full",
       tierSearch: null
@@ -6289,11 +6319,12 @@ describe("searching one tier from the dossier", () => {
 
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
 
-    const options = (
-      getFirstKillReports.mock.calls[0] as unknown[]
-    )[1] as Record<string, unknown>;
     // The gateway is told which raid's kills are this search's to parse.
-    expect(options.parseJournalRaidId).toBe(eternalPalace.raidId);
+    expect(
+      planOf(getFirstKillReports)
+        .parseGroups([palace, crucible])
+        .groups.map((group) => group.reportCode)
+    ).toEqual(["palaceReport"]);
     const result = evidence.published.at(-1)!.result;
     expect(result.parsedFightUrls).toEqual([palace.fightUrl]);
   });

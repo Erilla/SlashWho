@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
-import { createWarcraftLogsClient } from "./index";
+import { createPlannedWarcraftLogsClient as createWarcraftLogsClient } from "./planned-client.test-support";
 
 type FixtureName =
   | "token-valid"
@@ -296,7 +296,7 @@ function windowedZoneReport(
 function performanceRankings(
   values: Readonly<{ damage: unknown; healing: unknown; bossDamage: unknown }>,
   options: Readonly<{
-    code?: string;
+    code?: string | undefined;
     fightId?: number;
     encounterId?: number;
     difficulty?: number;
