@@ -369,6 +369,10 @@ What else changed with it:
   the limiter admits a read under that signal, so time spent queued is part of
   the 15 s and an expired read leaves the queue. At 20 a second a queue would
   have to hold about 300 reads before any timed out.
+- **Limiter wait is not Blizzard latency.** Time a dossier read spends queued
+  in the limiter is kept out of `blizzardMs`, `blizzardMaxCallMs` and the
+  `blizzard` Server-Timing entry, and reported as `blizzardLimiterWaitMs`, the
+  same field the worker's discovery runs use.
 - **Visitor-supplied Blizzard credentials are not limited.** They build their
   own client per read (`apps/web/src/server/credential-headers.ts`) on a
   different client id, which is not part of this allowance.

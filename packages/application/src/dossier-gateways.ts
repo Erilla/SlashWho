@@ -1,5 +1,9 @@
 import { lookupCuttingEdgeAchievement } from "@slashwho/domain";
-import type { BlizzardGateway, RequestLimits } from "@slashwho/blizzard";
+import type {
+  BlizzardGateway,
+  BlizzardSlotWait,
+  RequestLimits
+} from "@slashwho/blizzard";
 import type {
   RaiderIoGateway,
   MythicBossRankingsOptions,
@@ -7,6 +11,7 @@ import type {
 } from "@slashwho/raiderio";
 
 import { awaitWithAbort } from "./abort";
+import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBoundedCache, type BoundedCacheOutcome } from "./bounded-cache";
 import { createConcurrencyLimiter } from "./concurrency";
 import type { ApplicationConfig } from "./config";
@@ -123,7 +128,10 @@ export function createDossierGateways(options: {
     "NEGATIVE_CACHE_TTL_MS" | "DOSSIER_PROVIDER_CONCURRENCY"
   >;
   onCacheEvent?: ((source: string, event: string) => void) | undefined;
+  /** Times Blizzard limiter waits; must be the clock the read's scope uses. */
+  monotonic?: () => number;
 }) {
+  const monotonic = options.monotonic ?? performance.now.bind(performance);
   const achievements = createBoundedCache<
     Awaited<ReturnType<BlizzardGateway["getCompletedAchievements"]>>
   >({
@@ -165,12 +173,18 @@ export function createDossierGateways(options: {
       async getCompletedAchievements(key, signal) {
         signal?.throwIfAborted();
         const load = async () => {
-          const run = async () =>
+          const run = async (waitForSlot?: BlizzardSlotWait) =>
             source.getCompletedAchievements(
               key,
-              AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+              AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+              undefined,
+              waitForSlot
             );
-          const rows = scope ? await scope.time("blizzard", run) : await run();
+          const rows = scope
+            ? await scope.time("blizzard", (excluded) =>
+                run(excludeBlizzardSlotWait(scope, monotonic, excluded))
+              )
+            : await run();
           return rows
             .filter(
               (row) => lookupCuttingEdgeAchievement(row.achievementId) !== null
