@@ -19,6 +19,9 @@ only part of the gap.**
   anything the local fixtures exercise. **#687 has since measured it: it is
   dossier assembly.** On `test`, `assemble` has a median of 371 ms on a
   provider-free ten-character read (see [The ~370 ms, measured](#the-370-ms-measured)).
+  #686 reproduced the cause locally: assembly grows with evidence volume, from
+  2 ms for the seeded characters to about 50 ms at a median ten-character
+  dossier's volume and about 300 ms at the largest (see "Evidence volume").
 
 ## Production records
 
@@ -186,6 +189,8 @@ those characters carry. Locally, a seeded 12-character read takes about
 50 ms in total, assembly included. That points at the size of real evidence rather than
 at Railway's CPU. #686, which profiles a dossier with production-sized
 evidence, is the way to find which stage inside `assemble` dominates.
+"Evidence volume" below confirms that assembly scales with evidence. The
+bucket does not split its stages, so which one dominates is still open.
 
 ## What is still unexplained
 
@@ -193,29 +198,171 @@ About 5 ms per round trip is high for `postgres.railway.internal`, which is
 Railway's private network in the same region as the web service. The log
 cannot separate network time from time spent executing statements over real
 evidence. #687 has since shown that the ~370 ms outside the database is
-dossier assembly, above. Two
-things differ from the local fixtures and are not modelled:
+dossier assembly, above, and #686 that assembly scales with evidence volume,
+below. One difference from the local fixtures is still not modelled:
 
-- **Real evidence is larger.** `evidence.reserve` loads each character's
-  completed kills, wipes, tier bests and Cutting Edge rows. Real characters
-  have far more rows than the seeded ones, so each statement returns more
-  data. The read then builds, validates (`applicantDossierSchema`) and
-  serialises a larger dossier on Railway's CPU.
 - **Pool contention.** The web's `pg` pool uses the default of 10 clients.
   A read with more subjects than that queues its later `evidence.reserve`
   transactions for a client, and the wait is counted inside the call. The
   12-character local scenario includes this. A ten-character production read
   meets it only when its aliases take it past 10 reservations.
 
+## Evidence volume
+
+Issue #686. The seeded characters hold two kills each, and no wipes, tier
+bests or Cutting Edge rows. This section measures how much evidence real
+characters hold, seeds that much synthetic evidence locally, and times the
+read.
+
+### How the volumes were taken
+
+Three aggregate queries ran against the `test` database on 2026-09-27,
+through `railway ssh` into the worker, the access pattern in
+`docs/operations/evidence-run-cost.md`. Each query returned only counts and
+percentiles. No character name, key or row left the database, and none is
+recorded here.
+
+A character's evidence is what the read shows, as `loadCompletedEvidence`
+chooses it: the newest completed or partial run for kills, wipes and tier
+bests, and the newest `full` run for Cutting Edge rows. Percentiles are
+`percentile_disc`.
+
+### Per character
+
+158 characters have completed evidence on `test`. 66 of them have no kills.
+
+| Rows per character  | p50 |   p95 |    max | mean |
+| ------------------- | --: | ----: | -----: | ---: |
+| Kills               |  16 |   865 |  2,089 |  151 |
+| Wipes               |  10 | 2,478 | 12,838 |  493 |
+| Tier bests          |   0 |    16 |     44 |  2.3 |
+| Cutting Edge rows   |   0 |    19 |     19 |  4.3 |
+| Bosses killed       |   3 |    54 |    189 |   14 |
+| Raids with a kill   |   1 |    12 |     27 |  3.2 |
+| Reports with a kill |   8 |   324 |    833 |   57 |
+| Guilds with a kill  |   1 |     5 |     11 |  1.7 |
+
+Across all 23,831 stored kills, 81% have all three parses available, 16%
+have been checked for a world rank, and 1.3% hold one.
+
+### Per dossier
+
+A median character says little about a dossier, because a few characters
+hold most of the evidence. Summing over each root's newest snapshot gives
+each dossier's own volume. Six dossiers have ten characters, the size of 127
+of the 173 production reads:
+
+| Ten-character dossier | Kills |  Wipes | Tier bests | Cutting Edge |
+| --------------------- | ----: | -----: | ---------: | -----------: |
+| Median                |   759 |  1,613 |         15 |           58 |
+| Largest               | 3,072 | 13,779 |         70 |          184 |
+
+The log cannot say which dossier a production read was for, so these are the
+dossiers that exist, not a weighting of the reads.
+
+### The production-sized scenarios
+
+`corepack pnpm profile:dossier` now has two more warm scenarios. Each seeds
+ten characters with synthetic completed evidence
+(`tests/e2e/support/synthetic-evidence.ts`), spreading one dossier's totals
+evenly across them:
+
+| Scenario                 | Kills each | Wipes each | Tier bests each | Cutting Edge each |
+| ------------------------ | ---------: | ---------: | --------------: | ----------------: |
+| Warm, production median  |         76 |        161 |               2 |                 6 |
+| Warm, production largest |        307 |      1,378 |               7 |                18 |
+
+The rows are generated from the raid and Cutting Edge catalogues in the
+proportions above: about 11 kills per boss, 3 per report, and four in five
+parsed. Every kill is marked as checked for a world rank and the Blizzard
+phase as completed. The read therefore makes no provider call, like the
+production reads it is compared with.
+
+The profiler also prints each warm scenario's serialised size, from one full
+read made apart from the timed loads:
+
+| Scenario                 | Response bytes |
+| ------------------------ | -------------: |
+| Warm, 1                  |         45,892 |
+| Warm, 12                 |         62,086 |
+| Warm, production median  |        923,395 |
+| Warm, production largest |      4,025,409 |
+
+Production's response sizes were not taken. A median ten-character dossier
+on `test` should be close to the synthetic median's 0.9 MB, and the page
+reads it again at every poll.
+
+### Timings
+
+Server-Timing p50 in milliseconds, 20 loads per scenario, from `main` after
+#701, which added the `assemble` and `respond` buckets, and #685, which added
+`PROFILE_DB_RTT_MS`. Two runs at each setting; each cell gives both.
+
+| Bucket   | RTT  | Warm, 12 | Production median | Production largest |
+| -------- | ---- | -------: | ----------------: | -----------------: |
+| total    | none |   37, 41 |           99, 105 |           469, 473 |
+| assemble | none |     2, 2 |            51, 56 |           311, 308 |
+| respond  | none |     1, 1 |            11, 12 |             54, 57 |
+| total    | 5 ms | 248, 243 |          230, 230 |           581, 542 |
+| assemble | 5 ms |     2, 2 |            48, 47 |           296, 273 |
+| respond  | 5 ms |     1, 1 |            10, 10 |             54, 49 |
+
+The two production-sized scenarios have ten characters and the seeded one
+twelve, so `total` does not compare like with like: at 5 ms the two extra
+characters' round trips cost about as much as the median volume's
+assembly. `assemble` and `respond` do compare, because neither waits on the
+database.
+
+### How volume accounts for the 370 ms
+
+**Assembly scales with evidence volume, and production's assembly is
+consistent with it.** Locally, `assemble` is 2 ms for twelve seeded
+characters, about 50 ms at a median ten-character dossier's volume and about
+300 ms at the largest's. `respond` follows the same curve, from 1 ms to
+about 55 ms, against production's 45 ms.
+
+#705's sample was one ten-character dossier. By kills and by wipes, it ranks
+second of the five ten-character dossiers on `test` when the rank was
+taken, later on 2026-09-27; there were six when the volumes above were
+taken. Its volume therefore lies between the two scenarios. The rank was taken the same
+way as the volumes above, and nothing else about the dossier was read.
+
+Production assembled it in 371 ms. This desktop takes about 300 ms for the
+largest dossier's volume, which is more than the sampled one holds. On the
+same evidence, then, Railway's CPU assembles more slowly than this machine,
+by a factor of at least about 1.2 and at most about 7. The rank cannot
+narrow it further, and the dossier's own totals were not recorded.
+
+So the ~370 ms is assembly, and assembly is evidence volume run on
+Railway's CPU. Two things are still open:
+
+- **Which stage of assembly dominates.** `assemble` covers limitations,
+  `buildApplicantDossier`, serialisation and `applicantDossierSchema.parse`
+  together. A CPU profile of the production-largest scenario would split
+  them.
+- **How much slower Railway's CPU is.** Running a production-sized scenario
+  on a Railway instance would measure the factor directly.
+
+An earlier version of this section put volume at "about 90 ms of the
+370 ms". That compared `total` for twelve seeded characters with ten large
+ones, from runs that varied by up to 50%. #701's buckets superseded it by
+measuring assembly directly, and the later runs above were steady.
+
 ## Follow-ups
 
 - **Add the latency mode to the profiler** once #670 merges, for example as
   `PROFILE_DB_RTT_MS`, using the proxy above.
 - **Seed production-sized evidence** in a profiler scenario, so the time
-  outside the database shows up locally.
+  outside the database shows up locally. Done in #686; see "Evidence
+  volume".
 - **Time the read path's own work.** Done in #687, which added `assemble`
   and `respond` buckets. The split is in
   [The ~370 ms, measured](#the-370-ms-measured).
+- **Consider the dossier's size.** A median ten-character dossier serialises
+  to about 0.9 MB and the largest to about 4 MB, and the page reads it again
+  at every poll.
+- **Profile assembly's stages** on the production-largest scenario, to find
+  which part of `assemble` dominates.
 - **Correct the baseline's note on log retention.**
   `2026-09-27-dossier-load-baseline.md` says Railway keeps only the current
   deployment's logs, but removed deployments can still be read by id.

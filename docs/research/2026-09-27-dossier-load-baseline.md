@@ -36,15 +36,26 @@ At about 5 ms, `dbMs / dbCalls` and `dbMaxCallMs` match production reads on
 `test`. Latency alone does not reproduce production's request time at any
 setting.
 
-The seven scenarios are:
+The nine scenarios are these seven and the two stored-keys scenarios described
+after them:
 
-| Scenario  | What the read has to do                                                                                                                                                   |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Warm, 1   | A fresh snapshot and completed evidence for one character                                                                                                                 |
-| Warm, 12  | The same for 12 connected characters, the default `DOSSIER_CHARACTER_CEILING`                                                                                             |
-| Gathering | A fresh snapshot but no evidence, so the read queues a Warcraft Logs run and the page polls until it is published                                                         |
-| Providers | Completed evidence with no world ranks and no stored Cutting Edge, so the read looks up Raider.IO rankings and Blizzard achievements, each delayed by the latency setting |
-| Cold      | No snapshot at all, so the page starts research, polls the discovery job, then reads the dossier and waits for its evidence                                               |
+| Scenario           | What the read has to do                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Warm, 1            | A fresh snapshot and completed evidence for one character                                                                                                                 |
+| Warm, 12           | The same for 12 connected characters, the default `DOSSIER_CHARACTER_CEILING`                                                                                             |
+| Production median  | Warm, for 10 characters holding a median ten-character dossier's evidence on `test`: 76 kills, 161 wipes, 2 tier bests and 6 Cutting Edge rows each, all synthetic        |
+| Production largest | The same at the largest ten-character dossier's volume: 307 kills, 1,378 wipes, 7 tier bests and 18 Cutting Edge rows each                                                |
+| Gathering          | A fresh snapshot but no evidence, so the read queues a Warcraft Logs run and the page polls until it is published                                                         |
+| Providers          | Completed evidence with no world ranks and no stored Cutting Edge, so the read looks up Raider.IO rankings and Blizzard achievements, each delayed by the latency setting |
+| Cold               | No snapshot at all, so the page starts research, polls the discovery job, then reads the dossier and waits for its evidence                                               |
+
+The seeded warm scenarios hold two kills per character. The production-sized
+ones (#686) generate their evidence from the raid and Cutting Edge catalogues
+(`tests/e2e/support/synthetic-evidence.ts`). No real character's rows are
+used. `2026-09-27-issue-666-dossier-db-calls.md` ("Evidence volume") has the
+aggregate counts they are sized from, and how those were taken. Each warm
+scenario also prints its dossier's serialised size, from one read made apart
+from the timed loads.
 
 The two stored-keys scenarios (#689) repeat the warm single read for a visitor
 who has saved provider keys in the browser: once with no provider latency, and
@@ -143,6 +154,40 @@ The warm scenarios' warm-up loads rendered at 393 ms (1 character) and 280 ms
 (12 characters). In the cold scenario, the first response is the
 `discovery_not_ready` refusal (10 ms of server time), and the dossier renders
 once discovery has published a snapshot.
+
+### Production-sized evidence
+
+The same machine on 2026-09-27, `main` after #684, which starts the first
+read before hydration, so `requested` is earlier than in the table above.
+The four warm scenarios came from one run, with 20 loads each and no
+database latency. All values are p50 in milliseconds.
+
+| Phase                | Warm, 1 | Warm, 12 | Production median | Production largest |
+| -------------------- | ------: | -------: | ----------------: | -----------------: |
+| shell                |      34 |       33 |                33 |                 46 |
+| requested            |      23 |       27 |                24 |                 27 |
+| headers              |      69 |       91 |               189 |                846 |
+| firstResponse        |     108 |      139 |               197 |                883 |
+| rendered             |     137 |      175 |               261 |              1,097 |
+| settled              |     108 |      139 |               197 |                883 |
+| server total         |      25 |       45 |               155 |                789 |
+| server `db` (summed) |      22 |      225 |               308 |              1,550 |
+| response bytes       |  45,892 |   62,086 |           923,395 |          4,027,441 |
+
+Those runs varied by up to 50%. A second run put the median-sized dossier's
+server `total` at 238 ms and the largest at 1,119 ms.
+
+Later runs, on `main` after #701 (the `assemble` and `respond` buckets) and
+#685 (`PROFILE_DB_RTT_MS`), were steady. They put server `total` at about
+100 ms (median-sized) and 470 ms (largest) with no latency. At a 5 ms round
+trip they were about 230 ms and 540–580 ms, against about 245 ms for the 12
+seeded characters, which make two more characters' worth of round trips.
+`assemble` was about 50 ms and 300 ms, against 2 ms for the seeded ones. The
+#666 note ("Evidence volume") compares that with production's 371 ms.
+
+Rendering grows with the dossier too: 64 ms after the response for the
+median-sized dossier, and 214 ms for the largest, against 29–36 ms for the
+seeded ones.
 
 ### A visitor with saved provider keys
 
@@ -278,7 +323,7 @@ count failed fetches separately. A total is valid only when no fetch failed.
 - The web `MeasurementScope` sums overlapping calls, so `db` can exceed
   `total` (207 ms against 45 ms at 12 characters). Read it as work done, not
   as wall time. The worker's `discovery_run` uses the `shared` mode instead.
-- The warm scenarios read seeded evidence with no stored Cutting Edge
+- The seeded warm scenarios (1 and 12) read evidence with no stored Cutting Edge
   achievements. The fake Blizzard answers the achievement read, and the
   15-minute process cache then serves repeats, so `blizzard` appears only on
   a scenario's first read.
