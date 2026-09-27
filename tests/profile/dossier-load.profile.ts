@@ -32,8 +32,11 @@ type PageMarks = {
 /**
  * Runs in the page before any of its scripts. It records, on the page's own
  * clock, when the first dossier read arrives, when the connected-characters
- * panel first appears and when a full read first shows nothing gathering, by
- * the same rule the page uses to stop polling.
+ * panel first appears and when a full read first shows nothing gathering.
+ *
+ * "Gathering" is `waiting` or `scanning`: a run not yet published. The page's
+ * own poll also continues through `partial`, which can be final and then
+ * never ends (#663), so settling on the page's rule would hang the profile.
  */
 function instrumentDossierLoad(): void {
   const marks: PageMarks = { serverTiming: null };
@@ -45,9 +48,7 @@ function instrumentDossierLoad(): void {
     (body.characters ?? []).some(
       (character) =>
         !character.excluded &&
-        ["waiting", "scanning", "partial"].includes(
-          character.evidenceState ?? ""
-        )
+        ["waiting", "scanning"].includes(character.evidenceState ?? "")
     ) ||
     (body.raids ?? []).some((raid) =>
       ["queued", "running"].includes(raid.tierSearch?.state ?? "")
