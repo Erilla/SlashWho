@@ -23,6 +23,9 @@ export default defineConfig({
           // Files run in parallel: each starts its own PostgreSQL container in
           // beforeAll and each runs in its own process, so they share neither
           // a database nor process.env. Tests within a file still run in order.
+          // One worker per vCPU on the 4-vCPU runner, rather than vitest's
+          // default of one fewer: the files mostly wait on PostgreSQL.
+          maxWorkers: 4,
           include: ["tests/integration/**/*.test.ts"],
           name: "integration",
           testTimeout: 30_000,
