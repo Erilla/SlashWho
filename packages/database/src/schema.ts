@@ -1103,6 +1103,16 @@ export const characterEvidenceRunCosts = pgTable(
     parseRequestCapUsed: integer("parse_request_cap_used").notNull(),
     /** The per-class upstream request counts already on the log line. */
     historyScanRequests: integer("history_scan_requests").default(0).notNull(),
+    /**
+     * `ReportActors`, at most one per history page, loading the actors of the
+     * page's reports that hold a Mythic encounter fight (#712). Part of the
+     * page read, so it spends none of the scan cap and is not counted in
+     * `history_scan_requests`. Rows from before #712 read zero: their pages
+     * carried actors themselves.
+     */
+    historyActorRequests: integer("history_actor_requests")
+      .default(0)
+      .notNull(),
     zoneRankingsRequests: integer("zone_rankings_requests")
       .default(0)
       .notNull(),

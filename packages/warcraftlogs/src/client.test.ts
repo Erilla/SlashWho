@@ -6,6 +6,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import { createPlannedWarcraftLogsClient as createWarcraftLogsClient } from "./planned-client.test-support";
+import { reportActorsQuery } from "./queries";
 
 type FixtureName =
   | "token-valid"
@@ -3963,6 +3964,11 @@ describe("Warcraft Logs gateway", () => {
         verifiedKills: verified
       });
 
+      // History pages load actors through `ReportActors`, which the suites'
+      // harness answers itself, so its selection is read from the query.
+      actorSelections.push(
+        ...(reportActorsQuery(1).match(/actors[^{]*\{/g) ?? [])
+      );
       expect(actorSelections.length).toBeGreaterThanOrEqual(2);
       for (const selection of actorSelections) {
         expect(selection).toBe('actors(type: "Player") {');
@@ -6582,6 +6588,11 @@ describe("Warcraft Logs gateway", () => {
     expect(requests).toEqual([
       { query: "history_scan", limited: false, durationMs: expect.any(Number) },
       {
+        query: "history_actors",
+        limited: false,
+        durationMs: expect.any(Number)
+      },
+      {
         query: "zone_rankings",
         limited: false,
         durationMs: expect.any(Number)
@@ -6621,13 +6632,14 @@ describe("Warcraft Logs gateway", () => {
       onRequest: ({ query, durationMs }) => requests.push({ query, durationMs })
     });
 
-    // Readings 1,4 | 9,16 | 25,36 | 49,64: one pair per request, nothing
-    // read between them.
+    // Readings 1,4 | 9,16 | 25,36 | 49,64 | 81,100: one pair per request,
+    // nothing read between them.
     expect(requests).toEqual([
       { query: "history_scan", durationMs: 3 },
-      { query: "zone_rankings", durationMs: 7 },
-      { query: "fight_parses", durationMs: 11 },
-      { query: "ranking_identities", durationMs: 15 }
+      { query: "history_actors", durationMs: 7 },
+      { query: "zone_rankings", durationMs: 11 },
+      { query: "fight_parses", durationMs: 15 },
+      { query: "ranking_identities", durationMs: 19 }
     ]);
   });
 

@@ -475,6 +475,7 @@ const RAIDER_IO_RANKING_CONCURRENCY = 4;
 const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
   {
     history_scan: "warcraftLogsHistoryScan",
+    history_actors: "warcraftLogsHistoryActors",
     character_guilds: "warcraftLogsCharacterGuilds",
     guild_attendance: "warcraftLogsGuildAttendance",
     report_hydration: "warcraftLogsReportHydration",
@@ -482,6 +483,27 @@ const REQUEST_COUNTER_PREFIX: Readonly<Record<WarcraftLogsQueryType, string>> =
     fight_parses: "warcraftLogsFightParses",
     ranking_identities: "warcraftLogsRankingIdentities"
   };
+
+/**
+ * The durable phase each class of request belongs to. A closed map rather than
+ * a chain of comparisons, so a new class cannot fall through into some other
+ * phase: `ReportActors` did, and flipped a scanning run to ranking identities
+ * after every page (#712). Attendance recovery and the history page's actors
+ * are part of the history phase: they read for the same kills, under the same
+ * request cap.
+ */
+const PHASE_FOR_QUERY: Readonly<
+  Record<WarcraftLogsQueryType, EvidencePhase["id"]>
+> = {
+  history_scan: "warcraft_logs_history",
+  history_actors: "warcraft_logs_history",
+  character_guilds: "warcraft_logs_history",
+  guild_attendance: "warcraft_logs_history",
+  report_hydration: "warcraft_logs_history",
+  zone_rankings: "warcraft_logs_tier_bests",
+  fight_parses: "warcraft_logs_fight_parses",
+  ranking_identities: "warcraft_logs_ranking_identities"
+};
 
 /**
  * Counts and times one upstream Warcraft Logs request against its query kind.
@@ -1175,6 +1197,7 @@ export function createApplicantEvidenceJobHandler(
                 },
           requests: {
             historyScan: requests(REQUEST_COUNTER_PREFIX.history_scan),
+            historyActors: requests(REQUEST_COUNTER_PREFIX.history_actors),
             characterGuilds: requests(REQUEST_COUNTER_PREFIX.character_guilds),
             guildAttendance: requests(REQUEST_COUNTER_PREFIX.guild_attendance),
             reportHydration: requests(REQUEST_COUNTER_PREFIX.report_hydration),
@@ -1545,19 +1568,7 @@ export function createApplicantEvidenceJobHandler(
         const phaseLimitations = new Map<EvidencePhase["id"], string>();
         const phaseForQuery = (
           query: WarcraftLogsQueryType
-        ): EvidencePhase["id"] =>
-          // Attendance recovery is part of the history phase: it reads for the
-          // same kills, under the same request cap.
-          query === "history_scan" ||
-          query === "character_guilds" ||
-          query === "guild_attendance" ||
-          query === "report_hydration"
-            ? "warcraft_logs_history"
-            : query === "zone_rankings"
-              ? "warcraft_logs_tier_bests"
-              : query === "fight_parses"
-                ? "warcraft_logs_fight_parses"
-                : "warcraft_logs_ranking_identities";
+        ): EvidencePhase["id"] => PHASE_FOR_QUERY[query];
         const observePhase = (query: WarcraftLogsQueryType) => {
           const ledger = phaseLedger;
           const next = phaseForQuery(query);

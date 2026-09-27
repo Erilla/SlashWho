@@ -9,10 +9,11 @@ import type { RankingIdentity } from "./decode/rankings";
 /** Warcraft Logs' difficulty id for Mythic, the only difficulty collected. */
 export const MYTHIC_DIFFICULTY = 5;
 // WCL's 50,000 query complexity ceiling is scored from the query's shape at
-// about 1,625 a report, so a page holds at most 30. Points are about 2.08 a
-// report, so a bigger page saves no points. It would move every stored history
-// cursor, which is a page number, and make a light refresh's one page dearer.
-// Measured in docs/operations/evidence-run-cost.md.
+// about 1,625 a report, so a page holds at most 30. Points are charged per
+// report for its fights (and, in the follow-up, its actors), so a bigger page
+// saves no points. It would move every stored history cursor, which is a page
+// number, and make a light refresh's one page dearer. Measured in
+// docs/operations/evidence-run-cost.md.
 export const REPORTS_PER_PAGE = 10;
 
 export const resolveCharacterQuery = `
@@ -99,7 +100,6 @@ export const recentReportsQuery = (lookup: CharacterLookup) => `
             owner { name }
             guild { name server { slug region { slug } } }
             zone { id name encounters { id journalID } }
-            masterData { actors(type: "Player") { id name server type } }
             fights {
               id
               encounterID
@@ -118,6 +118,26 @@ export const recentReportsQuery = (lookup: CharacterLookup) => `
     }
   }
 `;
+
+/**
+ * The player actors of the history reports that hold a Mythic encounter fight,
+ * one alias a report. Warcraft Logs charges a point for each report whose
+ * `masterData` is loaded and another for its `fights`, and only a Mythic
+ * encounter fight can become evidence, so a history page asks for fights alone
+ * and loads actors only where they can attribute one (#712).
+ */
+export function reportActorsQuery(count: number): string {
+  const variables = Array.from(
+    { length: count },
+    (_, index) => `$code${index}: String!`
+  ).join(", ");
+  const selections = Array.from(
+    { length: count },
+    (_, index) =>
+      `report${index}: report(code: $code${index}) { code masterData { actors(type: "Player") { id name server type } } }`
+  ).join("\n");
+  return `query ReportActors(${variables}) { reportData { ${selections} } }`;
+}
 
 export const guildAttendanceQuery = `
   query GuildAttendance($name: String!, $realm: String!, $region: String!, $page: Int!) {

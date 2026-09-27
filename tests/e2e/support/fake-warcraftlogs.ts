@@ -19,6 +19,7 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
   // reached this fake rather than live Warcraft Logs; keyed by name so a test
   // counts only its own character's run.
   const characterRequests: Record<string, number> = {};
+  let lastHistory = { name: "fixture", serverName: "fixture-realm" };
   const handle = async (
     request: IncomingMessage,
     response: ServerResponse
@@ -70,6 +71,35 @@ export async function startFakeWarcraftLogs(): Promise<FakeWarcraftLogs> {
       }
       const name = body.variables?.name ?? "fixture";
       const serverName = body.variables?.realm ?? "fixture-realm";
+      // A history page carries no actors; the scan asks for those of its
+      // Mythic reports in one follow-up, one alias a report (#712). The
+      // follow-up names no character, so it answers for the character whose
+      // page came last: the worker runs one evidence job at a time.
+      if (body.query?.includes("query ReportActors")) {
+        const reportData = Object.fromEntries(
+          Object.entries(body.variables ?? {}).map(([alias, code]) => [
+            alias.replace(/^code/, "report"),
+            {
+              code,
+              masterData: {
+                actors: [
+                  {
+                    id: 7,
+                    name: lastHistory.name,
+                    server: lastHistory.serverName,
+                    type: "Player"
+                  }
+                ]
+              }
+            }
+          ])
+        );
+        response.end(JSON.stringify({ data: { reportData } }));
+        return;
+      }
+      if (body.query?.includes("query RecentReports")) {
+        lastHistory = { name, serverName };
+      }
       // Zone rankings are a separate request from the report list. Answering
       // them with a report payload would read as schema drift and put a parse
       // limitation on every seeded dossier.

@@ -2947,6 +2947,7 @@ describe("applicant evidence job handler", () => {
             tierSearch: null,
             requests: {
               historyScan: 2,
+              historyActors: 0,
               characterGuilds: 0,
               guildAttendance: 0,
               reportHydration: 0,
@@ -4750,6 +4751,78 @@ describe("applicant evidence job handler", () => {
         phases.find((phase) => phase.id === "warcraft_logs_ranking_identities")
       ).toMatchObject({ state: "completed", limitationCode: null });
       expect(tierTransitions).toEqual(["active", "limited"]);
+    });
+
+    it("keeps a history page's actor follow-up in the history phase", async () => {
+      // Break caught (#712): any request class the phase map did not name fell
+      // through to ranking identities, so every page's `ReportActors`
+      // follow-up flipped a scanning run out of its history phase.
+      const phases = [
+        "warcraft_logs_identity_resolution",
+        "warcraft_logs_history",
+        "warcraft_logs_tier_bests",
+        "warcraft_logs_fight_parses",
+        "warcraft_logs_ranking_identities",
+        "raiderio_rankings",
+        "blizzard_achievements",
+        "publication"
+      ].map((id, ordinal): EvidenceRunPhase => ({
+        id,
+        ordinal,
+        state: "pending",
+        startedAt: null,
+        completedAt: null,
+        limitationCode: null
+      }));
+      const evidence = store();
+      evidence.listPhases = async () => phases;
+      const transitions: Array<{ id: string; state: string }> = [];
+      evidence.recordPhaseTransitions = async (_runId, updates) => {
+        for (const update of updates) {
+          transitions.push({ id: update.id, state: update.state });
+          Object.assign(
+            phases.find((item) => item.id === update.id)!,
+            update
+          );
+        }
+      };
+      const handler = terminalHandler(
+        evidence,
+        {},
+        {
+          getFirstKillReports: async (_key, options) => {
+            for (const query of [
+              "history_scan",
+              "history_actors",
+              "history_scan",
+              "history_actors"
+            ] as const) {
+              options.onRequest?.({ query, limited: false, durationMs: 0 });
+            }
+            return {
+              kind: "evidence" as const,
+              parsedFightUrls: [],
+              kills: [],
+              wipes: [],
+              tierBests: [],
+              troubledRaidIds: { parses: [], tierBests: [] }
+            };
+          }
+        }
+      );
+
+      await handler.execute(run.id);
+
+      expect(
+        transitions.filter(({ id }) => id === "warcraft_logs_history")
+      ).toEqual([
+        { id: "warcraft_logs_history", state: "active" },
+        { id: "warcraft_logs_history", state: "completed" }
+      ]);
+      expect(transitions).not.toContainEqual({
+        id: "warcraft_logs_ranking_identities",
+        state: "active"
+      });
     });
 
     it.each([

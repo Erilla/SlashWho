@@ -1366,6 +1366,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
         parseRequestCapUsed: 24,
         requests: {
           historyScan: 12,
+          historyActors: 9,
           guildAttendance: 4,
           reportHydration: 2,
           zoneRankings: 3,
@@ -1456,6 +1457,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
           request_cap_used: 300,
           parse_request_cap_used: 24,
           history_scan_requests: 12,
+          history_actor_requests: 9,
           zone_rankings_requests: 3,
           fight_parses_requests: 24,
           ranking_identities_requests: 1,
@@ -1928,8 +1930,8 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
             max_raiderio_rankings: 6,
             mean_blizzard: "1.0",
             max_blizzard: 1,
-            // 12 + 4 + 2 + 3 + 24 + 1, over the counted row alone.
-            mean_warcraft_logs: "46.0"
+            // 12 + 9 + 4 + 2 + 3 + 24 + 1, over the counted row alone.
+            mean_warcraft_logs: "55.0"
           })
         ]);
       });
