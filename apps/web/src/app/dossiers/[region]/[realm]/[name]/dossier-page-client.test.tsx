@@ -1673,6 +1673,234 @@ describe("DossierPageClient staged research", () => {
     ).toHaveAttribute("href", "#dossier-raid-expanded-evidence");
   });
 
+  it("keeps following research through a transient job status failure", async () => {
+    // Break caught: one 5xx from the job status left the page on the root-only
+    // view for good, with no read ever showing the completed research.
+    vi.useFakeTimers();
+    let statusCalls = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`) {
+        statusCalls += 1;
+        return Promise.resolve(
+          statusCalls === 1
+            ? Response.json(
+                { error: { code: "search_failed", message: "Try again." } },
+                { status: 503 }
+              )
+            : Response.json({ status: "complete", error: null })
+        );
+      }
+      if (input === dossierPath)
+        return Promise.resolve(
+          statusCalls < 2 ? discoveryNotReady() : Response.json(expanded)
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    await flushAsyncWork();
+    expect(screen.getByText("Initial evidence")).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flushAsyncWork();
+    expect(statusCalls).toBe(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("reads completed research again after a transient read failure", async () => {
+    // Break caught: the read after completion was the only one, so a single
+    // 5xx left the stale snapshot on show while the research had finished.
+    vi.useFakeTimers();
+    let fullReads = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return Promise.resolve(
+          Response.json({ status: "complete", error: null })
+        );
+      if (input === dossierPath) {
+        fullReads += 1;
+        // The first full read is the page's own known-dossier read, which
+        // races the job and may fail quietly; the second follows completion.
+        return Promise.resolve(
+          fullReads <= 2
+            ? Response.json(
+                { error: { code: "search_failed", message: "Try again." } },
+                { status: 500 }
+              )
+            : Response.json(expanded)
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    await flushAsyncWork();
+    expect(fullReads).toBe(2);
+    expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flushAsyncWork();
+    expect(fullReads).toBe(3);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  function refusal(code: string, status: number, headers: HeadersInit = {}) {
+    return Response.json(
+      { error: { code, message: `Refused: ${code}.` } },
+      { status, headers }
+    );
+  }
+
+  /** A job page whose status answers come from `status`, in call order. */
+  function renderJobPage(status: (call: number) => Promise<Response>) {
+    let statusCalls = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`) {
+        statusCalls += 1;
+        return status(statusCalls);
+      }
+      if (input === dossierPath)
+        return Promise.resolve(
+          statusCalls === 0 ? discoveryNotReady() : Response.json(expanded)
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    return { statusCalls: () => statusCalls };
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+    await flushAsyncWork();
+  }
+
+  it("says a lasting server failure on the job, then clears it when research completes", async () => {
+    // Break caught: retrying without a bound left the page on "Researching"
+    // for as long as the server failed, indistinguishable from slow research.
+    vi.useFakeTimers();
+    let failing = true;
+    const page = renderJobPage(() =>
+      Promise.resolve(
+        failing
+          ? refusal("upstream_unavailable", 503)
+          : Response.json({ status: "complete", error: null })
+      )
+    );
+    await flushAsyncWork();
+
+    // Asks at 0, 1, 3 and 7 s fail quietly; the fifth, at 15 s, is shown.
+    await advance(7_000);
+    expect(page.statusCalls()).toBe(4);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(8_000);
+    expect(page.statusCalls()).toBe(5);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Refused: upstream_unavailable."
+    );
+
+    // It goes on asking, and the answer that finally comes clears the notice.
+    failing = false;
+    await advance(10_000);
+    expect(page.statusCalls()).toBe(6);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("follows research through a dropped connection", async () => {
+    // Break caught: a rejected fetch ended the job for good, a worse outcome
+    // than the 503 this page already waits out.
+    vi.useFakeTimers();
+    const page = renderJobPage((call) =>
+      call === 1
+        ? Promise.reject(new TypeError("Failed to fetch"))
+        : Promise.resolve(Response.json({ status: "complete", error: null }))
+    );
+    await flushAsyncWork();
+    await advance(1_000);
+    expect(page.statusCalls()).toBe(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("waits as long as a throttled job status asks", async () => {
+    vi.useFakeTimers();
+    const page = renderJobPage((call) =>
+      Promise.resolve(
+        call === 1
+          ? refusal("rate_limited", 429, { "retry-after": "5" })
+          : Response.json({ status: "complete", error: null })
+      )
+    );
+    await flushAsyncWork();
+    await advance(4_000);
+    expect(page.statusCalls()).toBe(1);
+    await advance(1_000);
+    expect(page.statusCalls()).toBe(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+  });
+
+  it("shows a missing trusted client boundary at once and stops asking", async () => {
+    // A 503, but a deployment fault that waiting never clears.
+    vi.useFakeTimers();
+    const page = renderJobPage(() =>
+      Promise.resolve(refusal("trusted_client_ip_unavailable", 503))
+    );
+    await flushAsyncWork();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Refused: trusted_client_ip_unavailable."
+    );
+    await advance(30_000);
+    expect(page.statusCalls()).toBe(1);
+  });
+
+  it("treats a job that is not found as final", async () => {
+    vi.useFakeTimers();
+    const page = renderJobPage(() =>
+      Promise.resolve(refusal("character_not_found", 404))
+    );
+    await flushAsyncWork();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Refused: character_not_found."
+    );
+    await advance(30_000);
+    expect(page.statusCalls()).toBe(1);
+  });
+
   it("shows a known account's characters while a new root is researched", async () => {
     // Break caught: arriving from search with a job showed only the searched
     // character until its own discovery finished, although a snapshot that

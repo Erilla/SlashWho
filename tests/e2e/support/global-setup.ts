@@ -3,6 +3,8 @@ import {
   type StartedPostgreSqlContainer
 } from "@testcontainers/postgresql";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createWriteStream, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import process from "node:process";
 
 import { startFakeBlizzard } from "./fake-blizzard";
@@ -26,6 +28,14 @@ if (!Number.isSafeInteger(webPort) || !Number.isSafeInteger(workerPort)) {
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
 const workerBaseUrl = `http://127.0.0.1:${workerPort}`;
 
+/**
+ * Where the worker's and the web server's whole output is kept for the run.
+ * The in-memory tail below surfaces only when a server fails to start, so a
+ * test failing against running servers left no record of what they did; CI
+ * uploads this directory when a shard fails.
+ */
+const serverLogDirectory = "e2e-logs";
+
 type ManagedProcess = Readonly<{
   child: ChildProcess;
   output(): string;
@@ -33,7 +43,9 @@ type ManagedProcess = Readonly<{
 
 function startPnpm(
   args: string[],
-  environment: NodeJS.ProcessEnv
+  environment: NodeJS.ProcessEnv,
+  /** Keeps the process's whole output in `serverLogDirectory` under this name. */
+  logName?: string
 ): ManagedProcess {
   const windows = process.platform === "win32";
   const child = windows
@@ -48,7 +60,14 @@ function startPnpm(
         stdio: ["ignore", "pipe", "pipe"]
       });
   let output = "";
+  let log: ReturnType<typeof createWriteStream> | undefined;
+  if (logName) {
+    mkdirSync(serverLogDirectory, { recursive: true });
+    log = createWriteStream(join(serverLogDirectory, `${logName}.log`));
+    child.once("exit", () => log?.end());
+  }
   const collect = (chunk: Buffer) => {
+    log?.write(chunk);
     output = `${output}${chunk.toString("utf8")}`.slice(-16_384);
   };
   child.stdout?.on("data", collect);
@@ -236,12 +255,16 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     if (build) await waitForSuccessfulExit(build);
     await releasePortPair();
 
-    const worker = startPnpm(["--filter", "@slashwho/worker", "dev"], {
-      ...environment,
-      RESEND_API_KEY: undefined,
-      ACCOUNT_EMAIL_FROM: undefined,
-      PORT: `${workerPort}`
-    });
+    const worker = startPnpm(
+      ["--filter", "@slashwho/worker", "dev"],
+      {
+        ...environment,
+        RESEND_API_KEY: undefined,
+        ACCOUNT_EMAIL_FROM: undefined,
+        PORT: `${workerPort}`
+      },
+      "worker"
+    );
     // NODE_ENV stays "development" because the web config accepts a
     // plain-HTTP loopback operator origin only then; `next start` warns about
     // the pairing and selects its development server runtime, but serves the
@@ -258,7 +281,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
         "--port",
         `${webPort}`
       ],
-      { ...environment, DATABASE_URL: webDatabaseUrl }
+      { ...environment, DATABASE_URL: webDatabaseUrl },
+      "web"
     );
     processes.push(worker, web);
 

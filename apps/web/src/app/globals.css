@@ -2845,7 +2845,9 @@ td > .collection-progress {
   border-radius: 0.55rem;
 }
 
-/* Completed runs accumulate forever; the table scrolls within a fixed height. */
+/* Every monitor table scrolls within a fixed height, so one long table (Completed
+   accumulates forever; Failed spikes in a bad hour) cannot push the rest off the
+   page. */
 .collection-monitor-table-scroll--capped {
   max-height: min(32rem, 70vh);
   overflow-y: auto;

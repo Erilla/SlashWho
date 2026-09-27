@@ -158,6 +158,27 @@ function isRootOnly(value: ApplicantDossier | null): boolean {
   );
 }
 
+/**
+ * A refusal that says to ask again later: a throttle or a server error. A
+ * missing trusted client boundary also answers 503, but it is a deployment
+ * fault that waiting never clears. A 5xx with no parseable body, such as a
+ * proxy's 502, is still transient.
+ */
+function isTransientRefusal(response: Response, body: unknown): boolean {
+  if (response.status !== 429 && response.status < 500) return false;
+  const parsed = safeApiErrorSchema.safeParse(body);
+  return !(
+    parsed.success && parsed.data.error.code === "trusted_client_ip_unavailable"
+  );
+}
+
+/**
+ * Consecutive failed asks after a job before the page says so: the fifth
+ * lands 15 s after the first on the job's 1, 2, 4, 8 s backoff. It goes on asking, and the next answer clears the notice,
+ * so a passing fault is waited out while a lasting one is still shown.
+ */
+const jobFailuresBeforeNotice = 5;
+
 function isAbortError(caught: unknown): boolean {
   return caught instanceof Error && caught.name === "AbortError";
 }
@@ -517,9 +538,33 @@ function DossierPageState({
     const backoff = createBackoff();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    let failures = 0;
+    let failureShown = false;
 
-    function schedulePoll() {
-      timeout = setTimeout(() => void pollJob(), backoff.next());
+    function schedulePoll(retryAfterMs?: number) {
+      timeout = setTimeout(
+        () => void pollJob(),
+        Math.max(backoff.next(), retryAfterMs ?? 0)
+      );
+    }
+
+    // The job is followed until it answers, so a throttle, a server error or
+    // a dropped connection on the way is waited out on the backoff rather
+    // than ending the page's research with the root-only view still on show.
+    function retryAfterFailure(message: string, retryAfterMs?: number) {
+      failures += 1;
+      if (failures >= jobFailuresBeforeNotice && !failureShown) {
+        failureShown = true;
+        setError(message);
+      }
+      schedulePoll(retryAfterMs);
+    }
+
+    function answered() {
+      failures = 0;
+      if (!failureShown) return;
+      failureShown = false;
+      setError(null);
     }
 
     async function readExpandedDossier() {
@@ -532,8 +577,18 @@ function DossierPageState({
         return;
       if (result.kind === "refused") {
         if (result.response.status === 409) {
+          answered();
           setStatus(researchingStatus);
           schedulePoll();
+          return;
+        }
+        // Only the read after completion shows the linked characters, so a
+        // transient failure asks the job again rather than being the last word.
+        if (isTransientRefusal(result.response, result.body)) {
+          retryAfterFailure(
+            apiError(result.response, result.body),
+            retryAfterMilliseconds(result.response)
+          );
           return;
         }
         appliedSequence.current = sequence;
@@ -542,6 +597,7 @@ function DossierPageState({
         appliedSequence.current = sequence;
         setError(unexpectedDossierMessage);
       } else {
+        answered();
         showDossier(result.data, { sequence });
       }
       setStatus(null);
@@ -555,6 +611,16 @@ function DossierPageState({
           { cache: "no-store", signal: controller.signal }
         );
         if (controller.signal.aborted) return;
+        if (
+          result.kind === "refused" &&
+          isTransientRefusal(result.response, result.body)
+        ) {
+          retryAfterFailure(
+            apiError(result.response, result.body),
+            retryAfterMilliseconds(result.response)
+          );
+          return;
+        }
         if (result.kind !== "ok") {
           setError(
             result.kind === "refused"
@@ -565,6 +631,7 @@ function DossierPageState({
           return;
         }
         const job = result.data;
+        answered();
         if (job.status === "complete") {
           await readExpandedDossier();
           return;
@@ -581,8 +648,7 @@ function DossierPageState({
         if (activeJobStates.has(job.status)) schedulePoll();
       } catch (caught) {
         if (isAbortError(caught) || stopped) return;
-        setError("The applicant research status could not be loaded.");
-        setStatus(null);
+        retryAfterFailure("The applicant research status could not be loaded.");
       }
     }
 
