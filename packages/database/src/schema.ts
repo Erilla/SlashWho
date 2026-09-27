@@ -111,7 +111,10 @@ export const discoveryRuns = pgTable(
       .notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),
-    snapshotId: uuid("snapshot_id").references((): AnyPgColumn => snapshots.id)
+    snapshotId: uuid("snapshot_id").references((): AnyPgColumn => snapshots.id),
+    // Guild reads the latest discovery lost to an upstream failure after its
+    // one retry. Operational only; logs rotate, so the row keeps it.
+    guildReadsDropped: integer("guild_reads_dropped").default(0).notNull()
   },
   (table) => [
     uniqueIndex("discovery_runs_one_active_root_idx")
