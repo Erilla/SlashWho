@@ -235,7 +235,13 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       await expect(
         repositories.evidence.latestTierSearches([rootKey], dayBefore)
       ).resolves.toEqual([
-        { key: rootKey, raidId: tier, status: "running", createdAt: searchedAt }
+        {
+          key: rootKey,
+          raidId: tier,
+          status: "running",
+          createdAt: searchedAt,
+          runId: recent.run.id
+        }
       ]);
       await expect(
         repositories.evidence.latestTierSearches([altKey], dayBefore)
@@ -280,13 +286,15 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
             key: rootKey,
             raidId: tier,
             status: "queued",
-            createdAt: searchedAt
+            createdAt: searchedAt,
+            runId: root.run.id
           },
           {
             key: altKey,
             raidId: tier,
             status: "failed",
-            createdAt: new Date(searchedAt.getTime() + 1_000)
+            createdAt: new Date(searchedAt.getTime() + 1_000),
+            runId: alt.run.id
           }
         ].sort((left, right) =>
           left.key.name.localeCompare(right.key.name, "en")

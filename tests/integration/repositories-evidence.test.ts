@@ -372,6 +372,98 @@ describe("PostgreSQL repositories: character evidence", () => {
     );
   });
 
+  it("reads each watched run's status and step states in one query", async () => {
+    // #690: the dossier page watches its runs through this read instead of
+    // re-reading the whole dossier, so it has to see every step change.
+    const at = new Date("2026-09-22T11:00:00.000Z");
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at,
+      phasePlan: ["warcraft_logs_history", "publication"]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    const bare = await repositories.evidence.reserve({
+      key: altKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at
+    });
+    if (bare.kind !== "reserved") throw new Error("evidence_not_reserved");
+    const missing = "00000000-0000-4000-8000-000000000000";
+
+    await expect(
+      repositories.evidence.readRunProgress!(
+        [reservation.run.id, bare.run.id, missing],
+        at
+      )
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        {
+          id: reservation.run.id,
+          status: "queued",
+          deferred: false,
+          phaseStates: ["pending", "pending"]
+        },
+        { id: bare.run.id, status: "queued", deferred: false, phaseStates: [] }
+      ])
+    );
+
+    await repositories.evidence.claim(reservation.run.id, 1);
+    await repositories.evidence.recordPhaseTransitions?.(reservation.run.id, [
+      {
+        id: "warcraft_logs_history",
+        state: "active",
+        startedAt: at,
+        completedAt: null,
+        limitationCode: null
+      }
+    ]);
+    await expect(
+      repositories.evidence.readRunProgress!([reservation.run.id], at)
+    ).resolves.toEqual([
+      {
+        id: reservation.run.id,
+        status: "running",
+        deferred: false,
+        phaseStates: ["active", "pending"]
+      }
+    ]);
+
+    // A points-budget deferral leaves the run `running`, with a code.
+    await repositories.evidence.recordLimitation(
+      reservation.run.id,
+      "rate_limited"
+    );
+    await expect(
+      repositories.evidence.readRunProgress!([reservation.run.id], at)
+    ).resolves.toEqual([
+      {
+        id: reservation.run.id,
+        status: "running",
+        deferred: true,
+        phaseStates: ["active", "pending"]
+      }
+    ]);
+    await expect(
+      repositories.evidence.readRunProgress!([], at)
+    ).resolves.toEqual([]);
+  });
+
+  it("leaves a suppressed character's runs out of the progress read", async () => {
+    const at = new Date("2026-09-22T11:00:00.000Z");
+    const reservation = await repositories.evidence.reserve({
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at
+    });
+    await repositories.suppressions.suppress(rootKey, "removal request", null);
+
+    await expect(
+      repositories.evidence.readRunProgress!([reservation.run.id], at)
+    ).resolves.toEqual([]);
+  });
+
   it("publishes normalized Blizzard achievements with the evidence run", async () => {
     // Break caught: a provider phase that does not publish its normalized
     // result only recreates the same network call on every dossier read.

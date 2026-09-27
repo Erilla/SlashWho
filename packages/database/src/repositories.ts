@@ -347,6 +347,23 @@ export type LatestTierSearch = Readonly<{
   raidId: string;
   status: EvidenceRunStatus;
   createdAt: Date;
+  /** The search's run, so a dossier can watch it while it is in flight. */
+  runId?: string;
+}>;
+
+/**
+ * Where one evidence run has got to: its status and each step's state, in
+ * order. Nothing else about the run, so a page can watch it cheaply.
+ */
+export type EvidenceRunProgress = Readonly<{
+  id: string;
+  status: EvidenceRunStatus;
+  /**
+   * Whether the run carries a limitation while still active: a points-budget
+   * deferral, which can hold a `running` run for up to an hour.
+   */
+  deferred: boolean;
+  phaseStates: readonly string[];
 }>;
 
 export type TierSearchReservationResult =
@@ -913,6 +930,15 @@ export interface EvidenceRepository {
     phases: readonly Omit<EvidenceRunPhase, "ordinal">[]
   ): Promise<void>;
   listPhases?(runId: string): Promise<readonly EvidenceRunPhase[]>;
+  /**
+   * The progress of each of these runs that exists and whose character is not
+   * suppressed at `at`, in one query (#690). A run it leaves out is one the
+   * caller should stop watching.
+   */
+  readRunProgress?(
+    ids: readonly string[],
+    at: Date
+  ): Promise<readonly EvidenceRunProgress[]>;
   publish(
     runId: string,
     input: {

@@ -55,6 +55,33 @@ describe("summariseLoads", () => {
     expect(summary.phases.settledMs).toEqual({ p50: 900, p95: 900, max: 900 });
   });
 
+  it("reports how long after the publish each load settled, and its reads", () => {
+    // #690: a settle time only means something against when the worker
+    // published, and a faster settle must not come from more full reads.
+    const summary = summariseLoads([
+      {
+        ...sample(100, {}, 1_300),
+        publishedMs: 1_000,
+        requests: { dossier: 2, progress: 4 }
+      },
+      { ...sample(100, {}, 900), requests: { dossier: 1 } }
+    ]);
+    expect(summary.phases.publishedMs).toEqual({
+      p50: 1_000,
+      p95: 1_000,
+      max: 1_000
+    });
+    expect(summary.phases.settleLagMs).toEqual({
+      p50: 300,
+      p95: 300,
+      max: 300
+    });
+    expect(summary.requests).toEqual({
+      dossier: { p50: 2, p95: 2, max: 2 },
+      progress: { p50: 4, p95: 4, max: 4 }
+    });
+  });
+
   it("leaves a phase out when no load reached it", () => {
     const summary = summariseLoads([sample(100, {})]);
     expect(summary.phases.settledMs).toBeUndefined();

@@ -413,7 +413,36 @@ export const applicantDossierSchema = z
      * Null before anything has been collected, and absent on payloads written
      * before this field existed — including the frozen demo snapshot.
      */
-    lastCollectedAt: z.string().datetime().nullable().optional()
+    lastCollectedAt: z.string().datetime().nullable().optional(),
+    /**
+     * Every evidence run this dossier is waiting on, including a tier search
+     * for a character past the display cap (#690). The page watches these
+     * through `GET /api/dossiers/evidence-runs` and re-reads the dossier only
+     * when one of them moves. Absent when nothing is collecting.
+     */
+    evidenceRunIds: z.array(z.uuid()).min(1).optional()
+  })
+  .strict();
+
+/** The most runs one progress read accepts: a dossier's worth, with room. */
+export const evidenceRunProgressMaxIds = 64;
+
+/**
+ * Where each watched evidence run has got to (#690). `version` changes
+ * whenever the run's status or any of its steps does, and says nothing else;
+ * a run left out no longer exists or may no longer be shown.
+ */
+export const evidenceRunProgressResponseSchema = z
+  .object({
+    runs: z.array(
+      z
+        .object({
+          id: z.uuid(),
+          state: z.enum(["queued", "running", "settled"]),
+          version: z.string().min(1)
+        })
+        .strict()
+    )
   })
   .strict();
 
@@ -431,6 +460,9 @@ export type DossierLimitationEncounter = z.infer<
   typeof dossierLimitationEncounterSchema
 >;
 export type CollectionPhase = z.infer<typeof collectionPhaseSchema>;
+export type EvidenceRunProgressResponse = z.infer<
+  typeof evidenceRunProgressResponseSchema
+>;
 export type DossierResearch = z.infer<typeof dossierResearchSchema>;
 export type ApplicantDossierParseMetric = z.infer<
   typeof applicantDossierParseMetricSchema

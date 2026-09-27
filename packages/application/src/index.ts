@@ -85,7 +85,10 @@ export {
   requiredSecret
 } from "./environment";
 export type { Environment } from "./environment";
-export { createApplicantDossierService } from "./applicant-dossier-service";
+export {
+  createApplicantDossierService,
+  evidenceRunProgressView
+} from "./applicant-dossier-service";
 export type {
   ApplicantDossierService,
   CreateDossierCommand,

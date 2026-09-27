@@ -42,15 +42,25 @@ warm-up and reported separately.
 
 All phases are measured on the page's own clock, from navigation start:
 
-| Phase           | Meaning                                                                    |
-| --------------- | -------------------------------------------------------------------------- |
-| `shell`         | The server shell's `DOMContentLoaded`                                      |
-| `requested`     | The page starts its first dossier read                                     |
-| `headers`       | That read's response headers arrive                                        |
-| `firstResponse` | That read's body has been read                                             |
-| `rendered`      | The connected-characters panel is first in the DOM                         |
-| `settled`       | The first full read with no character `waiting` or `scanning`              |
-| `server …`      | The first read's `Server-Timing`: `total`, then each timed bucket and wait |
+| Phase           | Meaning                                                                      |
+| --------------- | ---------------------------------------------------------------------------- |
+| `shell`         | The server shell's `DOMContentLoaded`                                        |
+| `requested`     | The page starts its first dossier read                                       |
+| `headers`       | That read's response headers arrive                                          |
+| `firstResponse` | That read's body has been read                                               |
+| `rendered`      | The connected-characters panel is first in the DOM                           |
+| `published`     | The worker published the evidence the load waited for (see below)            |
+| `settled`       | The first full read with no character `waiting` or `scanning`                |
+| `settleLag`     | `settled` minus `published`: how late the page noticed                       |
+| `server …`      | The first read's `Server-Timing`: `total`, then each timed bucket and wait   |
+| `reads …`       | How many dossier reads and run-progress reads the page made before `settled` |
+
+`published` exists only in the gathering and cold scenarios. It is the
+character's newest published run's `completed_at`, which the worker sets from
+its own clock, placed on the page's clock through `performance.timeOrigin`.
+The worker and the browser run on the same machine, so the two clocks agree.
+`completed_at` is taken just before the publish transaction commits, so
+`settleLag` slightly overstates how late the page was.
 
 The profiler also prints each fetch the page started before its first dossier
 read.
@@ -133,6 +143,50 @@ once discovery has published a snapshot.
    before its dossier renders (208 ms, against 171 ms warm), but discovery
    against the fake is fast enough that the evidence poll still dominates.
 
+## Noticing a publish (#690)
+
+A gathering dossier used to learn of a publish only at its next full read,
+on the 1 s, 2 s, 4 s, 8 s, then 10 s backoff. It now watches its runs:
+
+- The dossier names the runs it is waiting on in `evidenceRunIds`, including
+  a tier search for a character past the display cap.
+- The page asks `GET /api/dossiers/evidence-runs?ids=…` for their progress.
+  That is one query (status, deferral and step states, with suppressed
+  characters left out) behind the public-read admission check, with no
+  reservation and no provider call. It sends no provider keys, so it never
+  waits on the session check a stored key costs a full read.
+- It asks every 500 ms while a run is collecting, easing to 1 s and then 2 s
+  if the run goes quiet, and on a backoff from 500 ms while every run only
+  waits. A run deferred for the Warcraft Logs points allowance stays `running`
+  for up to an hour, so a deferred run counts as waiting.
+- A run that published, or that the progress read no longer returns, is
+  re-read at once. Any other move (a step, a start, a deferral) is re-read no
+  more often than the old backoff, counted from the last full read of any
+  kind. So watching never makes more full reads than the backoff did.
+
+### Before and after
+
+Same machine and method as "Results", `PROFILE_LOADS=40` (10 gathering and
+10 cold loads), 2026-09-27. `main` is `1fd50055` run with this branch's
+profiler, which adds `published`, `settleLag` and the read counts.
+
+| p50 / p95, ms  | Gathering, `main` | Gathering, #690 |  Cold, `main` |    Cold, #690 |
+| -------------- | ----------------: | --------------: | ------------: | ------------: |
+| published      |     1,262 / 1,471 |   1,250 / 1,316 | 1,475 / 1,788 | 1,198 / 1,242 |
+| settled        |     3,274 / 3,513 |   1,305 / 1,845 | 2,446 / 3,640 | 1,298 / 1,345 |
+| settleLag      |     1,966 / 2,102 |        99 / 558 |   934 / 2,041 |      87 / 140 |
+| dossier reads  |             3 / 3 |           3 / 3 |         6 / 6 |         5 / 5 |
+| progress reads |                   |           4 / 5 |               |         3 / 3 |
+
+`settled` now follows the publish rather than the backoff: the page is late
+by at most one progress interval and one full read. Full reads per load are
+no higher, and one lower in the cold scenario. The progress reads replace
+full reads that, on `test`, cost about 635 ms of server time each (#666).
+
+A progress read counts against `PUBLIC_READS_PER_MINUTE` (300) like any
+public read, so a visible tab watching a collecting run spends at most 120 a
+minute. A hidden tab asks nothing.
+
 ## Production is not this machine
 
 The production-shaped sample this section started from, a dossier read on
@@ -204,6 +258,6 @@ count failed fetches separately. A total is valid only when no fetch failed.
   local TCP proxy (set `noDelay`, and do not delay with `setTimeout` on
   Windows, which rounds to about 15.6 ms). Folding that into
   `profile:dossier` would let the local baseline include database latency.
-- **Evidence appears only at the next poll.** The 1 s, 2 s, 4 s backoff means
-  a visitor can wait up to one full interval after evidence is published.
+- **Evidence appears only at the next poll: answered (#690).** The page now
+  watches its runs through a cheap progress read. See "Noticing a publish".
 - **Unbounded polling on `partial`:** #663.

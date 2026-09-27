@@ -39,6 +39,7 @@ let readCalls = 0;
 let readInitialCalls = 0;
 let lastReadOverrides: unknown;
 let signedInAccount: string | null = null;
+let progressCalls: string[][] = [];
 let passwordChangeRequired = false;
 
 const dossiers = {
@@ -54,6 +55,14 @@ const dossiers = {
     readInitialCalls += 1;
     void overrides;
     return readInitial;
+  },
+  async readEvidenceRunProgress(ids: string[]) {
+    progressCalls.push(ids);
+    return ids.map((id) => ({
+      id,
+      state: "running" as const,
+      version: "running:active"
+    }));
   }
 };
 
@@ -126,6 +135,7 @@ vi.mock("../../../server/config", () => ({
 import { POST } from "./route";
 import { GET } from "./[region]/[realm]/[name]/route";
 import { GET as GET_JOB } from "./jobs/[jobId]/route";
+import { GET as GET_EVIDENCE_RUNS } from "./evidence-runs/route";
 
 function dossierRequest(body: unknown): Request {
   return new Request("https://slashwho.example/api/dossiers", {
@@ -167,6 +177,7 @@ beforeEach(() => {
   readCalls = 0;
   readInitialCalls = 0;
   lastReadOverrides = undefined;
+  progressCalls = [];
 });
 
 describe("POST /api/dossiers", () => {
@@ -400,5 +411,58 @@ describe("GET /api/dossiers/jobs/:jobId", () => {
       status: "queued",
       error: null
     });
+  });
+});
+
+describe("GET /api/dossiers/evidence-runs", () => {
+  const runId = "10000000-0000-4000-8000-000000000013";
+  const otherRunId = "10000000-0000-4000-8000-000000000014";
+
+  function progressRequest(ids: string): Request {
+    return new Request(
+      `https://slashwho.example/api/dossiers/evidence-runs?ids=${ids}`,
+      { headers: { "x-real-ip": "203.0.113.8" } }
+    );
+  }
+
+  it("reports each watched run's progress and nothing else, never cached", async () => {
+    const response = await GET_EVIDENCE_RUNS(
+      progressRequest(`${runId},${otherRunId.toUpperCase()},${runId}`)
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      runs: [
+        { id: runId, state: "running", version: "running:active" },
+        { id: otherRunId, state: "running", version: "running:active" }
+      ]
+    });
+    expect(progressCalls).toEqual([[runId, otherRunId]]);
+  });
+
+  it("refuses malformed, missing or too many ids before reading anything", async () => {
+    const tooMany = Array.from(
+      { length: 65 },
+      (_, index) => `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`
+    ).join(",");
+    for (const ids of ["", "not-a-run", `${runId},x`, tooMany]) {
+      const response = await GET_EVIDENCE_RUNS(progressRequest(ids));
+      expect(response.status).toBe(404);
+      expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
+        "character_not_found"
+      );
+    }
+    expect(progressCalls).toEqual([]);
+  });
+
+  it("is admitted as a public read, like the dossier it watches", async () => {
+    readAllowed = { allowed: false, retryAfterSeconds: 7 };
+
+    const response = await GET_EVIDENCE_RUNS(progressRequest(runId));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("7");
+    expect(progressCalls).toEqual([]);
   });
 });

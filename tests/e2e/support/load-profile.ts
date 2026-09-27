@@ -18,10 +18,17 @@ export type LoadSample = Readonly<{
   firstResponseMs: number;
   /** The connected-characters panel first in the DOM. */
   renderedMs: number;
+  /**
+   * When the worker published the evidence the load waited for, on the same
+   * clock. Absent when the load gathered nothing.
+   */
+  publishedMs?: number;
   /** The first dossier response with no evidence still gathering. */
   settledMs?: number;
   /** The first dossier response's `Server-Timing` durations. */
   server: Readonly<Record<string, number>>;
+  /** How many reads of each kind the page made before it settled. */
+  requests?: Readonly<Record<string, number>>;
 }>;
 
 export type Spread = Readonly<{ p50: number; p95: number; max: number }>;
@@ -30,6 +37,7 @@ export type LoadSummary = Readonly<{
   count: number;
   phases: Readonly<Partial<Record<Phase, Spread>>>;
   server: Readonly<Record<string, Spread>>;
+  requests: Readonly<Record<string, Spread>>;
 }>;
 
 const phases = [
@@ -38,9 +46,22 @@ const phases = [
   "headersMs",
   "firstResponseMs",
   "renderedMs",
-  "settledMs"
+  "publishedMs",
+  "settledMs",
+  "settleLagMs"
 ] as const;
 type Phase = (typeof phases)[number];
+
+/**
+ * A phase's value for one load. `settleLagMs` is derived: how long after the
+ * publish the page showed it (#690), so only a load with both has one.
+ */
+function phaseValue(sample: LoadSample, phase: Phase): number | undefined {
+  if (phase !== "settleLagMs") return sample[phase];
+  return sample.settledMs === undefined || sample.publishedMs === undefined
+    ? undefined
+    : sample.settledMs - sample.publishedMs;
+}
 
 export function parseServerTiming(
   header: string | null
@@ -78,28 +99,39 @@ function spread(values: readonly number[]): Spread | undefined {
   };
 }
 
+/** Each key's spread over the records that carry it. */
+function spreadEach(
+  records: readonly Readonly<Record<string, number>>[]
+): Record<string, Spread> {
+  const keys = [...new Set(records.flatMap((record) => Object.keys(record)))];
+  const spreads: Record<string, Spread> = {};
+  for (const key of keys) {
+    const result = spread(
+      records.flatMap((record) =>
+        record[key] === undefined ? [] : [record[key]]
+      )
+    );
+    if (result) spreads[key] = result;
+  }
+  return spreads;
+}
+
 export function summariseLoads(samples: readonly LoadSample[]): LoadSummary {
   const phaseSpreads: Partial<Record<Phase, Spread>> = {};
   for (const phase of phases) {
-    const values = samples.flatMap((sample) =>
-      sample[phase] === undefined ? [] : [sample[phase]]
-    );
+    const values = samples.flatMap((sample) => {
+      const value = phaseValue(sample, phase);
+      return value === undefined ? [] : [value];
+    });
     const result = spread(values);
     if (result) phaseSpreads[phase] = result;
   }
-  const metrics = [
-    ...new Set(samples.flatMap((sample) => Object.keys(sample.server)))
-  ];
-  const server: Record<string, Spread> = {};
-  for (const metric of metrics) {
-    const result = spread(
-      samples.flatMap((sample) =>
-        sample.server[metric] === undefined ? [] : [sample.server[metric]]
-      )
-    );
-    if (result) server[metric] = result;
-  }
-  return { count: samples.length, phases: phaseSpreads, server };
+  return {
+    count: samples.length,
+    phases: phaseSpreads,
+    server: spreadEach(samples.map((sample) => sample.server)),
+    requests: spreadEach(samples.map((sample) => sample.requests ?? {}))
+  };
 }
 
 function row(label: string, value: Spread): string {
@@ -119,6 +151,9 @@ export function formatLoadSummary(
   }
   for (const [metric, value] of Object.entries(summary.server)) {
     lines.push(row(`server ${metric}`, value));
+  }
+  for (const [kind, value] of Object.entries(summary.requests)) {
+    lines.push(row(`reads ${kind}`, value));
   }
   return lines.join("\n");
 }

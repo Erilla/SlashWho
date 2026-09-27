@@ -6,9 +6,11 @@ import {
   dossierResearchStatusSchema,
   dossierStartResponseSchema,
   dossierTierSearchResponseSchema,
+  evidenceRunProgressResponseSchema,
   safeApiErrorSchema,
   type ApplicantDossier,
-  type CharacterKey
+  type CharacterKey,
+  type EvidenceRunProgressResponse
 } from "@slashwho/contracts";
 import {
   canonicalCharacterId,
@@ -21,9 +23,12 @@ import {
   dossierApiPath,
   dossierJobApiPath,
   dossierStartApiPath,
+  evidenceRunsApiPath,
   fetchDossierApi,
+  parseDossierResponse,
   type DossierApiResult
 } from "../../../../../lib/dossier-api";
+import { createEvidenceRunWatch } from "../../../../../lib/evidence-run-watch";
 import { raiderIoCharacterUrl } from "../../../../../lib/dossier-path";
 import { fetchFirstDossierRead } from "../../../../../lib/early-dossier-read";
 import { evidenceFilter } from "../../../../../lib/character-visibility";
@@ -208,6 +213,17 @@ function DossierPageState({
   const hasExpandedDossier = useRef(false);
   const requestSequence = useRef(0);
   const appliedSequence = useRef(0);
+  // The runs the shown dossier is waiting on (#690). The poll asks after these
+  // and re-reads the dossier only once one of them has moved.
+  const [runWatch] = useState(createEvidenceRunWatch);
+  // The dossier the poll's own read produced, which it has already counted.
+  const polledDossier = useRef<ApplicantDossier | null>(null);
+  useEffect(() => {
+    // Any other read that shows a dossier is a full read too: the first one,
+    // research, a refresh, a tier search.
+    if (dossier !== polledDossier.current)
+      runWatch.shown(dossier?.evidenceRunIds ?? []);
+  }, [dossier, runWatch]);
 
   useEffect(() => {
     const nextAnnouncement = evidenceAnnouncement(
@@ -527,6 +543,43 @@ function DossierPageState({
     ): Promise<
       PollReadResult<{ dossier: ApplicantDossier; sequence: number }>
     > => {
+      const watched = runWatch.watching();
+      if (watched.length > 0) {
+        let progress: DossierApiResult<EvidenceRunProgressResponse>;
+        try {
+          // No credentials: the route reads no provider, so the visitor's
+          // keys have no reason to travel with every ask.
+          progress = await parseDossierResponse(
+            await fetch(evidenceRunsApiPath(watched), {
+              cache: "no-store",
+              signal
+            }),
+            evidenceRunProgressResponseSchema
+          );
+        } catch (caught) {
+          if (!signal.aborted) setPollUnavailable(true);
+          throw caught;
+        }
+        if (signal.aborted) return { kind: "retry" };
+        if (progress.kind === "ok") {
+          const decision = runWatch.observe(progress.data.runs);
+          if (decision.kind === "unchanged") {
+            setPollUnavailable(false);
+            return decision;
+          }
+        } else if (
+          progress.kind === "refused" &&
+          progress.response.status === 429
+        ) {
+          setPollUnavailable(true);
+          return {
+            kind: "retry",
+            retryAfterMs: retryAfterMilliseconds(progress.response)
+          };
+        }
+        // Anything else is answered by a full read, which reports its own
+        // failures the way it always has.
+      }
       const sequence = ++requestSequence.current;
       let result: DossierApiResult<ApplicantDossier>;
       try {
@@ -542,7 +595,16 @@ function DossierPageState({
       if (signal.aborted || sequence < appliedSequence.current)
         return { kind: "retry" };
       if (result.kind === "ok") {
-        return { kind: "snapshot", value: { dossier: result.data, sequence } };
+        // Watched now, not after the render: the next ask can start first.
+        const runIds = result.data.evidenceRunIds ?? [];
+        const delayMs = runWatch.fullRead(runIds);
+        polledDossier.current = result.data;
+        return {
+          kind: "snapshot",
+          value: { dossier: result.data, sequence },
+          // Runs to watch: ask after them next rather than on the backoff.
+          delayMs: runIds.length > 0 ? delayMs : undefined
+        };
       }
       if (result.kind === "refused") {
         setPollUnavailable(true);
@@ -560,7 +622,7 @@ function DossierPageState({
       appliedSequence.current = sequence;
       return { kind: "terminal", response: result.response };
     },
-    [dossierApi]
+    [dossierApi, runWatch]
   );
 
   const applyFreshDossier = useCallback(
@@ -583,6 +645,9 @@ function DossierPageState({
       canAddCharacters &&
       !pollStopped &&
       (hasLiveEvidence(dossier) || hasLiveTierSearch(dossier)),
+    // Runs to watch are asked after at once, which also records where they
+    // were as the dossier was read.
+    firstDelayMs: dossier?.evidenceRunIds?.length ? 0 : undefined,
     read: readDossierPoll,
     onSnapshot: applyFreshDossier,
     onTerminalError: applyDossierError

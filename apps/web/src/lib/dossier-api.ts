@@ -30,6 +30,11 @@ export function dossierJobApiPath(jobId: string): string {
   return `/api/dossiers/jobs/${encodeURIComponent(jobId)}`;
 }
 
+/** Where a dossier's evidence runs have got to (#690). */
+export function evidenceRunsApiPath(ids: readonly string[]): string {
+  return `/api/dossiers/evidence-runs?ids=${ids.map(encodeURIComponent).join(",")}`;
+}
+
 /**
  * Fetch a dossier API route with the visitor's saved credentials attached.
  * The dossier read, refresh and tier search routes resolve credential

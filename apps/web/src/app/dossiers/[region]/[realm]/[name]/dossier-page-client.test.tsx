@@ -1632,6 +1632,92 @@ describe("DossierPageClient staged research", () => {
     expect(screen.getByText("Ryalts")).toBeVisible();
   });
 
+  it("asks after a gathering dossier's runs, and re-reads it only once one publishes", async () => {
+    // #690: the page noticed a publish only at its next full read, up to ten
+    // seconds late, and every one of those reads cost the whole dossier.
+    vi.useFakeTimers();
+    const runId = "10000000-0000-4000-8000-000000000013";
+    const progressPath = `/api/dossiers/evidence-runs?ids=${runId}`;
+    const progress = [
+      { id: runId, state: "running", version: "running:active:pending" },
+      { id: runId, state: "running", version: "running:active:pending" },
+      { id: runId, state: "settled", version: "complete:completed:completed" }
+    ];
+    const requests: string[] = [];
+    const progressInits: (RequestInit | undefined)[] = [];
+    const fetchMock = vi.fn((input: string, init?: RequestInit) => {
+      // A full read with stored keys first checks the session; only the
+      // dossier's own reads are counted here.
+      if (input === "/api/account/session")
+        return Promise.resolve(Response.json({ account: null }));
+      requests.push(input);
+      if (input === progressPath) {
+        progressInits.push(init);
+        return Promise.resolve(Response.json({ runs: [progress.shift()] }));
+      }
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(expanded));
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    writeStoredCredentials({
+      blizzardClientId: "id",
+      blizzardClientSecret: "secret",
+      raiderIoAccessKey: "",
+      wclClientId: "",
+      wclClientSecret: ""
+    });
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={{
+          ...withEvidenceState(
+            dossier(
+              "gathering",
+              "Historic mythic evidence is still gathering in the background. Cached results are shown while it completes.",
+              "Gathering evidence"
+            ),
+            "scanning"
+          ),
+          evidenceRunIds: [runId]
+        }}
+        jobId={null}
+      />
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(requests).toEqual([progressPath]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(requests).toEqual([progressPath, progressPath]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(requests).toEqual([
+      progressPath,
+      progressPath,
+      progressPath,
+      dossierPath
+    ]);
+    expect(screen.getByText(expanded.research.message)).toBeVisible();
+    // The progress route reads no provider, so no key travels with it.
+    for (const init of progressInits) expect(init?.headers).toBeUndefined();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(requests).toHaveLength(4);
+  });
+
   it("keeps polling evidence after a transient read failure", async () => {
     // Break caught: a temporary dossier read throttle could strand the page on
     // the gathering message until the reviewer manually refreshed it.

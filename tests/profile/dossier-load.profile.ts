@@ -7,7 +7,11 @@ import {
   summariseLoads,
   type LoadSample
 } from "../e2e/support/load-profile";
-import { seedCharacterEvidence, seedSnapshot } from "../e2e/support/seed";
+import {
+  latestEvidencePublishedAt,
+  seedCharacterEvidence,
+  seedSnapshot
+} from "../e2e/support/seed";
 
 /**
  * The dossier load profiler (#646): `corepack pnpm profile:dossier`. It runs
@@ -49,6 +53,8 @@ type PageMarks = {
   serverTiming: string | null;
   /** The latest full read's evidence states, reported if a load times out. */
   lastStates?: string[];
+  /** Reads started before the load settled, by kind. */
+  reads: Record<string, number>;
 };
 
 /**
@@ -61,7 +67,11 @@ type PageMarks = {
  * never ends (#663), so settling on the page's rule would hang the profile.
  */
 function instrumentDossierLoad(): void {
-  const marks: PageMarks = { serverTiming: null, prelude: [] };
+  const marks: PageMarks = { serverTiming: null, prelude: [], reads: {} };
+  const countRead = (kind: string) => {
+    if (marks.settledMs === undefined)
+      marks.reads[kind] = (marks.reads[kind] ?? 0) + 1;
+  };
   (window as unknown as { __dossierLoad: PageMarks }).__dossierLoad = marks;
 
   type Character = { excluded?: boolean; evidenceState?: string };
@@ -94,6 +104,9 @@ function instrumentDossierLoad(): void {
         : undefined;
     if (prelude) marks.prelude.push(prelude);
     if (dossierRead) marks.requestedMs ??= startedAt;
+    if (dossierRead) countRead("dossier");
+    else if (url.pathname === "/api/dossiers/evidence-runs")
+      countRead("progress");
     const response = await original(input, init);
     if (prelude) prelude.endMs = performance.now();
     if (dossierRead) {
@@ -147,7 +160,15 @@ function formatPrelude(): string {
     .join("\n");
 }
 
-async function loadOnce(browser: Browser, path: string): Promise<LoadSample> {
+/**
+ * One load of `path`. `gathers` names the character whose evidence the load
+ * waits for, so its publish can be placed on the page's clock.
+ */
+async function loadOnce(
+  browser: Browser,
+  path: string,
+  gathers?: CharacterKey
+): Promise<LoadSample> {
   // A fresh context per load: no HTTP cache, no storage, no warm page.
   const context = await browser.newContext({
     extraHTTPHeaders: { "x-real-ip": "127.0.0.1" }
@@ -178,16 +199,20 @@ async function loadOnce(browser: Browser, path: string): Promise<LoadSample> {
           { cause: error }
         );
       });
-    const { marks, shellMs } = await page.evaluate(() => {
+    const { marks, shellMs, timeOrigin } = await page.evaluate(() => {
       const navigation = performance.getEntriesByType(
         "navigation"
       )[0] as PerformanceNavigationTiming;
       return {
         marks: (window as unknown as { __dossierLoad: PageMarks })
           .__dossierLoad,
-        shellMs: navigation.domContentLoadedEventEnd
+        shellMs: navigation.domContentLoadedEventEnd,
+        timeOrigin: performance.timeOrigin
       };
     });
+    const publishedAt = gathers
+      ? await latestEvidencePublishedAt(gathers)
+      : null;
     lastPrelude = marks.prelude;
     return {
       shellMs,
@@ -197,8 +222,12 @@ async function loadOnce(browser: Browser, path: string): Promise<LoadSample> {
       ...(marks.headersMs === undefined ? {} : { headersMs: marks.headersMs }),
       firstResponseMs: marks.firstResponseMs!,
       renderedMs: marks.renderedMs!,
+      ...(publishedAt === null
+        ? {}
+        : { publishedMs: publishedAt.getTime() - timeOrigin }),
       settledMs: marks.settledMs!,
-      server: parseServerTiming(marks.serverTiming)
+      server: parseServerTiming(marks.serverTiming),
+      requests: marks.reads
     };
   } finally {
     await context.close();
@@ -305,7 +334,8 @@ test("read that gathers Warcraft Logs evidence", async ({ browser }) => {
     });
     const sample = await loadOnce(
       browser,
-      `/dossiers/eu/silvermoon/${root.name}`
+      `/dossiers/eu/silvermoon/${root.name}`,
+      root
     );
     // The first is the discarded warm-up, as in the warm scenarios.
     if (index > 0) samples.push(sample);
@@ -357,9 +387,11 @@ test("cold read through discovery", async ({ browser }) => {
   const count = Math.max(1, Math.ceil(loads / 4));
   const samples: LoadSample[] = [];
   for (let index = 0; index <= count; index += 1) {
+    const root = key(`profilecold${suffix(index)}`);
     const sample = await loadOnce(
       browser,
-      `/dossiers/eu/silvermoon/profilecold${suffix(index)}`
+      `/dossiers/eu/silvermoon/${root.name}`,
+      root
     );
     if (index > 0) samples.push(sample);
   }

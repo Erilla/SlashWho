@@ -311,6 +311,28 @@ export async function suppressCharacter(
   }
 }
 
+/**
+ * When the character's newest evidence was published, as the worker recorded
+ * it: the worker's own clock, which the profiler's browser shares.
+ */
+export async function latestEvidencePublishedAt(
+  key: CharacterKey
+): Promise<Date | null> {
+  const pool = new Pool({ connectionString: databaseUrl() });
+  try {
+    const result = await pool.query<{ completed_at: Date | null }>(
+      `SELECT max(completed_at) AS completed_at
+       FROM character_evidence_runs
+       WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+         AND status IN ('complete', 'partial')`,
+      [key.region, key.realm, key.name]
+    );
+    return result.rows[0]?.completed_at ?? null;
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function countDiscoveryRuns(key: CharacterKey): Promise<number> {
   const pool = new Pool({ connectionString: databaseUrl() });
   try {
