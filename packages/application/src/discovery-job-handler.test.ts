@@ -356,6 +356,9 @@ function createMemoryRepositories(): Repositories {
         run.status = "complete";
         run.snapshotId = snapshotId;
       },
+      async recordGuildReadsDropped(id) {
+        if (!runs.has(id)) throw new Error("discovery_run_not_found");
+      },
       async fail(id, code) {
         const run = runs.get(id);
         if (!run) throw new Error("discovery_run_not_found");
@@ -1648,6 +1651,7 @@ describe("discovery job handler", () => {
         state: "complete",
         limitationCode: null,
         characterCount: 3,
+        guildReadsDropped: 0,
         durationMs: 0,
         correlationId: null,
         queueWaitMs: null,
@@ -1657,7 +1661,8 @@ describe("discovery job handler", () => {
         fingerprintDurationMs: 0,
         dbMs: 0,
         dbCallMs: 0,
-        dbCalls: 9,
+        // A redelivery resets the guild-read count an earlier attempt stored.
+        dbCalls: 10,
         dbMaxCallMs: 0,
         // Every call measures 0ms under this clock, so the first one to be
         // timed is the one that set the maximum.
@@ -1674,6 +1679,72 @@ describe("discovery job handler", () => {
     ]);
   });
 
+  it("stores and logs the guild reads a discovery lost upstream", async () => {
+    // Break caught: a guild read that still failed after its retry left the
+    // immutable snapshot without a guild and no trace anywhere (run ed908d81).
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const recordGuildReadsDropped = vi.spyOn(
+      repositories.runs,
+      "recordGuildReadsDropped"
+    );
+    const gateway = new MutableGateway();
+    const read = gateway.getCharacter.bind(gateway);
+    gateway.getCharacter = async (key, signal) =>
+      key?.name === secondKey.name
+        ? Promise.reject(
+            Object.assign(new Error("raiderio_forbidden"), {
+              kind: "forbidden"
+            })
+          )
+        : read(key, signal);
+    const events: Record<string, unknown>[] = [];
+
+    await handlerFor(repositories, gateway, {
+      logger: {
+        info(event) {
+          events.push(event);
+        }
+      }
+    }).execute(run.id, delivery());
+
+    expect(recordGuildReadsDropped).toHaveBeenCalledExactlyOnceWith(run.id, 1);
+    expect(events).toEqual([
+      expect.objectContaining({
+        event: "discovery_run",
+        outcome: "snapshot",
+        state: "complete",
+        characterCount: 3,
+        guildReadsDropped: 1
+      })
+    ]);
+  });
+
+  it("skips the guild-read write when a first delivery lost nothing", async () => {
+    // The column defaults to 0, so writing 0 on a first attempt is a wasted
+    // database call on every run.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const recordGuildReadsDropped = vi.spyOn(
+      repositories.runs,
+      "recordGuildReadsDropped"
+    );
+    const events: Record<string, unknown>[] = [];
+
+    await handlerFor(repositories, new MutableGateway(), {
+      logger: {
+        info(event) {
+          events.push(event);
+        }
+      }
+    }).execute(run.id, delivery());
+
+    expect(recordGuildReadsDropped).not.toHaveBeenCalled();
+    expect(events).toEqual([
+      expect.objectContaining({ outcome: "snapshot", guildReadsDropped: 0 })
+    ]);
+  });
+
   it.each(["getCharacter", "getClaimedCharacters", "resolveProfileGuess"])(
     "names %s as the slowest Raider.IO call by operation, never by argument",
     async (slowOperation) => {
@@ -1687,9 +1758,17 @@ describe("discovery job handler", () => {
       const repositories = createMemoryRepositories();
       const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
       const records: Array<Record<string, unknown>> = [];
+      // Only the first call of the slow operation is slow. The clock is shared,
+      // so advancing it on every such call would charge a guild read's latency
+      // to every other guild read in flight with it; for getCharacter the
+      // first call is the root read, which runs before any guild read starts.
       let tick = 0;
+      let slowCallMade = false;
       const slowWhen = async <T>(operation: string, result: T): Promise<T> => {
-        if (operation === slowOperation) tick += 1_000;
+        if (operation === slowOperation && !slowCallMade) {
+          slowCallMade = true;
+          tick += 1_000;
+        }
         return result;
       };
       // Discovery resolves a profile guess only for a character with no
@@ -1697,12 +1776,16 @@ describe("discovery job handler", () => {
       const isRoot = (key: CharacterKey) => key.name === rootKey.name;
       const rootOwner =
         slowOperation === "resolveProfileGuess" ? null : ownerMarker;
+      // The root names its guild so discovery reads only the alt's: guild
+      // reads run concurrently, and two overlapping slow reads would each time
+      // the other's delay as well.
       const gateway: RaiderIoGateway = {
         getCharacter: (key) =>
           slowWhen("getCharacter", {
             ...character(key),
             ownerId: isRoot(key) ? rootOwner : null,
-            profileGuess: isRoot(key) ? guessMarker : null
+            profileGuess: isRoot(key) ? guessMarker : null,
+            guild: isRoot(key) ? rosterGuild : null
           }),
         getClaimedCharacters: () =>
           slowWhen("getClaimedCharacters", {
@@ -1931,6 +2014,7 @@ describe("discovery job handler", () => {
         state: null,
         limitationCode: null,
         characterCount: 0,
+        guildReadsDropped: 0,
         durationMs: 0,
         correlationId: null,
         queueWaitMs: null,

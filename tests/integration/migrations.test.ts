@@ -130,6 +130,19 @@ describe("database migrations", () => {
       { indexname: "character_tier_best_parses_encounter_idx" }
     ]);
 
+    // Existing runs read as having dropped no guild reads, never as NULL.
+    const guildReadsDropped = await pool.query<{
+      is_nullable: string;
+      column_default: string | null;
+    }>(`
+      SELECT is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_name = 'discovery_runs' AND column_name = 'guild_reads_dropped'
+    `);
+    expect(guildReadsDropped.rows).toEqual([
+      { is_nullable: "NO", column_default: "0" }
+    ]);
+
     const damageParseState = await pool.query<{ column_name: string }>(`
       SELECT column_name
       FROM information_schema.columns
@@ -170,7 +183,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-30).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 30, tag: "0031_partial_scan_skipped" },
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
@@ -199,7 +211,8 @@ describe("database migrations", () => {
       { idx: 56, tag: "0057_evidence_run_light_refresh" },
       { idx: 57, tag: "0058_snapshot_character_lookup_index" },
       { idx: 58, tag: "0059_applicant_parser_version" },
-      { idx: 59, tag: "0060_drop_redundant_evidence_run_indexes" }
+      { idx: 59, tag: "0060_drop_redundant_evidence_run_indexes" },
+      { idx: 60, tag: "0061_discovery_guild_reads_dropped" }
     ]);
   });
 

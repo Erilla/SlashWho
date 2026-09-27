@@ -182,8 +182,48 @@ describe("withHttpRequest", () => {
     );
 
     expect(response.headers.get("server-timing")).toBe(
-      "total;dur=75, db;dur=40, blizzard;dur=25, limiterWait;dur=5"
+      "total;dur=75, db;dur=40, blizzard;dur=25, limiterWait;dur=5, respond;dur=0"
     );
+  });
+
+  it("times reading the body back as respond, inside the Server-Timing total", async () => {
+    // Issue #687: `countedResponse` reads a dossier's body a second time to
+    // count it, which no bucket covered and which ran after the header had
+    // already been written, so the header could not show it.
+    let now = 0;
+    const records: Record<string, unknown>[] = [];
+    const response = await withHttpRequest(
+      "dossier",
+      async (scope) => {
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            now += 30;
+            controller.enqueue(new TextEncoder().encode('{"ok":true}'));
+            controller.close();
+          }
+        });
+        return scope.time(
+          "respond",
+          async () =>
+            new Response(body, {
+              headers: { "content-type": "application/json" }
+            })
+        );
+      },
+      { info: (value) => records.push(value) },
+      () => now,
+      timed
+    );
+
+    expect(await response.json()).toEqual({ ok: true });
+    expect(response.headers.get("server-timing")).toBe(
+      "total;dur=30, respond;dur=30"
+    );
+    expect(records[0]).toMatchObject({
+      durationMs: 30,
+      respondMs: 30,
+      respondCalls: 2
+    });
   });
 
   it("sends no Server-Timing from an endpoint that did not opt in", async () => {
@@ -239,7 +279,9 @@ describe("withHttpRequest", () => {
       timed
     );
     expect(response.status).toBe(500);
-    expect(response.headers.get("server-timing")).toBe("total;dur=0");
+    expect(response.headers.get("server-timing")).toBe(
+      "total;dur=0, respond;dur=0"
+    );
   });
 
   it("puts durations alone in Server-Timing, never a call's name", async () => {
@@ -261,13 +303,13 @@ describe("withHttpRequest", () => {
 
     const header = response.headers.get("server-timing") ?? "";
     const metrics = header.split(", ").map((entry) => entry.split(";")[0]);
-    expect(metrics).toEqual(["total", "db", "raiderIoRankings"]);
+    expect(metrics).toEqual(["total", "db", "raiderIoRankings", "respond"]);
     for (const entry of header.split(", ")) {
       expect(entry).toMatch(/^[A-Za-z]+;dur=\d+$/);
     }
   });
 
-  it("reports total alone when nothing was timed", async () => {
+  it("reports only total and the count when nothing else was timed", async () => {
     const response = await withHttpRequest(
       "dossier",
       async () => Response.json({ ok: true }),
@@ -275,7 +317,9 @@ describe("withHttpRequest", () => {
       () => 0,
       timed
     );
-    expect(response.headers.get("server-timing")).toBe("total;dur=0");
+    expect(response.headers.get("server-timing")).toBe(
+      "total;dur=0, respond;dur=0"
+    );
   });
 
   it("folds the scope's totals into the emitted record", async () => {

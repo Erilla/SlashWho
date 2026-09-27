@@ -231,19 +231,24 @@ export async function withHttpRequest(
     response.headers.set("cache-control", "no-store");
   }
   response.headers.set("x-request-id", correlationId);
+  let count: number | undefined;
+  try {
+    // Reading the body back is the request's own work, so it is timed as
+    // part of `respond` (#687) before `Server-Timing` is written.
+    const counted = response;
+    ({ response, count } = await scope.time("respond", () =>
+      countedResponse(counted)
+    ));
+  } catch (error) {
+    failure ??= errorName(error);
+    response = apiError("search_failed");
+    response.headers.set("x-request-id", correlationId);
+  }
   if (serverTimingAllowed(options)) {
     response.headers.set(
       "server-timing",
       serverTiming(scope.totals(), Math.max(0, Math.round(clock() - startedAt)))
     );
-  }
-  let count: number | undefined;
-  try {
-    ({ response, count } = await countedResponse(response));
-  } catch (error) {
-    failure ??= errorName(error);
-    response = apiError("search_failed");
-    response.headers.set("x-request-id", correlationId);
   }
   logger.info({
     event: "http_request",

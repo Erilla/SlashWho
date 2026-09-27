@@ -3,6 +3,7 @@ import {
   safeApiErrorSchema,
   type ApplicantDossier
 } from "@slashwho/contracts";
+import type { MeasurementScope } from "@slashwho/application";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const characterUrl =
@@ -38,6 +39,7 @@ let readAllowed:
 let readCalls = 0;
 let readInitialCalls = 0;
 let lastReadOverrides: unknown;
+let lastReadScope: MeasurementScope | undefined;
 let signedInAccount: string | null = null;
 let passwordChangeRequired = false;
 
@@ -45,9 +47,15 @@ const dossiers = {
   async start() {
     return started;
   },
-  async read(_key: unknown, _signal: unknown, overrides: unknown) {
+  async read(
+    _key: unknown,
+    _signal: unknown,
+    overrides: unknown,
+    scope: MeasurementScope
+  ) {
     readCalls += 1;
     lastReadOverrides = overrides;
+    lastReadScope = scope;
     return read;
   },
   async readInitial(_key: unknown, _signal: unknown, overrides: unknown) {
@@ -167,6 +175,7 @@ beforeEach(() => {
   readCalls = 0;
   readInitialCalls = 0;
   lastReadOverrides = undefined;
+  lastReadScope = undefined;
 });
 
 describe("POST /api/dossiers", () => {
@@ -270,6 +279,22 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
     expect(applicantDossierSchema.parse(await response.json())).toEqual(
       dossier
     );
+  });
+
+  it("times the finished dossier's validation and serialisation as respond", async () => {
+    // Issue #687: compaction, validation and serialisation ran in no bucket.
+    // The route times them once and the count of the body once more.
+    const response = await GET(
+      new Request("https://slashwho.example/api/dossiers/eu/silvermoon/ryii", {
+        headers: { "x-real-ip": "203.0.113.8" }
+      }),
+      characterContext
+    );
+    expect(response.status).toBe(200);
+    expect(lastReadScope?.totals()).toMatchObject({
+      respondCalls: 2,
+      respondMs: expect.any(Number)
+    });
   });
 
   it("rejects rate-limited reads before gathering third-party dossier evidence", async () => {
