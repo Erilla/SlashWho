@@ -191,6 +191,15 @@ jobs:
   # Actions cache, one scope per image so the two do not overwrite each other,
   # and mode=max keeps the intermediate build stage that holds the dependency
   # install.
+  #
+  # Every run reads the cache, but only pushes to main write it. Exporting took
+  # about half a minute of a pull request's docker job, and most of what it
+  # uploaded was the `COPY . .` and build layers, which change on every commit
+  # and so could never be reused. A pull request can restore caches created on
+  # its base branch, so main's copy is the one that matters.
+  #
+  # The builder is not cleaned up and the build record is not uploaded: the
+  # runner is thrown away, and nobody reads the record.
   docker:
     needs: scope
     if: needs.scope.outputs.run_full == 'true'
@@ -203,14 +212,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cleanup: false
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           file: Dockerfile.${{ matrix.image }}
           tags: slashwho-${{ matrix.image }}:ci
           push: false
           cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('type=gha,scope={0},mode=max', matrix.image) || '' }}
 
   # The required check. It must report on every run, so it runs even when a
   # job it needs failed or was skipped: without `always()`, a failure upstream
