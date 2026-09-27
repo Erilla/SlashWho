@@ -86,6 +86,14 @@ only when `SERVER_TIMING_ENABLED` is exactly `true`. The e2e global setup
 turns it on, and production leaves it unset. The header carries durations
 only: no call names, counts, flags or request data.
 
+Besides the database, provider and limiter buckets, the dossier read times its
+own CPU work (#687). `assemble` is everything the dossier service does once the
+evidence is in hand, from building the dossier to validating it against the
+contract, less the two database reads it makes on the way, which stay in `db`.
+`respond` is the route's wipe compaction, validation and JSON serialisation,
+plus `withHttpRequest` reading the body back to count it. Both are serial, so
+read them against `total` directly rather than against the summed `db`.
+
 The gate exists because even durations say too much in production. On the
 dossier read, `limiterWait` shows any visitor how close the shared provider
 allowances are to running out, and whether `blizzard` or `raiderIoRankings`
