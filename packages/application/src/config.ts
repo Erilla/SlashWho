@@ -86,10 +86,10 @@ export const applicationConfigSchema = z.object({
     .number()
     .int()
     .min(1)
-    // The web's Blizzard reads have no rate limiter, only this, and they share
-    // the per-second allowance with the worker's limited client. The worker
-    // runtime test holds this maximum to what fits beside the worker's limit.
-    .max(4)
+    // Bounds the web's Blizzard and Raider.IO reads in flight, not their rate:
+    // BLIZZARD_WEB_REQUEST_LIMITS holds the web's Blizzard share, and its
+    // concurrency is kept at or above this maximum by the config test.
+    .max(12)
     .default(4),
   NEGATIVE_CACHE_TTL_MS: z
     .string()
