@@ -225,6 +225,19 @@ jobs:
           key: next-build-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: next-build-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
       - run: corepack pnpm playwright test --shard=${{ matrix.shard }}/4
+      # A failing shard keeps what it needs to be diagnosed after the runner is
+      # gone: the worker's and web server's whole output (e2e-logs, written by
+      # global setup) and each failed test's trace and screenshot. Retries are
+      # off, so a flaky failure happens once and this is its only record.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: e2e-shard-${{ matrix.shard }}
+          path: |
+            e2e-logs/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore
 
   # The images are built only to prove they still build; nothing is pushed or
   # loaded. Each image builds on its own runner. The layer cache lives in the
