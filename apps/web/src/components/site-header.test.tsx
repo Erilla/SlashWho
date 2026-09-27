@@ -27,6 +27,7 @@ import { SiteHeader } from "./site-header";
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -84,4 +85,39 @@ it("closes the menu with Escape and outside clicks", async () => {
   await waitFor(() =>
     expect(trigger).toHaveAttribute("aria-expanded", "false")
   );
+});
+
+it("publishes its rendered height as the page's header offset", () => {
+  // Break caught: the page reserved a fixed height per breakpoint, and a
+  // phone header with structured search fields or an error outgrew it.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(Response.json({ account: null }))
+  );
+  let notifyResize = () => {};
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        notifyResize = callback;
+      }
+      observe() {}
+      disconnect() {}
+    }
+  );
+  let height = 112;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    () => ({ height }) as DOMRect
+  );
+  const root = document.documentElement;
+
+  const { unmount } = render(<SiteHeader />);
+  expect(root.style.getPropertyValue("--header-offset")).toBe("112px");
+
+  height = 260;
+  notifyResize();
+  expect(root.style.getPropertyValue("--header-offset")).toBe("260px");
+
+  unmount();
+  expect(root.style.getPropertyValue("--header-offset")).toBe("");
 });
