@@ -164,6 +164,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
     const databaseUrl = postgres.getConnectionUri();
     process.env.E2E_DATABASE_URL = databaseUrl;
     process.env.E2E_RAIDER_IO_BASE_URL = fixture.baseUrl;
+    process.env.E2E_BLIZZARD_BASE_URL = blizzard.baseUrl;
 
     const environment: NodeJS.ProcessEnv = {
       ...process.env,

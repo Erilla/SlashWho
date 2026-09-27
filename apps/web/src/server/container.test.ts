@@ -513,3 +513,102 @@ it.each([
     expect(capturedAccessKey).toBe(expected);
   }
 );
+
+it.each([
+  { blizzardBaseUrl: "http://127.0.0.1:4321" },
+  { blizzardBaseUrl: undefined }
+])(
+  "threads the configured Blizzard base URL into the shared gateway (%j)",
+  async ({ blizzardBaseUrl }) => {
+    // Break caught (#654): BLIZZARD_BASE_URL could be parsed and then never
+    // reach the client, so e2e dossier reads called live Blizzard.
+    const queue = {
+      async start() {},
+      async enqueue() {
+        return "54f14e37-7df7-43db-91d5-21e797d1d145";
+      },
+      async enqueueFingerprintAdmission() {
+        return "54f14e37-7df7-43db-91d5-21e797d1d145";
+      },
+      async enqueueCharacterEvidence() {
+        return "54f14e37-7df7-43db-91d5-21e797d1d145";
+      },
+      async work() {},
+      async workFingerprintAdmissions() {},
+      async workCharacterEvidence() {},
+      async scheduleMaintenanceCleanup() {},
+      async scheduleEvidenceResume() {},
+      async settledEvidenceJobIds() {
+        return [];
+      },
+      async stop() {},
+      isReady() {
+        return true;
+      }
+    } satisfies DiscoveryQueue;
+    let captured: { baseUrl?: string | undefined } | undefined;
+
+    await createWebContainer(
+      {
+        databaseUrl: "postgresql://db/slashwho",
+        operatorAuth: {
+          origin: "https://slashwho.example",
+          sessionHashSecret: "s".repeat(32)
+        },
+        application: {
+          BOT_API_KEY: "b".repeat(32),
+          RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+          ANONYMOUS_SEARCHES_PER_HOUR: 10,
+          BOT_SEARCHES_PER_HOUR: 60,
+          PUBLIC_READS_PER_MINUTE: 300,
+          TIER_SEARCHES_PER_HOUR: 6,
+          FRESHNESS_HOURS: 24,
+          FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
+          DOSSIER_CHARACTER_CEILING: 50,
+          DOSSIER_PROVIDER_CONCURRENCY: 4,
+          NEGATIVE_CACHE_TTL_MS: 300_000
+        },
+        dossier: {
+          raiderIoBaseUrl: "https://raider.io",
+          raiderIoTimeoutMs: 10_000,
+          blizzardClientId: "blizzard-client-id",
+          blizzardClientSecret: "blizzard-client-secret",
+          blizzardBaseUrl,
+          evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
+        }
+      },
+      {
+        createPool() {
+          return {
+            async query() {
+              return {};
+            },
+            async end() {}
+          } as never;
+        },
+        async runMigrations() {},
+        createRepositories() {
+          return {} as Repositories;
+        },
+        createQueue() {
+          return queue;
+        },
+        createSearchService() {
+          return {} as never;
+        },
+        createRaiderIoGateway() {
+          return {} as never;
+        },
+        createBlizzardGateway(options) {
+          captured = options;
+          return {} as never;
+        },
+        createApplicantDossierService() {
+          return {} as never;
+        }
+      }
+    );
+
+    expect(captured?.baseUrl).toBe(blizzardBaseUrl);
+  }
+);

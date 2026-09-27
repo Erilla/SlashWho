@@ -153,6 +153,22 @@ it("throws when EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY is malformed", () => {
   ).toThrow("invalid_credential_encryption_key");
 });
 
+it("reads an optional Blizzard base URL", () => {
+  // Break caught (#654): the web ignored BLIZZARD_BASE_URL, so e2e dossier
+  // reads called live Blizzard instead of the fake the suite configured.
+  expect(
+    loadWebConfig({ ...validEnv, BLIZZARD_BASE_URL: "http://127.0.0.1:4321" })
+      .dossier.blizzardBaseUrl
+  ).toBe("http://127.0.0.1:4321");
+  expect(loadWebConfig(validEnv).dossier.blizzardBaseUrl).toBeUndefined();
+});
+
+it("refuses a Blizzard base URL that is not HTTP", () => {
+  expect(() =>
+    loadWebConfig({ ...validEnv, BLIZZARD_BASE_URL: "ftp://blizzard.test" })
+  ).toThrow("invalid_blizzard_base_url");
+});
+
 it("reads an optional Raider.IO access key and trims it", () => {
   // Break caught: a configured server key could be ignored, leaving the web
   // process on the anonymous rate limit it was configured to escape.
