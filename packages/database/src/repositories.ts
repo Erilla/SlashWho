@@ -1270,6 +1270,38 @@ export interface FingerprintSweepRepository {
    * any cycle that does advance it.
    */
   recordContinuationFailure(key: CharacterKey): Promise<number>;
+  /**
+   * Queues the next cycle of a chain whose last cycle ended without
+   * publishing, by leaving a `waiting` admission for the admission job to
+   * find. A bare admission job finds nothing to admit and settles, stranding
+   * the chain with its cursor set. The new admission keeps the caps of the
+   * run's previous one and still waits on the hourly budget.
+   *
+   * Only the cycle that just ended may call this: it first releases any
+   * reservation the run still holds. It then queues nothing unless `runId`
+   * owns its root's live cursor and has no admission waiting. Returns whether
+   * it queued one.
+   *
+   * The admission is not considered until `notBefore`, so a retry waits out
+   * the fault that failed its cycle instead of spending the give-up bound on
+   * it in seconds.
+   */
+  requeueContinuation(
+    runId: string,
+    input: { at: Date; notBefore: Date }
+  ): Promise<boolean>;
+  /**
+   * Queues the next cycle of every chain left with a cursor and no live
+   * admission -- stranded by an interruption between a cycle's release and
+   * its re-admission -- skipping any chain that has already failed
+   * `maxFailures` cycles in a row. Returns the run ids it queued, at most
+   * `limit` of them.
+   */
+  requeueStrandedContinuations(input: {
+    at: Date;
+    maxFailures: number;
+    limit: number;
+  }): Promise<readonly string[]>;
   listWaiting(limit: number, offset?: number): Promise<readonly string[]>;
   listAdmittedUndispatched(limit: number): Promise<readonly string[]>;
   markDispatched(runId: string, at: Date): Promise<void>;

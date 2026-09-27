@@ -309,6 +309,53 @@ function isFingerprintReleaseRetryableError(
  */
 const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
 
+/**
+ * How long a continuation cycle that failed waits before the next one may be
+ * admitted: doubling from two minutes with each consecutive failure, and never
+ * sooner than the upstream's own Retry-After. Without it the admission gate is
+ * almost always open, so a fault lasting under a minute spent every attempt
+ * the give-up bound allows and abandoned the chain for good. The four retries
+ * before give-up span half an hour. Capped at the hour the budget rolls over.
+ */
+function continuationRetryDelayMs(
+  failures: number,
+  retryAfterMs?: number
+): number {
+  const backoffMs = 2 * 60_000 * 2 ** Math.max(0, failures - 1);
+  return Math.min(60 * 60_000, Math.max(backoffMs, retryAfterMs ?? 0));
+}
+
+/**
+ * Queues the next cycle of every chain left with a cursor and no live
+ * admission, and re-enqueues its admission job. A cycle that ends without
+ * publishing queues its own successor, but a process that dies between the
+ * cycle's release and that re-admission leaves nothing that would ever resume
+ * the chain. A chain that already gave up stays given up. Returns how many
+ * chains it queued.
+ */
+export async function recoverStrandedContinuations(
+  repositories: Pick<Repositories, "fingerprintSweeps">,
+  queue: { enqueueFingerprintAdmission(runId: string): Promise<unknown> },
+  at: Date = new Date()
+): Promise<number> {
+  let recovered = 0;
+  for (;;) {
+    // Each batch leaves its chains with a waiting admission, so the next one
+    // finds only chains it has not seen.
+    const runIds =
+      await repositories.fingerprintSweeps.requeueStrandedContinuations({
+        at,
+        maxFailures: MAX_CONTINUATION_NON_PROGRESS_CYCLES,
+        limit: 100
+      });
+    for (const runId of runIds) {
+      await queue.enqueueFingerprintAdmission(runId);
+    }
+    recovered += runIds.length;
+    if (runIds.length < 100) return recovered;
+  }
+}
+
 function historicalGuildsFromEvidence(
   evidenceSets: readonly Awaited<
     ReturnType<Repositories["evidence"]["getCompleted"]>
@@ -474,13 +521,26 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
        * Re-enqueues a continuation cycle that made no progress, giving up once
        * the same chain has done so too many times in a row. Returns true when
        * the chain was re-enqueued and false when it gave up.
+       *
+       * The admission job admits only a `waiting` row, and a cycle that did
+       * not publish leaves none, so the next cycle's row is queued here: a
+       * bare re-enqueue settled without dispatching and stranded the chain.
        */
-      const continueWithoutProgress = async (): Promise<boolean> => {
+      const continueWithoutProgress = async (
+        retryAfterMs?: number
+      ): Promise<boolean> => {
         const failures =
           await repositories.fingerprintSweeps.recordContinuationFailure(
             run.rootKey
           );
         if (failures >= MAX_CONTINUATION_NON_PROGRESS_CYCLES) return false;
+        const at = now();
+        await repositories.fingerprintSweeps.requeueContinuation(runId, {
+          at,
+          notBefore: new Date(
+            at.getTime() + continuationRetryDelayMs(failures, retryAfterMs)
+          )
+        });
         await options.enqueueFingerprintAdmission?.(runId);
         return true;
       };
@@ -733,7 +793,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     // as a fresh continuation instead, throttled by the
                     // admission gate exactly as the `waiting` path already is,
                     // and bounded so a dead upstream cannot cycle forever.
-                    record.outcome = (await continueWithoutProgress())
+                    record.outcome = (await continueWithoutProgress(
+                      sweep.retryAfterMs
+                    ))
                       ? "continuation_retrying"
                       : "continuation_abandoned";
                     return;

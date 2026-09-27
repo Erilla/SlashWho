@@ -630,6 +630,12 @@ function createMemoryRepositories(): Repositories {
         continuationFailures.set(keyId(key), failures);
         return failures;
       },
+      async requeueContinuation() {
+        return false;
+      },
+      async requeueStrandedContinuations() {
+        return [];
+      },
       async listWaiting() {
         return [];
       },
@@ -809,6 +815,14 @@ function handlerHarness(
     };
   };
 
+  // The runs whose next cycle a non-publishing continuation queued. The
+  // admission job admits only a queued row, so a bare re-enqueue is a dead end.
+  const requeuedContinuations: string[] = [];
+  repositories.fingerprintSweeps.requeueContinuation = async (runId) => {
+    requeuedContinuations.push(runId);
+    return true;
+  };
+
   const enqueuedFingerprintAdmissions: string[] = [];
   const created: CreateSnapshotInput[] = [];
   const amended: {
@@ -889,6 +903,7 @@ function handlerHarness(
         ?.outcome;
     },
     enqueuedFingerprintAdmissions,
+    requeuedContinuations,
     snapshots: { created, amended },
     handler: {
       async execute(...arguments_: Parameters<typeof handler.execute>) {
@@ -2879,6 +2894,7 @@ describe("discovery job handler", () => {
     ).resolves.toBeUndefined();
 
     expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+    expect(harness.requeuedContinuations).toEqual([harness.runId]);
     expect(harness.snapshots.amended).toHaveLength(0);
     await expect(
       harness.repositories.snapshots.getCurrent(rootKey)
@@ -3036,6 +3052,7 @@ describe("discovery job handler", () => {
     ).resolves.toBeUndefined();
 
     expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+    expect(harness.requeuedContinuations).toEqual([harness.runId]);
     await expect(
       harness.repositories.runs.find(harness.runId)
     ).resolves.toMatchObject({ status: "complete" });
