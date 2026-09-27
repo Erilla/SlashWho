@@ -72,7 +72,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({
       event: "queue_depth",
@@ -130,7 +130,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({
       event: "evidence_job",
@@ -167,7 +167,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({
       event: "evidence_job",
@@ -199,7 +199,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({
       event: "evidence_job",
@@ -227,7 +227,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({
       event: "worker_config",
@@ -248,7 +248,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({
       event: "evidence_job",
@@ -274,7 +274,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
 
     logger.info({
       event: "evidence_job",
@@ -298,7 +298,7 @@ describe("worker logger", () => {
     const lines: string[] = [];
     const logger = createWorkerLogger({
       write: (line: string) => lines.push(line)
-    } as never);
+    });
     const records: Record<string, unknown>[] = [
       {
         event: "evidence_job",

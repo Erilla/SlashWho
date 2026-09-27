@@ -584,7 +584,7 @@ it.each([
               return {};
             },
             async end() {}
-          } as never;
+          };
         },
         async runMigrations() {},
         createRepositories() {

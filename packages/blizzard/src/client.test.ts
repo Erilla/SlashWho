@@ -61,7 +61,7 @@ function clientFor(
   return {
     fetchSpy,
     gateway: createBlizzardClient({
-      fetch: fetchSpy as unknown as typeof globalThis.fetch,
+      fetch: fetchSpy,
       clientId: "id",
       clientSecret: "secret",
       ...options
@@ -122,11 +122,11 @@ describe("Blizzard gateway", () => {
     const endpoints: string[] = [];
     const respond = fixtureResponder({ achievements: "achievements-empty" });
     const gateway = createBlizzardClient({
-      fetch: (async (input: RequestInfo | URL) => {
+      fetch: async (input: RequestInfo | URL) => {
         const url = new URL(String(input));
         endpoints.push(url.toString());
         return respond(url);
-      }) as typeof globalThis.fetch,
+      },
       clientId: "id",
       clientSecret: "secret",
       baseUrl: "http://127.0.0.1:43101"

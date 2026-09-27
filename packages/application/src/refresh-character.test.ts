@@ -77,7 +77,7 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
             listStatus
           }
         } as never,
-        queue: { enqueueCharacterEvidence } as never
+        queue: { enqueueCharacterEvidence }
       })
   };
 }
@@ -171,7 +171,7 @@ describe("refreshCharacter", () => {
       at,
       cooldownMs,
       repositories: { evidence: h } as never,
-      queue: { enqueueCharacterEvidence: h.enqueueCharacterEvidence } as never,
+      queue: { enqueueCharacterEvidence: h.enqueueCharacterEvidence },
       logger: { info }
     });
 
@@ -375,7 +375,7 @@ describe("refreshCharacter", () => {
           markEnqueued: h.markEnqueued
         }
       } as never,
-      queue: { enqueueCharacterEvidence: h.enqueueCharacterEvidence } as never
+      queue: { enqueueCharacterEvidence: h.enqueueCharacterEvidence }
     });
 
     expect(scope.totals()).toMatchObject({ dbCalls: 3 });

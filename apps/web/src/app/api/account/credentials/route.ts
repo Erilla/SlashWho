@@ -77,7 +77,7 @@ export async function PUT(request: Request): Promise<Response> {
       accountId,
       body.provider,
       body.values,
-      body.expectedVersion as number
+      body.expectedVersion
     );
     return result === "saved"
       ? Response.json(

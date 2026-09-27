@@ -59,8 +59,5 @@ export function createUpstreamError(
   provider: string,
   failure: UpstreamFailure
 ): UpstreamError {
-  return Object.assign(
-    new Error(`${provider}_${failure.kind}`),
-    failure
-  ) as UpstreamError;
+  return Object.assign(new Error(`${provider}_${failure.kind}`), failure);
 }

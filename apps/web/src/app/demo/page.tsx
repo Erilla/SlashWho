@@ -21,7 +21,7 @@ export const metadata: Metadata = {
 };
 
 export default function DemoPage() {
-  const parsed = applicantDossierSchema.safeParse(capturedDossier as unknown);
+  const parsed = applicantDossierSchema.safeParse(capturedDossier);
   if (!parsed.success) notFound();
 
   return (

@@ -39,13 +39,11 @@ it("loads guild boss world ranks beyond 50 and excludes undefeated attempts", as
     }
   });
   expect(
-    await (
-      client.getMythicBossRankings as unknown as (
-        rankingOptions: typeof options,
-        signal: AbortSignal | undefined,
-        onPhysicalRequest: () => void
-      ) => ReturnType<typeof client.getMythicBossRankings>
-    )(options, undefined, () => physicalCalls++)
+    await client.getMythicBossRankings(
+      options,
+      undefined,
+      () => physicalCalls++
+    )
   ).toEqual({
     kind: "rankings",
     rows: [
