@@ -1,4 +1,8 @@
-import { createServer } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse
+} from "node:http";
 
 import { listen } from "../../support/listen";
 
@@ -6,6 +10,15 @@ type FakeRaiderIo = Readonly<{
   baseUrl: string;
   close(): Promise<void>;
 }>;
+
+/**
+ * Guilds the fake ranks: Arachnid, which the e2e seeds use, and any guild the
+ * load profiler (#646) names, so each profiled load can miss the per-guild
+ * ranking cache.
+ */
+function rankedGuild(name: string | null): boolean {
+  return name === "Arachnid" || (name?.startsWith("Profile") ?? false);
+}
 
 const ryii = {
   name: "Ryii",
@@ -90,7 +103,20 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
     while (held.length > 0) held.shift()?.();
   };
 
+  // Set by the load profiler (#646) through /__control/latency; every other
+  // caller leaves it at 0, so the e2e suite is unaffected.
+  let latencyMs = 0;
+
   const server = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://fixture.invalid");
+    if (latencyMs > 0 && !url.pathname.startsWith("/__")) {
+      setTimeout(() => handle(request, response), latencyMs);
+      return;
+    }
+    handle(request, response);
+  });
+
+  function handle(request: IncomingMessage, response: ServerResponse): void {
     const url = new URL(request.url ?? "/", "http://fixture.invalid");
     if (request.method === "POST" && url.pathname === "/__webhook/discovery") {
       discoveryWebhooks += 1;
@@ -121,6 +147,12 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
     if (url.pathname === "/__control/release") {
       releaseAll();
       json(response, 200, { holdingRelatedCharacterRead: false });
+      return;
+    }
+
+    if (url.pathname === "/__control/latency") {
+      latencyMs = Math.max(0, Number(url.searchParams.get("ms")) || 0);
+      json(response, 200, { latencyMs });
       return;
     }
 
@@ -162,7 +194,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       if (
         url.searchParams.get("region") !== "eu" ||
         url.searchParams.get("realm") !== "silvermoon" ||
-        url.searchParams.get("guild") !== "Arachnid" ||
+        !rankedGuild(url.searchParams.get("guild")) ||
         url.searchParams.get("raid") !== "nerubar-palace" ||
         url.searchParams.get("difficulty") !== "mythic"
       ) {
@@ -179,7 +211,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       if (
         url.searchParams.get("region") !== "eu" ||
         url.searchParams.get("realm") !== "silvermoon" ||
-        url.searchParams.get("name") !== "Arachnid" ||
+        !rankedGuild(url.searchParams.get("name")) ||
         url.searchParams.get("fields") !==
           "raid_encounters:nerubar-palace:mythic"
       ) {
@@ -187,7 +219,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
         return;
       }
       json(response, 200, {
-        name: "Arachnid",
+        name: url.searchParams.get("name"),
         realm: "silvermoon",
         region: "eu",
         raid_encounters: [
@@ -247,6 +279,21 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       return;
     }
 
+    // The load profiler's cold reads (#646): a character with nothing
+    // declared, so each discovery starts and ends on that character alone.
+    const profiled =
+      /^\/api\/characters\/eu\/silvermoon\/(profilecold[a-z]*)$/.exec(
+        url.pathname
+      );
+    if (profiled) {
+      const name = profiled[1]!;
+      declaredCharacter(
+        { ...ryii, name: name.charAt(0).toUpperCase() + name.slice(1) },
+        null
+      );
+      return;
+    }
+
     if (url.pathname === "/api/characters/eu/silvermoon/queued") {
       declaredCharacter(queuedCharacter, {
         name: frostalt.name,
@@ -292,7 +339,7 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
     }
 
     json(response, 404, { status: 404 });
-  });
+  }
 
   const port = await listen(server, "fake_raiderio_address_unavailable");
   return {
