@@ -360,6 +360,27 @@ describe("GET /api/dossiers/:region/:realm/:name", () => {
     );
   });
 
+  it("refuses an initial read nobody searched for instead of serving it", async () => {
+    // Break caught (#709): a direct `?scope=initial` call for a character no
+    // search has asked about queued a full evidence collection. The service
+    // withholds it, and the route must not fall back to the expanded read.
+    readInitial = { kind: "not_ready" };
+    const response = await GET(
+      new Request(
+        "https://slashwho.example/api/dossiers/eu/silvermoon/ryii?scope=initial",
+        { headers: { "x-real-ip": "203.0.113.8" } }
+      ),
+      characterContext
+    );
+    expect(response.status).toBe(409);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(readInitialCalls).toBe(1);
+    expect(readCalls).toBe(0);
+    expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
+      "discovery_not_ready"
+    );
+  });
+
   it("builds a Blizzard gateway override from visitor-supplied credential headers", async () => {
     // Break caught: a visitor's own Blizzard credentials could be silently
     // dropped instead of being used for that request's evidence gathering.

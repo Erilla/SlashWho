@@ -195,10 +195,11 @@ const dossiers = createApplicantDossierService({
   repositories: {
     snapshots: {},
     evidence: {},
-    manualConnections: {}
+    manualConnections: {},
+    runs: {}
   } as unknown as Pick<
     Repositories,
-    "snapshots" | "evidence" | "manualConnections"
+    "snapshots" | "evidence" | "manualConnections" | "runs"
   >,
   search,
   queue: { enqueueCharacterEvidence: vi.fn() },
