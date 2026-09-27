@@ -547,7 +547,7 @@ describe("worker runtime", () => {
     });
     expect(integration.fingerprint).toEqual({
       requestCap: 300,
-      readConcurrency: 6,
+      readConcurrency: 10,
       hourlyBudget: 28_800,
       cadenceMs: 604_800_000,
       minimumCommon: 200,
@@ -560,13 +560,15 @@ describe("worker runtime", () => {
     // concurrency are set in different packages and carve the same 100 a
     // second, so raising either could overrun the shared credentials with
     // nothing to say so. The web reads are bounded only by concurrency, so its
-    // share is taken at the pessimistic 100 ms response the limit was sized on.
+    // share is taken at the pessimistic 100 ms response the limit was sized on,
+    // and at the most concurrency the config accepts rather than its default:
+    // a deployment override must fail at config load, not at Blizzard.
     const blizzardPerSecond = 100;
     const pessimisticResponseSeconds = 0.1;
+    // A schema with no maximum leaves the web unbounded, which must fail.
     const webConcurrency =
-      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.parse(
-        undefined
-      );
+      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.unwrap()
+        .maxValue ?? Number.POSITIVE_INFINITY;
     const webPerSecond = webConcurrency / pessimisticResponseSeconds;
 
     expect(BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond).toBe(40);
@@ -590,21 +592,21 @@ describe("worker runtime", () => {
     }) as typeof globalThis.fetch;
     try {
       const integration = createFingerprintIntegration(config);
-      const reads = Array.from({ length: 10 }, (_, index) =>
+      const reads = Array.from({ length: 14 }, (_, index) =>
         integration.blizzardGateway!.getCompletedAchievements({
           region: "eu",
           realm: "silvermoon",
           name: `sentinel${String.fromCharCode(97 + index)}`
         })
       );
-      await vi.waitFor(() => expect(releases).toHaveLength(6));
+      await vi.waitFor(() => expect(releases).toHaveLength(10));
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(releases).toHaveLength(6);
+      expect(releases).toHaveLength(10);
 
       for (const release of releases.splice(0)) release();
       await vi.waitFor(() => expect(releases).toHaveLength(4));
       for (const release of releases.splice(0)) release();
-      await expect(Promise.all(reads)).resolves.toHaveLength(10);
+      await expect(Promise.all(reads)).resolves.toHaveLength(14);
     } finally {
       globalThis.fetch = originalFetch;
     }
