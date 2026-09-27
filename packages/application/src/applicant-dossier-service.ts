@@ -512,7 +512,7 @@ function earliest(...times: readonly (Date | null)[]): Date | null {
   );
 }
 
-const EVIDENCE_STATE_SEVERITY:Readonly<Record<DossierEvidenceState, number>> =
+const EVIDENCE_STATE_SEVERITY: Readonly<Record<DossierEvidenceState, number>> =
   { complete: 0, partial: 1, scanning: 2, waiting: 3 };
 
 function uniqueBy<T>(items: readonly T[], keyOf: (item: T) => string | null) {
