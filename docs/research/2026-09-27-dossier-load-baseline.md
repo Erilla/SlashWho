@@ -17,6 +17,25 @@ and the fake Blizzard achievement read take to answer in the provider
 scenario. Every other scenario, and the whole e2e suite, runs the fakes with
 no delay.
 
+`PROFILE_DB_RTT_MS` adds a database round trip. Locally, PostgreSQL answers
+in almost no time, so a change that removes or parallelises database calls
+looks free. When the variable is set, the global setup puts a TCP proxy in
+front of PostgreSQL for the web server only. The proxy holds every chunk for
+half the round trip in each direction. The worker, migrations and seeds keep
+a direct connection. `0` runs through the proxy with no delay, which shows the
+proxy's own overhead. Unset, there is no proxy, and neither `test:e2e` nor CI
+ever sets it. Every summary header states the round trip it ran with.
+
+```bash
+PROFILE_DB_RTT_MS=5 corepack pnpm profile:dossier
+```
+
+For choosing a value, see
+[the #666 note](2026-09-27-issue-666-dossier-db-calls.md#modelling-railways-latency).
+At about 5 ms, `dbMs / dbCalls` and `dbMaxCallMs` match production reads on
+`test`. Latency alone does not reproduce production's request time at any
+setting.
+
 The five scenarios are:
 
 | Scenario  | What the read has to do                                                                                                                                                   |
