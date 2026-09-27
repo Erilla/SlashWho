@@ -112,6 +112,26 @@ function nextEvidenceResume(
   return soonest;
 }
 
+/**
+ * Whether a retry time has come due since `readAt`, when the dossier was last
+ * read. Only a full read queues the resumed run, and a resuming character has
+ * no active run for the watch to follow (#690), so the poll reads in full.
+ */
+function resumeDueSince(
+  value: ApplicantDossier | null,
+  readAt: number,
+  now: number
+): boolean {
+  return (
+    value?.characters.some((character) => {
+      if (character.excluded || character.evidenceResumesAt === undefined)
+        return false;
+      const at = Date.parse(character.evidenceResumesAt);
+      return at > readAt && at <= now;
+    }) ?? false
+  );
+}
+
 /** The longest delay `setTimeout` honours; anything beyond fires at once. */
 const maxTimerDelayMs = 2_147_483_647;
 
@@ -252,7 +272,11 @@ function DossierPageState({
   const [runWatch] = useState(createEvidenceRunWatch);
   // The dossier the poll's own read produced, which it has already counted.
   const polledDossier = useRef<ApplicantDossier | null>(null);
+  // The dossier on show and when it was read, for its retry times.
+  const lastRead = useRef({ dossier: initialDossier, at: Date.now() });
   useEffect(() => {
+    if (dossier !== lastRead.current.dossier)
+      lastRead.current = { dossier, at: Date.now() };
     // Any other read that shows a dossier is a full read too: the first one,
     // research, a refresh, a tier search.
     if (dossier !== polledDossier.current)
@@ -578,7 +602,12 @@ function DossierPageState({
       PollReadResult<{ dossier: ApplicantDossier; sequence: number }>
     > => {
       const watched = runWatch.watching();
-      if (watched.length > 0) {
+      const resumeDue = resumeDueSince(
+        lastRead.current.dossier,
+        lastRead.current.at,
+        Date.now()
+      );
+      if (watched.length > 0 && !resumeDue) {
         let progress: DossierApiResult<EvidenceRunProgressResponse>;
         try {
           // No credentials: the route reads no provider, so the visitor's
@@ -633,6 +662,7 @@ function DossierPageState({
         const runIds = result.data.evidenceRunIds ?? [];
         const delayMs = runWatch.fullRead(runIds);
         polledDossier.current = result.data;
+        lastRead.current = { dossier: result.data, at: Date.now() };
         return {
           kind: "snapshot",
           value: { dossier: result.data, sequence },

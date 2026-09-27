@@ -1839,6 +1839,71 @@ describe("DossierPageClient staged research", () => {
     expect(requests).toHaveLength(4);
   });
 
+  it("reads in full when a partial character's retry falls due while another run is watched", async () => {
+    // Break caught (#707 review): the resuming character has no active run,
+    // so the watch never re-read the dossier that queues its retry. With the
+    // watched run deferred, that could wait an hour.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-27T12:00:00.000Z"));
+    const runId = "10000000-0000-4000-8000-000000000013";
+    const progressPath = `/api/dossiers/evidence-runs?ids=${runId}`;
+    const resumesAt = "2026-09-27T12:05:00.000Z";
+    const shown: ApplicantDossier = {
+      ...withCharacterEvidenceStates(expanded, {
+        ryii: "partial",
+        ryalts: "waiting"
+      }),
+      evidenceRunIds: [runId]
+    };
+    shown.characters[0] = {
+      ...shown.characters[0]!,
+      evidenceResumesAt: resumesAt
+    };
+    let progressReads = 0;
+    let dossierReads = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input === progressPath) {
+        progressReads += 1;
+        return Promise.resolve(
+          Response.json({
+            runs: [{ id: runId, state: "queued", version: "running-deferred" }]
+          })
+        );
+      }
+      if (input === dossierPath) {
+        dossierReads += 1;
+        return Promise.resolve(Response.json(shown));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={shown}
+        jobId={null}
+      />
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+    });
+    expect(progressReads).toBeGreaterThan(0);
+    expect(dossierReads).toBe(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(70_000);
+    });
+    expect(dossierReads).toBe(1);
+
+    // Answered: the same retry time does not force another full read.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(dossierReads).toBe(1);
+  });
+
   it("keeps polling evidence after a transient read failure", async () => {
     // Break caught: a temporary dossier read throttle could strand the page on
     // the gathering message until the reviewer manually refreshed it.
