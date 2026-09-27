@@ -560,13 +560,15 @@ describe("worker runtime", () => {
     // concurrency are set in different packages and carve the same 100 a
     // second, so raising either could overrun the shared credentials with
     // nothing to say so. The web reads are bounded only by concurrency, so its
-    // share is taken at the pessimistic 100 ms response the limit was sized on.
+    // share is taken at the pessimistic 100 ms response the limit was sized on,
+    // and at the most concurrency the config accepts rather than its default:
+    // a deployment override must fail at config load, not at Blizzard.
     const blizzardPerSecond = 100;
     const pessimisticResponseSeconds = 0.1;
+    // A schema with no maximum leaves the web unbounded, which must fail.
     const webConcurrency =
-      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.parse(
-        undefined
-      );
+      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.unwrap()
+        .maxValue ?? Number.POSITIVE_INFINITY;
     const webPerSecond = webConcurrency / pessimisticResponseSeconds;
 
     expect(BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond).toBe(40);
