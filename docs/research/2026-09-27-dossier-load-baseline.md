@@ -121,6 +121,13 @@ once discovery has published a snapshot.
    production it would cost a full round trip plus about 7–20 ms of server
    time (the `account_session` `http_request` records on `test`).
 
+   Since this baseline was taken, #684 has started the first read from an
+   inline script while the HTML is parsed, so for an anonymous visitor the
+   read no longer waits for the page to start. The numbers above predate that
+   change; re-run the profiler to see the new gap. A visitor with saved
+   provider keys still takes the old path, because the early read stands
+   aside for them (#689).
+
 2. **The server read: 28–45 ms locally when no provider is called.** This is
    almost all database time. At 12 characters, `db` sums to about 210 ms
    within a 45 ms request, because `assembleDossier` gathers each subject in
@@ -143,8 +150,9 @@ once discovery has published a snapshot.
 
 ## Production is not this machine
 
-The one production-shaped sample, a dossier read on `test` on 2026-09-26, took
-1,184 ms on the server. It made 62 database calls (`dbMs` 1,891 summed, the
+The production-shaped sample this section started from, a dossier read on
+`test` on 2026-09-26, took 1,184 ms on the server. It later turned out to be an
+outlier: see "Production records" below. It made 62 database calls (`dbMs` 1,891 summed, the
 largest `evidence.reserve` at 221 ms) and 751 ms of Raider.IO rankings lookups
 (3 lookups, 6 physical calls, the slowest lookup 357 ms). That is about 250 ms
 per lookup. Its `limiterWaitMs` was 0, so the three were admitted together
@@ -156,9 +164,32 @@ the round-trip latency Railway adds to each of those 62 calls. The local
 profile therefore shows how many steps a load takes and in what order, but
 not how long each database step takes in production (#666).
 
-Railway keeps only the current deployment's logs. Across the last 40 web
-deployments on `test`, one dossier `http_request` record survived, so logs
-cannot provide a production baseline either.
+### Production records
+
+An earlier version of this section said Railway keeps only the current
+deployment's logs, and that one dossier `http_request` record survived across
+40 web deployments. Both were wrong. `railway logs <deployment-id>` still
+returns a removed deployment's output, and the loop that counted the records
+discarded errors: `railway logs` calls in quick succession intermittently fail
+with `Deployment not found`, and each failure was counted as no records.
+Counted correctly, the `test` web service's logs hold 173 dossier records
+across 11 deployments, from 2026-09-26 and 2026-09-27.
+
+`docs/research/2026-09-27-issue-666-dossier-db-calls.md` (#666, #682) reads
+them. Its main findings:
+
+- Production makes the same calls as local: a warm 12-character read makes 31
+  database calls in both. The 1,184 ms, 62-call sample above is one of 5 reads
+  (out of 173) with more than 40 calls, and all 5 missed the Raider.IO ranking
+  cache.
+- A 10-character production read that calls no provider takes 635 ms on the
+  server at the median (98 reads), against 45 ms locally for 12 characters.
+- A 5 ms round trip between the web server and PostgreSQL reproduces
+  production's time per call, but not its total. About 370 ms of a production
+  read is spent outside what the local fixtures exercise.
+
+When counting records across deployments, keep `railway logs`' errors and
+count failed fetches separately. A total is valid only when no fetch failed.
 
 ## Caveats
 
@@ -174,17 +205,28 @@ cannot provide a production baseline either.
 
 ## Follow-ups
 
-- **Start the first read sooner (#667).** The read cannot begin until the
-  client page has started, about 80 ms after the shell locally and more on a
-  slow device. The server shell could fetch the first read itself, or the page
-  could start it before hydration.
-- **Profile a visitor with stored provider keys.** Their read waits on a
-  serial `/api/account/session` round trip, and none of these scenarios
-  covers that.
-- **Find out what production's 62 database calls are (#666).** The local
-  `dbCalls` for the same read would show whether production makes extra
-  calls or makes the same calls more slowly. A profiler mode that adds
-  latency to database calls would model Railway.
-- **Evidence appears only at the next poll.** The 1 s, 2 s, 4 s backoff means
-  a visitor can wait up to one full interval after evidence is published.
-- **Unbounded polling on `partial`:** #663.
+Done:
+
+- **Start the first read sooner: done (#667, #684).** The first read now
+  starts from an inline script before hydration.
+- **Production's 62 database calls: answered (#666, #682).** Production makes
+  the same 31 calls as local, and slower. The 62-call read was a cache-miss
+  outlier. See "Production records".
+
+Open:
+
+- **Profile a visitor with stored provider keys (#689).** Their read skips
+  #684's early read, waits on a serial `/api/account/session` round trip, and
+  uses gateways that bypass the shared provider caches. No scenario covers
+  that.
+- **Add a database-latency mode to the profiler (#685).** #682 modelled
+  Railway with a local TCP proxy (set `noDelay`, and do not delay with
+  `setTimeout` on Windows, which rounds to about 15.6 ms). Folding that into
+  `profile:dossier` would let the local baseline include database latency.
+- **Profile production-sized evidence (#686)** and **time assembly and
+  validation on the read path (#687).** Both target the roughly 370 ms of a
+  production read that the local fixtures do not exercise.
+- **Show new evidence without waiting for the next poll (#690).** The 1 s,
+  2 s, 4 s backoff means a visitor can wait up to one full interval after
+  evidence is published.
+- **Unbounded polling on `partial` (#663).**

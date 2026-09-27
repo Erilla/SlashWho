@@ -43,6 +43,7 @@ const expectedPerformanceFields = [
   "blizzardMs",
   "blizzardCalls",
   "blizzardMaxCallMs",
+  "blizzardLimiterWaitMs",
   "warcraftLogsMs",
   "warcraftLogsCalls",
   "warcraftLogsMaxCallMs",

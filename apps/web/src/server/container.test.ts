@@ -1,3 +1,5 @@
+import { BLIZZARD_WEB_REQUEST_LIMITS } from "@slashwho/application";
+import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
 import type { DiscoveryQueue, Repositories } from "@slashwho/database";
 import { expect, it, vi } from "vitest";
 
@@ -612,3 +614,123 @@ it.each([
     expect(captured?.baseUrl).toBe(blizzardBaseUrl);
   }
 );
+
+it("rate limits the web's shared Blizzard client, not each dossier read", async () => {
+  // Break caught (#673): the composition root could build the shared Blizzard
+  // client without request limits, leaving only DOSSIER_PROVIDER_CONCURRENCY
+  // to bound it. A concurrency cap does not bound a rate, so fast answers
+  // would let the web overrun its share of the per-second allowance it
+  // splits with the worker. Every answer here is instant, so only a
+  // per-second limit can hold reads back.
+  const queue = {
+    async start() {},
+    async enqueue() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
+    async enqueueFingerprintAdmission() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
+    async enqueueCharacterEvidence() {
+      return "54f14e37-7df7-43db-91d5-21e797d1d145";
+    },
+    async work() {},
+    async workFingerprintAdmissions() {},
+    async workCharacterEvidence() {},
+    async scheduleMaintenanceCleanup() {},
+    async scheduleEvidenceResume() {},
+    async settledEvidenceJobIds() {
+      return [];
+    },
+    async stop() {},
+    isReady() {
+      return true;
+    }
+  } satisfies DiscoveryQueue;
+  let blizzard: Pick<BlizzardGateway, "getCompletedAchievements"> | undefined;
+  let apiReads = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    if (String(input).endsWith("/token")) {
+      return Response.json({ access_token: "token", expires_in: 3600 });
+    }
+    apiReads += 1;
+    return Response.json({ achievements: [] });
+  };
+  try {
+    await createWebContainer(
+      {
+        databaseUrl: "postgresql://db/slashwho",
+        operatorAuth: {
+          origin: "https://slashwho.example",
+          sessionHashSecret: "s".repeat(32)
+        },
+        application: {
+          BOT_API_KEY: "b".repeat(32),
+          RATE_LIMIT_HASH_SECRET: "r".repeat(32),
+          ANONYMOUS_SEARCHES_PER_HOUR: 10,
+          BOT_SEARCHES_PER_HOUR: 60,
+          PUBLIC_READS_PER_MINUTE: 300,
+          TIER_SEARCHES_PER_HOUR: 6,
+          FRESHNESS_HOURS: 24,
+          FINGERPRINT_SWEEP_CADENCE_HOURS: 168,
+          DOSSIER_CHARACTER_CEILING: 50,
+          DOSSIER_PROVIDER_CONCURRENCY: 4,
+          NEGATIVE_CACHE_TTL_MS: 300_000
+        },
+        dossier: {
+          raiderIoBaseUrl: "https://raider.io",
+          raiderIoTimeoutMs: 10_000,
+          blizzardClientId: "blizzard-client-id",
+          blizzardClientSecret: "blizzard-client-secret",
+          blizzardBaseUrl: "http://127.0.0.1:4321",
+          evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
+        }
+      },
+      {
+        createPool() {
+          return {
+            async query() {
+              return {};
+            },
+            async end() {}
+          };
+        },
+        async runMigrations() {},
+        createRepositories() {
+          return {} as Repositories;
+        },
+        createQueue() {
+          return queue;
+        },
+        createSearchService() {
+          return {} as never;
+        },
+        createRaiderIoGateway() {
+          return {} as never;
+        },
+        createBlizzardGateway: createBlizzardClient,
+        createApplicantDossierService(options) {
+          blizzard = options.blizzard;
+          return {} as never;
+        }
+      }
+    );
+
+    const limit = BLIZZARD_WEB_REQUEST_LIMITS.maxPerSecond;
+    const reads = Array.from({ length: limit + 5 }, (_, index) =>
+      blizzard!.getCompletedAchievements({
+        region: "eu",
+        realm: "silvermoon",
+        name: `sentinel${String.fromCharCode(97 + index)}`
+      })
+    );
+    await vi.waitFor(() => expect(apiReads).toBe(limit));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(apiReads).toBe(limit);
+
+    await expect(Promise.all(reads)).resolves.toHaveLength(limit + 5);
+    expect(apiReads).toBe(limit + 5);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
