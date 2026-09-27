@@ -178,6 +178,8 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
       OPERATOR_SESSION_HASH_SECRET:
         "e2e-operator-session-secret-that-is-longer-than-32-characters",
       ANONYMOUS_SEARCHES_PER_HOUR: "1000",
+      // The load profiler (#646) reads the dossier read's Server-Timing.
+      SERVER_TIMING_ENABLED: "true",
       PUBLIC_READS_PER_MINUTE: "1000",
       FRESHNESS_HOURS: "24",
       DISCOVERY_REQUEST_CAP: "12",

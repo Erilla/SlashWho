@@ -145,6 +145,8 @@ export async function seedCharacterEvidence(
     withSampleKills?: boolean;
     withSecondRaid?: boolean;
     historicWorldRank?: number;
+    /** The kills' guild; the load profiler (#646) varies it per load. */
+    guildName?: string;
   }> = {}
 ): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl() });
@@ -186,7 +188,10 @@ export async function seedCharacterEvidence(
                         "https://www.warcraftlogs.com/reports/e2eReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport#fight=9",
-                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      guild: {
+                        name: options.guildName ?? "Arachnid",
+                        realm: "silvermoon"
+                      },
                       performance: {
                         spec: seedSpec,
                         damage: {
@@ -210,7 +215,10 @@ export async function seedCharacterEvidence(
                         "https://www.warcraftlogs.com/reports/e2eReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eReport#fight=10",
-                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      guild: {
+                        name: options.guildName ?? "Arachnid",
+                        realm: "silvermoon"
+                      },
                       performance: {
                         spec: seedSpec,
                         damage: {
@@ -236,7 +244,10 @@ export async function seedCharacterEvidence(
                         "https://www.warcraftlogs.com/reports/e2eLaterReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eLaterReport#fight=11",
-                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      guild: {
+                        name: options.guildName ?? "Arachnid",
+                        realm: "silvermoon"
+                      },
                       performance: {
                         spec: seedSpec,
                         damage: {
@@ -263,7 +274,10 @@ export async function seedCharacterEvidence(
                         "https://www.warcraftlogs.com/reports/e2eVaultReport",
                       fightUrl:
                         "https://www.warcraftlogs.com/reports/e2eVaultReport#fight=11",
-                      guild: { name: "Arachnid", realm: "silvermoon" },
+                      guild: {
+                        name: options.guildName ?? "Arachnid",
+                        realm: "silvermoon"
+                      },
                       performance: {
                         spec: seedSpec,
                         damage: { state: "unavailable" as const },

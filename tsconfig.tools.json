@@ -8,6 +8,7 @@
   "include": [
     "apps/web/next.config.ts",
     "playwright.config.ts",
+    "playwright.profile.config.ts",
     "scripts/**/*.mts",
     "scripts/**/*.ts",
     "tests/**/*.ts",
