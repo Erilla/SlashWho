@@ -124,7 +124,7 @@ describe("createClientCredentialsTokenSource", () => {
 
   it("shares one request between concurrent callers and caches the token", async () => {
     const fetch = vi.fn(async () => tokenResponse("t1"));
-    const tokens = source(fetch as unknown as typeof globalThis.fetch);
+    const tokens = source(fetch);
 
     await expect(
       Promise.all([tokens.token(), tokens.token()])
@@ -135,8 +135,7 @@ describe("createClientCredentialsTokenSource", () => {
 
   it("asks again once the cached token is invalidated", async () => {
     let issued = 0;
-    const tokens = source((async () =>
-      tokenResponse(`t${++issued}`)) as unknown as typeof globalThis.fetch);
+    const tokens = source(async () => tokenResponse(`t${++issued}`));
 
     await expect(tokens.token()).resolves.toBe("t1");
     tokens.invalidate("stale");
@@ -147,8 +146,7 @@ describe("createClientCredentialsTokenSource", () => {
 
   it("never reads a token-endpoint refusal as a statement about the thing asked for", async () => {
     for (const status of [403, 404]) {
-      const tokens = source((async () =>
-        response(status)) as unknown as typeof globalThis.fetch);
+      const tokens = source(async () => response(status));
       await expect(tokens.token()).rejects.toMatchObject({
         message: "test_transient",
         kind: "transient",
@@ -160,10 +158,10 @@ describe("createClientCredentialsTokenSource", () => {
   it("keeps a rate limit's Retry-After and reports it", async () => {
     const onThrottle = vi.fn();
     const tokens = source(
-      (async () =>
+      async () =>
         response(429, {
           "Retry-After": "12"
-        })) as unknown as typeof globalThis.fetch,
+        }),
       onThrottle
     );
 
@@ -177,16 +175,17 @@ describe("createClientCredentialsTokenSource", () => {
 
   it("reads a malformed token body as schema drift, and a network error as transient", async () => {
     await expect(
-      source((async () =>
+      source(async () =>
         Response.json({
           access_token: "t",
           expires_in: 0
-        })) as unknown as typeof globalThis.fetch).token()
+        })
+      ).token()
     ).rejects.toMatchObject({ kind: "schema_drift" });
     await expect(
-      source((async () => {
+      source(async () => {
         throw new TypeError("fetch failed");
-      }) as unknown as typeof globalThis.fetch).token()
+      }).token()
     ).rejects.toMatchObject({ kind: "transient" });
   });
 
@@ -195,7 +194,7 @@ describe("createClientCredentialsTokenSource", () => {
     const reason = new Error("caller gave up");
     controller.abort(reason);
     const fetch = vi.fn(async () => tokenResponse("t1"));
-    const tokens = source(fetch as unknown as typeof globalThis.fetch);
+    const tokens = source(fetch);
 
     await expect(tokens.token(controller.signal)).rejects.toBe(reason);
     expect(fetch).not.toHaveBeenCalled();

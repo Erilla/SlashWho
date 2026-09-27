@@ -501,11 +501,10 @@ export function createSearchService(options: {
       const repositories = scope
         ? measuredRepositories(options.repositories, scope)
         : options.repositories;
-      const isDueForVisit = repositories.fingerprintSweeps.isDueForVisit;
-      if (!isDueForVisit) return;
+      const sweeps = repositories.fingerprintSweeps;
+      if (!sweeps.isDueForVisit) return;
       const at = now();
-      const due = await isDueForVisit.call(
-        repositories.fingerprintSweeps,
+      const due = await sweeps.isDueForVisit(
         key,
         new Date(
           at.getTime() -

@@ -144,7 +144,7 @@ it("keeps every allowlisted performance field, with its exact value, through ser
   const lines: string[] = [];
   const logger = createWebLogger({
     write: (line: string) => lines.push(line)
-  } as never);
+  });
 
   logger.info(record);
 
@@ -158,7 +158,7 @@ it("still drops a field that is not allowlisted", () => {
   const lines: string[] = [];
   const logger = createWebLogger({
     write: (line: string) => lines.push(line)
-  } as never);
+  });
 
   logger.info({ event: "http_request", characterName: "tester" });
 
@@ -175,7 +175,7 @@ it("allows the slowest-call name, which is a static method identifier", () => {
   const lines: string[] = [];
   const logger = createWebLogger({
     write: (line: string) => lines.push(line)
-  } as never);
+  });
 
   logger.info({
     event: "http_request",

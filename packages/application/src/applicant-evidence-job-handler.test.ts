@@ -681,7 +681,7 @@ describe("applicant evidence job handler", () => {
       }
     );
     const client = createWarcraftLogsClient({
-      fetch: fetch as typeof globalThis.fetch,
+      fetch: fetch,
       clientId: "test-id",
       clientSecret: "test-secret"
     });
@@ -1329,10 +1329,7 @@ describe("applicant evidence job handler", () => {
     }));
     const handler = handlerFor({
       evidence,
-      warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
-        WarcraftLogsGateway,
-        "getFirstKillReports" | "getRateLimit"
-      >,
+      warcraftLogs: { ...openGate, getFirstKillReports },
       parseRequestCap: 8,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
@@ -1367,10 +1364,7 @@ describe("applicant evidence job handler", () => {
     }));
     const handler = handlerFor({
       evidence,
-      warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
-        WarcraftLogsGateway,
-        "getFirstKillReports" | "getRateLimit"
-      >,
+      warcraftLogs: { ...openGate, getFirstKillReports },
       parseRequestCap: 8,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
@@ -1400,10 +1394,7 @@ describe("applicant evidence job handler", () => {
     }));
     const handler = handlerFor({
       evidence,
-      warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
-        WarcraftLogsGateway,
-        "getFirstKillReports" | "getRateLimit"
-      >,
+      warcraftLogs: { ...openGate, getFirstKillReports },
       parseRequestCap: 8,
       now: () => new Date("2026-09-13T12:01:00.000Z")
     });
@@ -1671,11 +1662,7 @@ describe("applicant evidence job handler", () => {
     const handler = handlerFor({
       evidence,
       warcraftLogs: { ...openGate, getFirstKillReports: vi.fn() },
-      createWarcraftLogsGateway: () =>
-        perRunGateway as unknown as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+      createWarcraftLogsGateway: () => perRunGateway,
       decryptionKey: encryptionKey,
       parseRequestCap: 48,
       pointsReserve: 5_000
@@ -1896,10 +1883,7 @@ describe("applicant evidence job handler", () => {
           wipes: [],
           tierBests: []
         }))
-      } as unknown as Pick<
-        WarcraftLogsGateway,
-        "getFirstKillReports" | "getRateLimit"
-      >
+      }
     });
 
     await handler.execute(run.id);
@@ -1956,10 +1940,7 @@ describe("applicant evidence job handler", () => {
           wipes: [],
           tierBests: []
         }))
-      } as unknown as Pick<
-        WarcraftLogsGateway,
-        "getFirstKillReports" | "getRateLimit"
-      >,
+      },
       logger: { info: (value) => infos.push(value) }
     });
 
@@ -3657,10 +3638,7 @@ describe("applicant evidence job handler", () => {
       }));
       const handler = handlerFor({
         evidence,
-        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+        warcraftLogs: { getFirstKillReports, ...openGate },
         pointsReserve: 0
       });
 
@@ -3698,10 +3676,7 @@ describe("applicant evidence job handler", () => {
       }));
       const handler = handlerFor({
         evidence,
-        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+        warcraftLogs: { getFirstKillReports, ...openGate },
         pointsReserve: 0
       });
 
@@ -3749,10 +3724,7 @@ describe("applicant evidence job handler", () => {
             troubledRaidIds: { parses: [], tierBests: [] }
           })),
           ...openGate
-        } as unknown as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+        },
         raiderio: { getHistoricMythicKills } as never,
         requestCap: 500,
         parseRequestCap: 24,
@@ -3778,17 +3750,14 @@ describe("applicant evidence job handler", () => {
       // Break caught: #394. Starting another capped attempt at page one pays for
       // the same newest reports forever and never reaches the older history.
       const evidence = store();
-      evidence.storedEvidenceTiers = async () =>
-        ({
-          kills: [],
-          wipes: [],
-          // This is a test fixture for the persistence shape introduced by
-          // #394. The assertion below is the consumer-visible contract.
-          historyScanResumePage: 19,
-          historyScanResumeBoundaryReportCode: "newest-proved-report"
-        }) as unknown as Awaited<
-          ReturnType<typeof evidence.storedEvidenceTiers>
-        >;
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        // This is a test fixture for the persistence shape introduced by
+        // #394. The assertion below is the consumer-visible contract.
+        historyScanResumePage: 19,
+        historyScanResumeBoundaryReportCode: "newest-proved-report"
+      });
       const getFirstKillReports = vi.fn(async () => ({
         kind: "evidence" as const,
         parsedFightUrls: [],
@@ -3799,10 +3768,7 @@ describe("applicant evidence job handler", () => {
       }));
       const handler = handlerFor({
         evidence,
-        warcraftLogs: { getFirstKillReports, ...openGate } as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+        warcraftLogs: { getFirstKillReports, ...openGate },
         pointsReserve: 0
       });
 
@@ -3818,15 +3784,12 @@ describe("applicant evidence job handler", () => {
       // Break caught: a continuation that always re-publishes its original
       // boundary makes only the first capped chunk reachable.
       const evidence = store();
-      evidence.storedEvidenceTiers = async () =>
-        ({
-          kills: [],
-          wipes: [],
-          historyScanResumePage: 19,
-          historyScanResumeBoundaryReportCode: "newest-proved-report"
-        }) as unknown as Awaited<
-          ReturnType<typeof evidence.storedEvidenceTiers>
-        >;
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        historyScanResumePage: 19,
+        historyScanResumeBoundaryReportCode: "newest-proved-report"
+      });
       const handler = handlerFor({
         evidence,
         warcraftLogs: {
@@ -3869,15 +3832,12 @@ describe("applicant evidence job handler", () => {
       // Break caught: a failed continuation has learned nothing new, but it
       // must not erase the page boundary an earlier clean response proved.
       const evidence = store();
-      evidence.storedEvidenceTiers = async () =>
-        ({
-          kills: [],
-          wipes: [],
-          historyScanResumePage: 19,
-          historyScanResumeBoundaryReportCode: "newest-proved-report"
-        }) as unknown as Awaited<
-          ReturnType<typeof evidence.storedEvidenceTiers>
-        >;
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        historyScanResumePage: 19,
+        historyScanResumeBoundaryReportCode: "newest-proved-report"
+      });
       const handler = handlerFor({
         evidence,
         warcraftLogs: {
@@ -3905,15 +3865,12 @@ describe("applicant evidence job handler", () => {
       // Break caught: retaining a cursor after a complete scan would skip a
       // later report inserted above the old page boundary on every refresh.
       const evidence = store();
-      evidence.storedEvidenceTiers = async () =>
-        ({
-          kills: [],
-          wipes: [],
-          historyScanResumePage: 19,
-          historyScanResumeBoundaryReportCode: "newest-proved-report"
-        }) as unknown as Awaited<
-          ReturnType<typeof evidence.storedEvidenceTiers>
-        >;
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        historyScanResumePage: 19,
+        historyScanResumeBoundaryReportCode: "newest-proved-report"
+      });
       const handler = handlerFor({
         evidence,
         warcraftLogs: {
@@ -3947,22 +3904,16 @@ describe("applicant evidence job handler", () => {
       ) =>
         handlerFor({
           evidence,
-          warcraftLogs: { ...openGate, getFirstKillReports } as Pick<
-            WarcraftLogsGateway,
-            "getFirstKillReports" | "getRateLimit"
-          >,
+          warcraftLogs: { ...openGate, getFirstKillReports },
           pointsReserve: 0
         });
       const withBookmark = (evidence: ReturnType<typeof store>) => {
-        evidence.storedEvidenceTiers = async () =>
-          ({
-            kills: [],
-            wipes: [],
-            historyScanResumePage: 19,
-            historyScanResumeBoundaryReportCode: "newest-proved-report"
-          }) as unknown as Awaited<
-            ReturnType<typeof evidence.storedEvidenceTiers>
-          >;
+        evidence.storedEvidenceTiers = async () => ({
+          kills: [],
+          wipes: [],
+          historyScanResumePage: 19,
+          historyScanResumeBoundaryReportCode: "newest-proved-report"
+        });
         return evidence;
       };
       const cappedAfterPageOne = () =>
@@ -4266,10 +4217,7 @@ describe("applicant evidence job handler", () => {
       }));
       const handler = handlerFor({
         evidence,
-        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+        warcraftLogs: { getFirstKillReports, ...openGate },
         pointsReserve: 0
       });
 
@@ -4309,10 +4257,7 @@ describe("applicant evidence job handler", () => {
       }));
       const handler = handlerFor({
         evidence,
-        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+        warcraftLogs: { getFirstKillReports, ...openGate },
         pointsReserve: 0
       });
 
@@ -4338,10 +4283,7 @@ describe("applicant evidence job handler", () => {
       }));
       const handler = handlerFor({
         evidence,
-        warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
-          WarcraftLogsGateway,
-          "getFirstKillReports" | "getRateLimit"
-        >,
+        warcraftLogs: { getFirstKillReports, ...openGate },
         pointsReserve: 0
       });
 
@@ -4691,13 +4633,13 @@ describe("applicant evidence job handler", () => {
         "raiderio_rankings",
         "blizzard_achievements",
         "publication"
-      ].map((id, ordinal) => ({
+      ].map((id, ordinal): EvidenceRunPhase => ({
         id,
         ordinal,
-        state: "pending" as EvidenceRunPhase["state"],
-        startedAt: null as Date | null,
-        completedAt: null as Date | null,
-        limitationCode: null as string | null
+        state: "pending",
+        startedAt: null,
+        completedAt: null,
+        limitationCode: null
       }));
       const evidence = store();
       evidence.listPhases = async () => phases;
@@ -5185,7 +5127,7 @@ describe("applicant evidence job handler", () => {
           evidence,
           response(guilds.map((guild, index) => rankedKill(guild, index + 1))),
           {},
-          { raiderio: { getMythicBossRankings } as never }
+          { raiderio: { getMythicBossRankings } }
         );
 
         const execution = handler.execute(run.id);
@@ -5734,7 +5676,7 @@ describe("searching one tier from the dossier", () => {
   it("walks only the tier's attendance and ranked kills, reading no history", async () => {
     // Break caught (#450): a tier search also ran the ordinary history scan
     // and Raider.IO recovery, so a targeted click cost a whole collection.
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const getFirstKillReports = vi.fn(evidenceFound);
 
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
@@ -5772,7 +5714,7 @@ describe("searching one tier from the dossier", () => {
   it("ignores the tier's parse marks for the one run", async () => {
     // A kill recovered in a settled tier would otherwise never be parsed.
     // Its kill marks are the publish's and never reach the gateway.
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const getFirstKillReports = vi.fn(evidenceFound);
 
     await handlerWith(evidence, getFirstKillReports).execute(run.id);
@@ -5783,7 +5725,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("records the search on the run's cost row", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
 
     await handlerWith(evidence, vi.fn(evidenceFound)).execute(run.id);
 
@@ -5802,7 +5744,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("passes a saved ranked cursor into the tier search and publishes its successor", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const cursor = {
       journalRaidId: eternalPalace.raidId,
       characterId: 40989140,
@@ -5848,7 +5790,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("spends completed attendance's share on a ranked continuation", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const cursor = {
       journalRaidId: eternalPalace.raidId,
       zoneIds: [23],
@@ -5890,7 +5832,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("publishes a previously accepted historic-name ranked kill when the resumed scan finishes", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const historicKill = {
       // Stored WCL kills use the zone ID; the cursor's journalRaidId is 1179.
       raidId: "23",
@@ -5947,7 +5889,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("restarts ranked discovery if an accepted fight is absent from stored evidence", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const stored = evidence.storedEvidenceTiers.bind(evidence);
     evidence.storedEvidenceTiers = async (characterKey) => ({
       ...(await stored(characterKey)),
@@ -6001,7 +5943,7 @@ describe("searching one tier from the dossier", () => {
   it("searches the tier rather than resuming the ordinary parse work", async () => {
     // A parse-only resume re-reads every stored kill's parses; a targeted
     // search parses only what it finds.
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const tiers = evidence.storedEvidenceTiers.bind(evidence);
     evidence.storedEvidenceTiers = async (characterKey) => ({
       ...(await tiers(characterKey)),
@@ -6048,7 +5990,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("records a search its budget could not afford as capped, not as never asked", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const getFirstKillReports = vi.fn(evidenceFound);
     const handler = handlerFor({
       evidence,
@@ -6060,10 +6002,7 @@ describe("searching one tier from the dossier", () => {
           pointsSpentThisHour: 0,
           pointsResetInSeconds: 949
         })
-      } as unknown as Pick<
-        WarcraftLogsGateway,
-        "getFirstKillReports" | "getRateLimit"
-      >,
+      },
       tierSearchRequestCap: 60,
       pointsReserve: 0
     });
@@ -6131,7 +6070,7 @@ describe("searching one tier from the dossier", () => {
   it("asks no other provider, and records their phases as skipped", async () => {
     // Break caught (#450): a tier search refreshed Raider.IO rankings and
     // Blizzard achievements for the whole character on every click.
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const transitions: Array<{ id: string; state: string }> = [];
     evidence.listPhases = async () =>
       [
@@ -6175,12 +6114,9 @@ describe("searching one tier from the dossier", () => {
     );
     const handler = handlerFor({
       evidence,
-      warcraftLogs: { getFirstKillReports, ...openGate } as unknown as Pick<
-        WarcraftLogsGateway,
-        "getFirstKillReports" | "getRateLimit"
-      >,
-      raiderio: { getMythicBossRankings, getHistoricMythicKills } as never,
-      blizzard: { getCompletedAchievements } as never,
+      warcraftLogs: { getFirstKillReports, ...openGate },
+      raiderio: { getMythicBossRankings, getHistoricMythicKills },
+      blizzard: { getCompletedAchievements },
       tierSearchRequestCap: 60,
       pointsReserve: 0
     });
@@ -6214,7 +6150,7 @@ describe("searching one tier from the dossier", () => {
   it("publishes only the searched raid's kills, wipes and parses", async () => {
     // A report found on the tier's nights can hold another raid's fights, and
     // those belong to the ordinary collection.
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const getFirstKillReports = vi.fn(async () => ({
       ...(await evidenceFound()),
       kills: [
@@ -6308,7 +6244,7 @@ describe("searching one tier from the dossier", () => {
     // Break caught (#492 review): an out-of-scope fight dropped from the kills
     // kept its URL in `parsedFightUrls`, so publishing restamped a stored,
     // unparsed kill of another raid as read and no later run parsed it.
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const palace = foundKill("23", "The Eternal Palace", "palaceReport");
     const crucible = foundKill("21", "Crucible of Storms", "crucibleReport");
     const getFirstKillReports = vi.fn(async () => ({
@@ -6330,7 +6266,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("publishes an empty search as complete, carrying no history state, and settles nothing", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     evidence.historicAliases = async () => [
       { region: "eu", realm: "silvermoon", name: "oldname" }
     ];
@@ -6369,7 +6305,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("publishes a parse-capped search as partial, and marks no tier it parsed only in part", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const getFirstKillReports = vi.fn(async () => ({
       ...(await evidenceFound()),
       kills: [foundKill("23", "The Eternal Palace", "foundReport")],
@@ -6392,7 +6328,7 @@ describe("searching one tier from the dossier", () => {
   });
 
   it("publishes a capped ranked walk as a partial with a retry, leaving the history cursor alone", async () => {
-    const evidence = withStoredTier(store(tierRun as typeof run));
+    const evidence = withStoredTier(store(tierRun));
     const tiers = evidence.storedEvidenceTiers.bind(evidence);
     evidence.storedEvidenceTiers = async (characterKey) => ({
       ...(await tiers(characterKey)),

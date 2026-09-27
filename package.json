@@ -11,7 +11,7 @@
     "generate:raid-current-content-windows": "tsx scripts/generate-raid-current-content-windows.mts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint .",
+    "lint": "pnpm --filter @slashwho/web typegen && eslint .",
     "ops:rebuild": "tsx scripts/rebuild-character.mts",
     "ops:removals": "tsx scripts/removals.mts",
     "analyze:performance": "tsx scripts/analyze-performance-logs.mts",

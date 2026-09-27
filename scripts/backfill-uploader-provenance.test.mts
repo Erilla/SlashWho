@@ -124,7 +124,7 @@ it("uses a rebuild to clear terminal tiers before queuing the targeted history s
           markEnqueued
         }
       } as never,
-      queue: { enqueueCharacterEvidence } as never,
+      queue: { enqueueCharacterEvidence },
       sleep: async () => {}
     })
   );

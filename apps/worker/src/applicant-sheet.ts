@@ -10,6 +10,12 @@ export type ApplicantSheetRow = {
   linkCell: unknown;
 };
 
+// `Array.isArray` narrows `unknown` to `any[]`; sheet cells stay `unknown`
+// until something checks them.
+function isList(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
 function base64url(value: string): string {
   return Buffer.from(value).toString("base64url");
 }
@@ -96,11 +102,9 @@ export function createApplicantSheetClient(
         `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(options.sheetId)}/values/${encodeURIComponent(range)}?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE`
       );
       const values = body.values ?? [];
-      if (!Array.isArray(values) || values.length > 5_000)
+      if (!isList(values) || values.length > 5_000)
         throw new Error("applicant_sheet_bounds_exceeded");
-      return values.map((row: unknown) =>
-        Array.isArray(row) ? row[0] : undefined
-      );
+      return values.map((row) => (isList(row) ? row[0] : undefined));
     },
     async readRows(): Promise<ApplicantSheetRow[]> {
       const detailRange = "'Form Responses'!B2:D";
@@ -111,18 +115,16 @@ export function createApplicantSheetClient(
       params.append("ranges", detailRange);
       params.append("ranges", range);
       const body = await readBody(
-        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(options.sheetId)}/values:batchGet?${params}`
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(options.sheetId)}/values:batchGet?${params.toString()}`
       );
-      if (!Array.isArray(body.valueRanges) || body.valueRanges.length !== 2)
+      if (!isList(body.valueRanges) || body.valueRanges.length !== 2)
         throw new Error("applicant_sheet_response_invalid");
-      const [details, links] = body.valueRanges.map((item: unknown) =>
-        item && typeof item === "object" && "values" in item
-          ? (item as { values: unknown }).values
-          : []
+      const [details, links] = body.valueRanges.map((item) =>
+        item && typeof item === "object" && "values" in item ? item.values : []
       );
       if (
-        !Array.isArray(details) ||
-        !Array.isArray(links) ||
+        !isList(details) ||
+        !isList(links) ||
         details.length > 5_000 ||
         links.length > 5_000
       )
@@ -134,10 +136,10 @@ export function createApplicantSheetClient(
           const link = links[index];
           return {
             row: index + 2,
-            battletag: Array.isArray(detail) ? detail[0] : undefined,
-            discordId: Array.isArray(detail) ? detail[1] : undefined,
-            characterName: Array.isArray(detail) ? detail[2] : undefined,
-            linkCell: Array.isArray(link) ? link[0] : undefined
+            battletag: isList(detail) ? detail[0] : undefined,
+            discordId: isList(detail) ? detail[1] : undefined,
+            characterName: isList(detail) ? detail[2] : undefined,
+            linkCell: isList(link) ? link[0] : undefined
           };
         }
       );
