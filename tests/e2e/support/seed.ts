@@ -9,6 +9,8 @@ import { Pool } from "pg";
 import { decryptAccountMail } from "@slashwho/application";
 import { hashOperatorCredential } from "../../../apps/web/src/server/operator-auth";
 
+import { syntheticEvidence, type EvidenceVolume } from "./synthetic-evidence";
+
 type SeedCharacter = Readonly<{
   key: CharacterKey;
   displayName: string;
@@ -289,6 +291,50 @@ export async function seedCharacterEvidence(
                 : [])
             ],
       wipes: []
+    });
+  } finally {
+    await pool.end();
+  }
+}
+
+/**
+ * Publishes completed evidence at a chosen volume for the load profiler's
+ * production-sized scenarios (#686). Every row is synthetic. The Blizzard
+ * phase is recorded as completed, so the stored Cutting Edge rows are what
+ * the read shows and it makes no achievement lookup.
+ */
+export async function seedSyntheticEvidence(
+  key: CharacterKey,
+  volume: EvidenceVolume
+): Promise<void> {
+  const pool = new Pool({ connectionString: databaseUrl() });
+  try {
+    const repositories = createPostgresRepositories(pool);
+    const now = new Date();
+    const reservation = await repositories.evidence.reserve({
+      key,
+      freshnessCutoff: new Date(now.valueOf() - 60_000),
+      at: now
+    });
+    if (reservation.kind !== "reserved") {
+      throw new Error("e2e_synthetic_evidence_not_reserved");
+    }
+    const runId = reservation.run.id;
+    const phase = {
+      id: "blizzard_achievements",
+      limitationCode: null
+    } as const;
+    await repositories.evidence.seedPhases!(runId, [{ ...phase, ordinal: 0 }]);
+    await repositories.evidence.recordPhaseTransitions!(runId, [
+      { ...phase, state: "active", startedAt: now, completedAt: null },
+      { ...phase, state: "completed", startedAt: now, completedAt: now }
+    ]);
+    await repositories.evidence.publish(runId, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      completedAt: now,
+      ...syntheticEvidence(key.name, volume)
     });
   } finally {
     await pool.end();

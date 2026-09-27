@@ -16,9 +16,9 @@ only part of the gap.**
   per-call cost (`dbMs / dbCalls`) and slowest call (`dbMaxCallMs`). It
   reproduces less than half of production's request time.
 - The rest of a production read, about 370 ms at the median, is spent outside
-  anything the local fixtures exercise. The likeliest cause is the size of
-  real evidence, which the seeded characters do not have. This has not been
-  measured.
+  anything the local fixtures exercise. Evidence volume accounts for about
+  90 ms of it, roughly a quarter (#686, "Evidence volume" below). About
+  220 ms of a production read is still unexplained.
 
 ## Production records
 
@@ -141,26 +141,158 @@ first attempts wrong by an order of magnitude:
 About 5 ms per round trip is high for `postgres.railway.internal`, which is
 Railway's private network in the same region as the web service. The log
 cannot separate network time from time spent executing statements over real
-evidence. Nor does it say what the ~370 ms outside the database does. Two
-things differ from the local fixtures and are not modelled:
+evidence. Nor does it say what the ~370 ms outside the database does.
+Evidence volume, measured below, accounts for about 90 ms of it. One more
+difference from the local fixtures is not modelled:
 
-- **Real evidence is larger.** `evidence.reserve` loads each character's
-  completed kills, wipes, tier bests and Cutting Edge rows. Real characters
-  have far more rows than the seeded ones, so each statement returns more
-  data. The read then builds, validates (`applicantDossierSchema`) and
-  serialises a larger dossier on Railway's CPU.
 - **Pool contention.** The web's `pg` pool uses the default of 10 clients.
   A read with more subjects than that queues its later `evidence.reserve`
   transactions for a client, and the wait is counted inside the call. The
   12-character local scenario includes this. A ten-character production read
   meets it only when its aliases take it past 10 reservations.
 
+## Evidence volume
+
+Issue #686. The seeded characters hold two kills each, and no wipes, tier
+bests or Cutting Edge rows. This section measures how much evidence real
+characters hold, seeds that much synthetic evidence locally, and times the
+read.
+
+### How the volumes were taken
+
+Three aggregate queries ran against the `test` database on 2026-09-27,
+through `railway ssh` into the worker, the access pattern in
+`docs/operations/evidence-run-cost.md`. Each query returned only counts and
+percentiles. No character name, key or row left the database, and none is
+recorded here.
+
+A character's evidence is what the read shows, as `loadCompletedEvidence`
+chooses it: the newest completed or partial run for kills, wipes and tier
+bests, and the newest `full` run for Cutting Edge rows. Percentiles are
+`percentile_disc`.
+
+### Per character
+
+158 characters have completed evidence on `test`. 66 of them have no kills.
+
+| Rows per character  | p50 |   p95 |    max | mean |
+| ------------------- | --: | ----: | -----: | ---: |
+| Kills               |  16 |   865 |  2,089 |  151 |
+| Wipes               |  10 | 2,478 | 12,838 |  493 |
+| Tier bests          |   0 |    16 |     44 |  2.3 |
+| Cutting Edge rows   |   0 |    19 |     19 |  4.3 |
+| Bosses killed       |   3 |    54 |    189 |   14 |
+| Raids with a kill   |   1 |    12 |     27 |  3.2 |
+| Reports with a kill |   8 |   324 |    833 |   57 |
+| Guilds with a kill  |   1 |     5 |     11 |  1.7 |
+
+Across all 23,831 stored kills, 81% have all three parses available, 16%
+have been checked for a world rank, and 1.3% hold one.
+
+### Per dossier
+
+A median character says little about a dossier, because a few characters
+hold most of the evidence. Summing over each root's newest snapshot gives
+each dossier's own volume. Six dossiers have ten characters, the size of 127
+of the 173 production reads:
+
+| Ten-character dossier | Kills |  Wipes | Tier bests | Cutting Edge |
+| --------------------- | ----: | -----: | ---------: | -----------: |
+| Median                |   759 |  1,613 |         15 |           58 |
+| Largest               | 3,072 | 13,779 |         70 |          184 |
+
+The log cannot say which dossier a production read was for, so these are the
+dossiers that exist, not a weighting of the reads.
+
+### The production-sized scenarios
+
+`corepack pnpm profile:dossier` now has two more warm scenarios. Each seeds
+ten characters with synthetic completed evidence
+(`tests/e2e/support/synthetic-evidence.ts`), spreading one dossier's totals
+evenly across them:
+
+| Scenario                 | Kills each | Wipes each | Tier bests each | Cutting Edge each |
+| ------------------------ | ---------: | ---------: | --------------: | ----------------: |
+| Warm, production median  |         76 |        161 |               2 |                 6 |
+| Warm, production largest |        307 |      1,378 |               7 |                18 |
+
+The rows are generated from the raid and Cutting Edge catalogues in the
+proportions above: about 11 kills per boss, 3 per report, and four in five
+parsed. Every kill is marked as checked for a world rank and the Blizzard
+phase as completed. The read therefore makes no provider call, like the
+production reads it is compared with.
+
+The profiler also prints each warm scenario's serialised size, from one full
+read made apart from the timed loads:
+
+| Scenario                 | Response bytes |
+| ------------------------ | -------------: |
+| Warm, 1                  |         45,892 |
+| Warm, 12                 |         62,086 |
+| Warm, production median  |        923,395 |
+| Warm, production largest |      4,027,441 |
+
+Production's response sizes were not taken. A median ten-character dossier
+on `test` should be close to the synthetic median's 0.9 MB, and the page
+reads it again at every poll.
+
+### Timings
+
+Server `total` p50 in milliseconds. Each row is one run. The 5 ms rows used
+a temporary TCP proxy between the web server and PostgreSQL, built as
+described above and not committed; #685 will make it a profiler setting.
+
+| Database RTT | Loads | Warm, 12 | Production median | Production largest |
+| -----------: | ----: | -------: | ----------------: | -----------------: |
+|         none |    20 |       45 |               155 |                789 |
+|         none |    10 |       51 |               238 |              1,119 |
+|         5 ms |    10 |      335 |               394 |              1,365 |
+|         5 ms |    20 |      389 |               615 |              1,448 |
+|         5 ms |    20 |      308 |               404 |              1,305 |
+|         5 ms |    20 |      348 |               429 |                852 |
+
+Runs on this machine vary by up to 50%, so compare scenarios within a row.
+The 12-character scenario took 308–389 ms here at 5 ms, against 266 ms in
+"Modelling Railway's latency". The proxy and the machine's load both differ
+between the two measurements.
+
+### How much volume accounts for
+
+**About 90 ms of the 370 ms.** Within each 5 ms run, the median-sized
+dossier took 59, 226, 96 and 81 ms longer than twelve small characters. The
+median of those is 89 ms. At 5 ms the median-sized read took about 415 ms,
+against production's 635 ms, so about 220 ms of a production read is still
+unexplained.
+
+Without latency, volume costs more: 110–190 ms. At 5 ms, each subject's
+reservation spends most of its time waiting on round trips, and building
+the other subjects' evidence overlaps those waits.
+
+The largest dossier took 850–1,450 ms at 5 ms and 0.8–1.1 s with no latency.
+Evidence volume alone can make a dossier read take over a second.
+
+Three things could close the rest of the gap. None of them is measured:
+
+- **Railway's CPU.** Most of the volume cost is CPU work: building,
+  validating and serialising a 0.9 MB response. A shared Railway vCPU slower
+  than this desktop multiplies it. The assembly timing bucket in
+  "Follow-ups" would show this directly.
+- **Skew.** Real dossiers hold most of their evidence on one or two
+  characters. One large reservation then runs on its own after the small
+  ones finish, where the synthetic dossier runs ten medium ones in parallel.
+- **Aliases.** Each alias is its own `evidence.reserve`, and the synthetic
+  dossiers have none.
+
 ## Follow-ups
 
 - **Add the latency mode to the profiler** once #670 merges, for example as
   `PROFILE_DB_RTT_MS`, using the proxy above.
 - **Seed production-sized evidence** in a profiler scenario, so the time
-  outside the database shows up locally.
+  outside the database shows up locally. Done in #686; see "Evidence
+  volume".
+- **Consider the dossier's size.** A median ten-character dossier serialises
+  to about 0.9 MB and the largest to about 4 MB, and the page reads it again
+  at every poll.
 - **Time the read path's own work.** A bucket for dossier assembly and
   response validation would split the unexplained 370 ms in production
   without any new call names in the logs.
