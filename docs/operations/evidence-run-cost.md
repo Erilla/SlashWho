@@ -587,7 +587,7 @@ has its own column, `raiderio_historic_ms`.
 
 ## Keeping this honest
 
-`tests/integration/repositories.test.ts` extracts every query from this file
-and runs them verbatim against a seeded database. A column renamed out from
-under them fails the integration suite rather than leaving a document that
-silently stopped being true.
+`tests/integration/repositories-evidence-searches.test.ts` extracts every query
+from this file and runs them verbatim against a seeded database. A column
+renamed out from under them fails the integration suite rather than leaving a
+document that silently stopped being true.
