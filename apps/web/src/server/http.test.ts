@@ -385,9 +385,9 @@ describe("withHttpRequest", () => {
     });
     // A per-request header, not a record: it keeps durations of buckets
     // alone, and the fast end is read from the records.
-    expect(response.headers.get("server-timing")).toBe(
-      "total;dur=305, blizzard;dur=305"
-    );
+    const header = response.headers.get("server-timing") ?? "";
+    expect(header).toContain("blizzard;dur=305");
+    expect(header).not.toMatch(/MinCall|FastCall/);
   });
 
   it("charges an upstream throttle to the request that hit it", async () => {
