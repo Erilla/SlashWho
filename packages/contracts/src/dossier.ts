@@ -114,6 +114,13 @@ export const dossierCharacterSchema = z
     guild: dossierGuildSchema.nullable().optional(),
     source: dossierSourceLabelSchema,
     evidenceState: dossierEvidenceStateSchema.optional(),
+    /**
+     * When the next read may collect this character's evidence again (#663).
+     * Present only while the last run asked to be retried later: partial
+     * evidence without it is final until it goes stale, so a page has nothing
+     * to wait for.
+     */
+    evidenceResumesAt: z.iso.datetime().optional(),
     /** A manually added character a reviewer has excluded from the evidence. */
     excluded: z.literal(true).optional(),
     /** The in-flight run's steps; absent when nothing is collecting. */

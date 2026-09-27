@@ -86,6 +86,8 @@ function fixture(
     evidenceParseLimitationCodesSeen?: readonly string[];
     omittedInvalidTimestamp?: boolean;
     evidenceCompletedAt?: Date;
+    /** When the last run said the next read may collect again. */
+    evidenceRetryAfterAt?: Date;
     storedEvidence?: boolean;
     historicWorldRank?: number | null;
     historicRankCheckedAt?: string | null;
@@ -262,6 +264,7 @@ function fixture(
                 }
               : {}),
             omittedInvalidTimestamp: options.omittedInvalidTimestamp ?? false,
+            retryAfterAt: options.evidenceRetryAfterAt ?? null,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -1869,6 +1872,39 @@ describe("applicant dossier service", () => {
         ]
       }
     });
+  });
+
+  it("says when partial evidence will collect again, and only then (#663)", async () => {
+    // Break caught: the page could not tell a partial run that the next read
+    // after its retry time resumes from one that is final, so it re-read the
+    // whole dossier every 10 s for as long as the tab stayed open.
+    const resumesAt = new Date("2026-09-27T13:00:00.000Z");
+    const resuming = await fixture({
+      evidenceStatus: "partial",
+      evidenceRetryAfterAt: resumesAt
+    }).dossiers.read(root);
+    if (resuming.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(resuming.dossier.characters).toMatchObject([
+      {
+        key: root,
+        evidenceState: "partial",
+        evidenceResumesAt: resumesAt.toISOString()
+      },
+      {
+        key: alt,
+        evidenceState: "partial",
+        evidenceResumesAt: resumesAt.toISOString()
+      }
+    ]);
+
+    const final = await fixture({ evidenceStatus: "partial" }).dossiers.read(
+      root
+    );
+    if (final.kind !== "ready") throw new Error("dossier_not_ready");
+    for (const character of final.dossier.characters) {
+      expect(character).toMatchObject({ evidenceState: "partial" });
+      expect(character).not.toHaveProperty("evidenceResumesAt");
+    }
   });
 
   it("discloses skipped fight times without making finished evidence partial", async () => {

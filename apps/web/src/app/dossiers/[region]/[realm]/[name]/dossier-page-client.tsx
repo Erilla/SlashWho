@@ -66,17 +66,48 @@ const unexpectedResearchMessage =
 const unreachableDossierMessage =
   "The dossier could not be loaded. Please check your connection.";
 
-function hasLiveEvidence(value: ApplicantDossier | null): boolean {
+/**
+ * Whether any character's evidence can change by reading the dossier again: a
+ * run is queued or collecting, or evidence has reached the retry time its run
+ * asked for, past which the next read collects again. Partial evidence with no
+ * retry time is final until it goes stale, so it is no more live than complete
+ * evidence, and polling it re-read the whole dossier every 10 s for as long as
+ * the tab stayed open (#663).
+ */
+function hasLiveEvidence(value: ApplicantDossier | null, now: number): boolean {
   return (
     value?.characters.some(
       (character) =>
         !character.excluded &&
         (character.evidenceState === "waiting" ||
           character.evidenceState === "scanning" ||
-          character.evidenceState === "partial")
+          // A snapshot from before `evidenceState` carries a `researchState`
+          // no run keeps current, so only a row with the state is followed.
+          (character.evidenceState !== undefined &&
+            character.researchState === "gathering") ||
+          (character.evidenceResumesAt !== undefined &&
+            Date.parse(character.evidenceResumesAt) <= now))
     ) ?? false
   );
 }
+
+/** The soonest retry time still ahead of `now`, if any character has one. */
+function nextEvidenceResume(
+  value: ApplicantDossier | null,
+  now: number
+): number | null {
+  let soonest: number | null = null;
+  for (const character of value?.characters ?? []) {
+    if (character.excluded || character.evidenceResumesAt === undefined)
+      continue;
+    const at = Date.parse(character.evidenceResumesAt);
+    if (at > now && (soonest === null || at < soonest)) soonest = at;
+  }
+  return soonest;
+}
+
+/** The longest delay `setTimeout` honours; anything beyond fires at once. */
+const maxTimerDelayMs = 2_147_483_647;
 
 /**
  * Whether any tier's search is in flight (#449). A search may run for a
@@ -191,6 +222,9 @@ function DossierPageState({
   const [announcement, setAnnouncement] = useState("");
   const [pollUnavailable, setPollUnavailable] = useState(false);
   const [pollStopped, setPollStopped] = useState(false);
+  // Advanced only when some partial evidence reaches its retry time, which is
+  // the one moment evidence that is otherwise final can change (#663).
+  const [evidenceClock, setEvidenceClock] = useState(() => Date.now());
   const terminalPollError = useRef(unexpectedDossierMessage);
   const previousDossier = useRef(initialDossier);
   const [researchFailed, setResearchFailed] = useState(false);
@@ -576,11 +610,26 @@ function DossierPageState({
     setPollStopped(true);
   }, []);
 
+  // Wakes the poll when partial evidence reaches its retry time. The read
+  // that follows is the one that queues the next run, so from there the row
+  // reports it waiting and the poll follows it as any other collection.
+  useEffect(() => {
+    const now = Date.now();
+    const resumesAt = nextEvidenceResume(dossier, now);
+    if (resumesAt === null) return;
+    const timeout = setTimeout(
+      () => setEvidenceClock(Date.now()),
+      Math.min(resumesAt - now, maxTimerDelayMs)
+    );
+    return () => clearTimeout(timeout);
+  }, [dossier, evidenceClock]);
+
+  const liveEvidence = hasLiveEvidence(dossier, evidenceClock);
   useAuthoritativePoll({
     active:
       canAddCharacters &&
       !pollStopped &&
-      (hasLiveEvidence(dossier) || hasLiveTierSearch(dossier)),
+      (liveEvidence || hasLiveTierSearch(dossier)),
     read: readDossierPoll,
     onSnapshot: applyFreshDossier,
     onTerminalError: applyDossierError
@@ -702,7 +751,7 @@ function DossierPageState({
             />
             {canAddCharacters ? (
               <DossierRefreshControl
-                busy={hasLiveEvidence(dossier) && !pollUnavailable}
+                busy={liveEvidence && !pollUnavailable}
                 lastCollectedAt={dossier?.lastCollectedAt ?? null}
                 onRefresh={async () => {
                   setAnnouncement("");
@@ -802,7 +851,7 @@ function DossierPageState({
                 filter={filter}
                 onShowAllCharacters={visibility.showAll}
                 raids={dossier.raids}
-                loading={hasLiveEvidence(dossier)}
+                loading={liveEvidence}
                 limitations={dossier.limitations}
                 {...(canAddCharacters
                   ? {
