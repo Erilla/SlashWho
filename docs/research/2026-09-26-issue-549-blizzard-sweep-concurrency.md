@@ -2,6 +2,14 @@
 
 Issue #549. Investigated 2026-09-26 against `origin/main` at `2922426c`.
 
+> **Superseded in part on 2026-09-27 (#655).** The worker's rate limit is now
+> 40 requests a second, not the 20 recommended below, and the planning ceiling
+> for shared traffic is 80% of Blizzard's 100 a second, not about 60%. The web
+> service's `DOSSIER_PROVIDER_CONCURRENCY` is now capped at 4, not 12. See
+> [Addendum: the 40 a second limit](#addendum-the-40-a-second-limit) for the
+> figures and the reasons. The rest of this note is the 2026-09-26 analysis as
+> written.
+
 ## Question
 
 The fingerprint sweep reads candidate achievement profiles one at a time
@@ -222,6 +230,73 @@ reasons:
 Blizzard's limit is per client, so the correct scope is per credential across
 replicas. Per process is correct only while the worker has one replica. Encode
 that as a test or a startup check rather than a comment.
+
+## Addendum: the 40 a second limit
+
+Added 2026-09-27 for #655, after #661 raised the limit and a review of that
+pull request questioned it.
+
+### What was measured
+
+A full discovery run for eu/silvermoon/ryun on Railway test on 2026-09-27
+took 3 min 43 s, of which 194 s was the Blizzard sweep. The 20 a second limit
+bound every one of the run's 12 cycles, and the sweep averaged about 17.7
+requests a second against it. So the limiter did not "rarely bind", as the
+Answer above expected. It was the sweep's bottleneck.
+
+The same run's mean Blizzard response was 236 ms. At 6 in flight that gives
+6 / 0.236 = about 25.4 requests a second. Any limit of about 26 or more
+therefore leaves concurrency, not the limiter, as the bound in normal running.
+Reaching 40 a second would need about 10 in flight.
+
+### What the code now holds
+
+| Setting                                       | Before #655 | Now | Where                                |
+| --------------------------------------------- | ----------- | --- | ------------------------------------ |
+| Worker `maxPerSecond`                         | 20          | 40  | `apps/worker/src/runtime.ts`         |
+| Worker `maxConcurrent`                        | 6           | 6   | `apps/worker/src/runtime.ts`         |
+| `DOSSIER_PROVIDER_CONCURRENCY` schema maximum | 12          | 4   | `packages/application/src/config.ts` |
+| Planning ceiling for shared traffic           | about 60%   | 80% | `apps/worker/src/runtime.test.ts`    |
+
+Worst case at the pessimistic 100 ms: 40 (worker) + 4 / 0.1 = 40 (web) =
+**80 requests a second**, 20% below the published limit. The worker runtime
+test reads the schema's maximum for `DOSSIER_PROVIDER_CONCURRENCY`, not its
+default, and fails the build if the worker's limit plus that web share exceeds 80. Before the schema maximum was lowered, a deployment could set the web to
+12 and reach 40 + 120 = 160 a second with the build still green. Now such a
+setting fails at config load. The same limiter also bounds the web's
+Raider.IO ranking reads, so they are capped at 4 in flight too.
+
+### Why the target changed, and what it costs
+
+The Answer wanted about 60% for two reasons: a 429 costs a whole sweep attempt,
+and Blizzard's window is a fixed second, so the web's reads, which have no
+rate limiter, can bunch up. Neither reason has gone away. The service owner
+chose on 2026-09-27 to keep 40 a second and accept the 80% ceiling, knowing
+the following:
+
+- At the measured 236 ms mean, the sweep reaches only about 25 a second, so
+  the worst case of 80 applies only when Blizzard answers faster than about
+  150 ms. That is also when the web's unlimited slots run fastest.
+- The 100 ms figure is still an assumption, not a measured minimum. At 70 ms,
+  the web's 4 slots alone reach 57 a second, and 40 + 57 = 97.
+- A limit of 30 would give the same expected sweep time (the sweep is bound
+  at about 25 a second either way) with a worst case of 70 a second. It
+  remains the fallback if throttling appears.
+
+What would restore the margin, or justify the 80% ceiling on evidence rather
+than a decision: a measured latency floor (a minimum or p5 per
+`discovery_run`), a rate limiter on the web's Blizzard client, or any 429 in
+the worker's `upstream_throttle` records, which would argue for returning to 30.
+
+### Assumptions the test cannot see
+
+Both limits are per process. The 80 a second figure holds only while the web
+and the worker each run **one replica**. A second replica of either adds its
+full share. The hourly split is unchanged: sweeps are admitted against
+`BLIZZARD_HOURLY_REQUEST_BUDGET` (28,800), and the remaining 7,200 for web and
+evidence reads is still neither charged nor checked. At 40 a second the sweep
+can spend its hourly budget in 12 minutes rather than 24, but the hourly total
+does not change.
 
 ## Open questions and things not verified
 
