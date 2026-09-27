@@ -447,6 +447,37 @@ test("reads Cutting Edge achievements from the fake Blizzard, never the live one
   expect(await achievementRequests()).toBeGreaterThan(before);
 });
 
+test("collects Warcraft Logs evidence from the fake, never the live one", async ({
+  page
+}) => {
+  // Break caught: the worker ignored WARCRAFT_LOGS_BASE_URL, so the evidence
+  // run this read queues sent the inert e2e credentials to live Warcraft Logs.
+  const warcraftLogsBaseUrl = process.env.E2E_WARCRAFT_LOGS_BASE_URL;
+  if (!warcraftLogsBaseUrl)
+    throw new Error("e2e_warcraft_logs_base_url_unavailable");
+  const key = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "fakewarcraftlogs"
+  } as const;
+  const characterRequests = async () =>
+    (
+      (await fetch(new URL("/__control/stats", warcraftLogsBaseUrl)).then(
+        (response) => response.json()
+      )) as { characterRequests: Record<string, number> }
+    ).characterRequests[key.name] ?? 0;
+  // No stored evidence, so the dossier read queues a run for the worker.
+  await seedSnapshot({
+    key,
+    displayName: "Fakewarcraftlogs",
+    refreshedAt: new Date()
+  });
+
+  await page.goto("/dossiers/eu/silvermoon/fakewarcraftlogs");
+
+  await expect.poll(characterRequests, { timeout: 30_000 }).toBeGreaterThan(0);
+});
+
 test("presents parse evidence with exact fight sources at desktop and mobile widths", async ({
   page
 }) => {

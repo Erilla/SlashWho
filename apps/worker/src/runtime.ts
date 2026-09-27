@@ -334,6 +334,23 @@ export function createRaiderIoGateway(
   });
 }
 
+/**
+ * The shared Warcraft Logs client. `baseUrl` moves both the OAuth token and the
+ * GraphQL requests; unset, they go to warcraftlogs.com.
+ */
+export function createEvidenceGateway(
+  config: WorkerConfig,
+  logger?: DiscoveryLogger
+): WarcraftLogsGateway {
+  return createWarcraftLogsClient({
+    fetch: globalThis.fetch,
+    clientId: config.warcraftLogsClientId,
+    clientSecret: config.warcraftLogsClientSecret,
+    baseUrl: config.warcraftLogsBaseUrl,
+    onThrottle: throttleReporter(logger, "warcraftlogs")
+  });
+}
+
 export function createAccountWarcraftLogsResolver(
   repository:
     | {
@@ -381,13 +398,7 @@ const defaultDependencies: WorkerRuntimeDependencies = {
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
   createGateway: createRaiderIoGateway,
-  createEvidenceGateway: (config, logger) =>
-    createWarcraftLogsClient({
-      fetch: globalThis.fetch,
-      clientId: config.warcraftLogsClientId,
-      clientSecret: config.warcraftLogsClientSecret,
-      onThrottle: throttleReporter(logger, "warcraftlogs")
-    }),
+  createEvidenceGateway,
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
     createFingerprintAlertNotifier(config, { logger }),
@@ -543,6 +554,7 @@ function buildHandlers(
         fetch: globalThis.fetch,
         clientId: credentials.clientId,
         clientSecret: credentials.clientSecret,
+        baseUrl: config.warcraftLogsBaseUrl,
         onThrottle: throttleReporter(logger, "warcraftlogs")
       }),
     decryptionKey: config.evidenceJobCredentialEncryptionKey,

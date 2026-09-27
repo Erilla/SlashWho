@@ -35,6 +35,7 @@ import {
 } from "./notifiers";
 import {
   BLIZZARD_WORKER_REQUEST_LIMITS,
+  createEvidenceGateway,
   createFingerprintIntegration,
   createRaiderIoGateway,
   createWorkerRuntime,
@@ -2580,6 +2581,102 @@ describe("createRaiderIoGateway", () => {
       expect(url.searchParams.has("access_key")).toBe(false);
     } finally {
       vi.restoreAllMocks();
+    }
+  });
+});
+
+describe("Warcraft Logs base URL", () => {
+  // Answers the token request, so the client goes on to its GraphQL request.
+  function recordingFetch() {
+    const urls: URL[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      urls.push(url);
+      return url.pathname === "/oauth/token"
+        ? Response.json({ access_token: "token", expires_in: 3600 })
+        : Response.json({ data: {} });
+    });
+    return { urls, fetchMock };
+  }
+
+  async function requestedOrigins(
+    gateway: Pick<WarcraftLogsGateway, "getRateLimit">,
+    urls: URL[]
+  ): Promise<string[]> {
+    await gateway.getRateLimit().catch(() => undefined);
+    expect(urls.map((url) => url.pathname)).toEqual([
+      "/oauth/token",
+      "/api/v2/client"
+    ]);
+    return urls.map((url) => url.origin);
+  }
+
+  it("sends the shared client's token and GraphQL requests to the configured origin", async () => {
+    // Break caught: the worker built its shared client without a base URL, so
+    // e2e evidence runs sent the inert e2e credentials to live Warcraft Logs.
+    const { urls, fetchMock } = recordingFetch();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = createEvidenceGateway({
+        ...config,
+        warcraftLogsBaseUrl: "http://127.0.0.1:43102"
+      });
+
+      expect(await requestedOrigins(gateway, urls)).toEqual([
+        "http://127.0.0.1:43102",
+        "http://127.0.0.1:43102"
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps the shared client on warcraftlogs.com when no base URL is set", async () => {
+    // Break caught: a default that moved production off Warcraft Logs' host.
+    const { urls, fetchMock } = recordingFetch();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = createEvidenceGateway(config);
+
+      expect(await requestedOrigins(gateway, urls)).toEqual([
+        "https://www.warcraftlogs.com",
+        "https://www.warcraftlogs.com"
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("sends a visitor-credential run's requests to the configured origin", async () => {
+    // Break caught: the per-run client built from a visitor's own key had no
+    // base URL, so under e2e that key would have gone to live Warcraft Logs.
+    const fakes = runtimeFakes();
+    let evidenceOptions: ApplicantEvidenceJobHandlerOptions | undefined;
+    Object.assign(fakes.dependencies, {
+      createEvidenceHandler(options: ApplicantEvidenceJobHandlerOptions) {
+        evidenceOptions = options;
+        return fakes.evidenceHandler;
+      }
+    });
+    const runtime = await createWorkerRuntime(
+      { ...config, warcraftLogsBaseUrl: "http://127.0.0.1:43102" },
+      fakes.dependencies
+    );
+    const { urls, fetchMock } = recordingFetch();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = evidenceOptions!.createWarcraftLogsGateway!({
+        clientId: "visitor-id",
+        clientSecret: "visitor-secret"
+      });
+
+      expect(await requestedOrigins(gateway, urls)).toEqual([
+        "http://127.0.0.1:43102",
+        "http://127.0.0.1:43102"
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+      await runtime.stop();
     }
   });
 });
