@@ -1673,6 +1673,101 @@ describe("DossierPageClient staged research", () => {
     ).toHaveAttribute("href", "#dossier-raid-expanded-evidence");
   });
 
+  it("keeps following research through a transient job status failure", async () => {
+    // Break caught: one 5xx from the job status left the page on the root-only
+    // view for good, with no read ever showing the completed research.
+    vi.useFakeTimers();
+    let statusCalls = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`) {
+        statusCalls += 1;
+        return Promise.resolve(
+          statusCalls === 1
+            ? Response.json(
+                { error: { code: "search_failed", message: "Try again." } },
+                { status: 503 }
+              )
+            : Response.json({ status: "complete", error: null })
+        );
+      }
+      if (input === dossierPath)
+        return Promise.resolve(
+          statusCalls < 2 ? discoveryNotReady() : Response.json(expanded)
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    await flushAsyncWork();
+    expect(screen.getByText("Initial evidence")).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flushAsyncWork();
+    expect(statusCalls).toBe(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("reads completed research again after a transient read failure", async () => {
+    // Break caught: the read after completion was the only one, so a single
+    // 5xx left the stale snapshot on show while the research had finished.
+    vi.useFakeTimers();
+    let fullReads = 0;
+    const fetchMock = vi.fn((input: string) => {
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`)
+        return Promise.resolve(
+          Response.json({ status: "complete", error: null })
+        );
+      if (input === dossierPath) {
+        fullReads += 1;
+        // The first full read is the page's own known-dossier read, which
+        // races the job and may fail quietly; the second follows completion.
+        return Promise.resolve(
+          fullReads <= 2
+            ? Response.json(
+                { error: { code: "search_failed", message: "Try again." } },
+                { status: 500 }
+              )
+            : Response.json(expanded)
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    await flushAsyncWork();
+    expect(fullReads).toBe(2);
+    expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await flushAsyncWork();
+    expect(fullReads).toBe(3);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows a known account's characters while a new root is researched", async () => {
     // Break caught: arriving from search with a job showed only the searched
     // character until its own discovery finished, although a snapshot that

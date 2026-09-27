@@ -158,6 +158,11 @@ function isRootOnly(value: ApplicantDossier | null): boolean {
   );
 }
 
+/** A refusal that says to ask again later: a throttle or a server error. */
+function isTransientRefusal(response: Response): boolean {
+  return response.status === 429 || response.status >= 500;
+}
+
 function isAbortError(caught: unknown): boolean {
   return caught instanceof Error && caught.name === "AbortError";
 }
@@ -518,8 +523,14 @@ function DossierPageState({
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
 
-    function schedulePoll() {
-      timeout = setTimeout(() => void pollJob(), backoff.next());
+    // The job is followed until it answers, so a throttle or a server error
+    // on the way is waited out on the backoff rather than ending the page's
+    // research with the root-only view still on show.
+    function schedulePoll(retryAfterMs?: number) {
+      timeout = setTimeout(
+        () => void pollJob(),
+        Math.max(backoff.next(), retryAfterMs ?? 0)
+      );
     }
 
     async function readExpandedDossier() {
@@ -534,6 +545,12 @@ function DossierPageState({
         if (result.response.status === 409) {
           setStatus(researchingStatus);
           schedulePoll();
+          return;
+        }
+        // Only the read after completion shows the linked characters, so a
+        // transient failure asks the job again rather than being the last word.
+        if (isTransientRefusal(result.response)) {
+          schedulePoll(retryAfterMilliseconds(result.response));
           return;
         }
         appliedSequence.current = sequence;
@@ -555,6 +572,10 @@ function DossierPageState({
           { cache: "no-store", signal: controller.signal }
         );
         if (controller.signal.aborted) return;
+        if (result.kind === "refused" && isTransientRefusal(result.response)) {
+          schedulePoll(retryAfterMilliseconds(result.response));
+          return;
+        }
         if (result.kind !== "ok") {
           setError(
             result.kind === "refused"
