@@ -1628,15 +1628,15 @@ describe("applicant dossier service", () => {
     const { dossiers, repositories } = fixture();
     let now = 0;
     const scope = createMeasurementScope(() => now);
-    repositories.evidence.historicAliases.mockImplementation(async () => {
-      now += 1000;
-      return [];
-    });
-    repositories.evidence.latestTierSearches.mockImplementation(async () => {
-      now += 30;
-      return [];
-    });
     Object.assign(repositories.evidence, {
+      historicAliases: vi.fn(async () => {
+        now += 1000;
+        return [];
+      }),
+      latestTierSearches: vi.fn(async () => {
+        now += 30;
+        return [];
+      }),
       withCompletedEvidence: vi.fn(async () => {
         now += 50;
         return [root];

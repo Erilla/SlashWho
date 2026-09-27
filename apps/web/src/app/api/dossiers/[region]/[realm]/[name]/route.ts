@@ -62,8 +62,10 @@ export async function GET(
     // Compaction, validation and serialisation are CPU work on a finished
     // dossier, timed as `respond` (#687); `withHttpRequest` adds its count.
     const { dossier } = result;
-    return scope.time("respond", async () =>
-      jsonNoStore(applicantDossierSchema, compactDossierWipes(dossier))
+    return scope.time("respond", () =>
+      Promise.resolve().then(() =>
+        jsonNoStore(applicantDossierSchema, compactDossierWipes(dossier))
+      )
     );
   });
 }
