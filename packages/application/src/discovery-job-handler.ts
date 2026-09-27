@@ -154,9 +154,9 @@ export type FingerprintAlertNotifier = {
       | "applicant_input_truncated";
     details: Record<string, number>;
     applicant?: {
-      battletag?: string;
-      discordId?: string;
-      characterName?: string;
+      battletag?: string | undefined;
+      discordId?: string | undefined;
+      characterName?: string | undefined;
       characterUrl: string;
       dossierUrl?: string;
     };

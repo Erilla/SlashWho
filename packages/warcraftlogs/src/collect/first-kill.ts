@@ -132,7 +132,7 @@ export async function collectFirstKillReports(
     result: Readonly<{
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
-      limitation?: WarcraftLogsLimitation;
+      limitation?: WarcraftLogsLimitation | undefined;
       historyScanResumePage?: number;
       historyScanResumeBoundaryReportCode?: string;
     }>

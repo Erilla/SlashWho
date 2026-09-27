@@ -51,7 +51,7 @@ export async function searchCharacterTier(options: {
   at: Date;
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-  credentials?: { accountId: string; credentialVersion: number };
+  credentials?: { accountId: string; credentialVersion: number } | undefined;
   scope?: MeasurementScope;
 }): Promise<SearchCharacterTierResult> {
   if (tierSearchWindow(options.raidId, options.at) === null) {

@@ -30,8 +30,17 @@ export type EvidencePublication = Readonly<{
   /** See StagedEvidenceCollection.historyScanResumePage. */
   historyScanResumePage?: number | null;
   historyScanResumeBoundaryReportCode?: string | null;
-  historicAliasProgress?: StagedEvidenceCollection["historicAliasProgress"];
-  rankedBackfillCursor?: StagedEvidenceCollection["rankedBackfillCursor"];
+  // Indexing an optional field carries its `undefined` along, and present
+  // but undefined is not absent: storage reads presence to decide whether a
+  // run moves the cursor, while the JSON stage drops the key entirely.
+  historicAliasProgress?: Exclude<
+    StagedEvidenceCollection["historicAliasProgress"],
+    undefined
+  >;
+  rankedBackfillCursor?: Exclude<
+    StagedEvidenceCollection["rankedBackfillCursor"],
+    undefined
+  >;
   limitationCode: EvidenceLimitationCode | null;
   /**
    * The parse limitation this run is judged by: the one that decides whether
@@ -87,19 +96,19 @@ export function toStagedCollection(
     ...(publication.omittedInvalidTimestamp
       ? { omittedInvalidTimestamp: true }
       : {}),
-    ...(Object.hasOwn(publication, "historyScanResumePage")
+    ...(publication.historyScanResumePage !== undefined
       ? { historyScanResumePage: publication.historyScanResumePage }
       : {}),
-    ...(Object.hasOwn(publication, "historyScanResumeBoundaryReportCode")
+    ...(publication.historyScanResumeBoundaryReportCode !== undefined
       ? {
           historyScanResumeBoundaryReportCode:
             publication.historyScanResumeBoundaryReportCode
         }
       : {}),
-    ...(Object.hasOwn(publication, "historicAliasProgress")
+    ...(publication.historicAliasProgress !== undefined
       ? { historicAliasProgress: publication.historicAliasProgress }
       : {}),
-    ...(Object.hasOwn(publication, "rankedBackfillCursor")
+    ...(publication.rankedBackfillCursor !== undefined
       ? { rankedBackfillCursor: publication.rankedBackfillCursor }
       : {}),
     limitationCode: publication.limitationCode,
@@ -127,19 +136,19 @@ export function fromStagedCollection(
     ...(staged.omittedInvalidTimestamp
       ? { omittedInvalidTimestamp: true }
       : {}),
-    ...(Object.hasOwn(staged, "historyScanResumePage")
+    ...(staged.historyScanResumePage !== undefined
       ? { historyScanResumePage: staged.historyScanResumePage }
       : {}),
-    ...(Object.hasOwn(staged, "historyScanResumeBoundaryReportCode")
+    ...(staged.historyScanResumeBoundaryReportCode !== undefined
       ? {
           historyScanResumeBoundaryReportCode:
             staged.historyScanResumeBoundaryReportCode
         }
       : {}),
-    ...(Object.hasOwn(staged, "historicAliasProgress")
+    ...(staged.historicAliasProgress !== undefined
       ? { historicAliasProgress: staged.historicAliasProgress }
       : {}),
-    ...(Object.hasOwn(staged, "rankedBackfillCursor")
+    ...(staged.rankedBackfillCursor !== undefined
       ? { rankedBackfillCursor: staged.rankedBackfillCursor }
       : {}),
     limitationCode: staged.limitationCode as EvidenceLimitationCode | null,

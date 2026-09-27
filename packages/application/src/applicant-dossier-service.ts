@@ -298,8 +298,9 @@ async function gatherCharacterEvidence(
     queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
     freshnessCutoff: Date;
     signal?: AbortSignal;
-    wclCredentials?: WclCredentials | null;
-    wclCredentialRef?: { accountId: string; credentialVersion: number };
+    wclCredentials?: WclCredentials | null | undefined;
+    wclCredentialRef?:
+      { accountId: string; credentialVersion: number } | undefined;
     encryptionKey: Buffer;
     /** The subject the evidence is shown under, when not `character` itself. */
     attributeTo?: CharacterKey;
@@ -769,8 +770,9 @@ async function assembleDossier(options: {
 
   freshnessCutoff: Date;
   signal: AbortSignal;
-  wclCredentials?: WclCredentials | null;
-  wclCredentialRef?: { accountId: string; credentialVersion: number };
+  wclCredentials?: WclCredentials | null | undefined;
+  wclCredentialRef?:
+    { accountId: string; credentialVersion: number } | undefined;
   encryptionKey: Buffer;
 }): Promise<ContractApplicantDossier> {
   const evidence = await Promise.all(
@@ -980,7 +982,7 @@ export function createApplicantDossierService(options: {
   raiderio: Pick<RaiderIoGateway, "getCharacter" | "getMythicBossRankings">;
   config: ApplicationConfig;
   evidenceJobCredentialEncryptionKey: Buffer;
-  onCacheEvent?: (source: string, event: string) => void;
+  onCacheEvent?: ((source: string, event: string) => void) | undefined;
   logger?: { info(value: Record<string, unknown>): void };
 }): ApplicantDossierService {
   const { gatewaysFor, scopedConcurrency } = createDossierGateways(options);

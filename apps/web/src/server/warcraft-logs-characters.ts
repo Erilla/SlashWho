@@ -29,7 +29,7 @@ type CharacterIdGateway = Pick<WarcraftLogsGateway, "resolveCharacterById">;
  */
 export function createCharacterIdResolver(
   options: Readonly<{
-    credentials?: WarcraftLogsCredentials;
+    credentials?: WarcraftLogsCredentials | undefined;
     createGateway(credentials: WarcraftLogsCredentials): CharacterIdGateway;
   }>
 ): CharacterIdResolver {

@@ -272,14 +272,15 @@ export type WarcraftLogsReportResult =
       scanSkipped?: boolean;
       /**
        * The next report page after the newest contiguous prefix decoded by a
-       * limited scan. It is absent unless a cleanly decoded page proves it.
+       * limited scan. It is absent (or undefined) unless a cleanly decoded
+       * page proves it.
        */
-      historyScanResumePage?: number;
+      historyScanResumePage?: number | undefined;
       /**
        * The last report code on the final proved page. It validates that the
        * page offset has not moved before a later run resumes below it.
        */
-      historyScanResumeBoundaryReportCode?: string;
+      historyScanResumeBoundaryReportCode?: string | undefined;
       kills: readonly WarcraftLogsFirstKillEvidence[];
       wipes: readonly WarcraftLogsWipeEvidence[];
       tierBests: readonly WarcraftLogsTierBestParse[];
@@ -374,7 +375,7 @@ export interface WarcraftLogsGateway {
       journalRaidId: string;
       requestCap: number;
       characterId?: number;
-      cursor?: WarcraftLogsRankedBackfillCursor;
+      cursor?: WarcraftLogsRankedBackfillCursor | undefined;
       onRequest?(event: WarcraftLogsRequestEvent): void;
       /**
        * Called when the walk stops short, naming the read that stopped it:
@@ -501,7 +502,7 @@ export interface WarcraftLogsGateway {
       rankedBackfill?: Readonly<{
         journalRaidId: string;
         requestCap: number;
-        cursor?: WarcraftLogsRankedBackfillCursor;
+        cursor?: WarcraftLogsRankedBackfillCursor | undefined;
       }>;
       /**
        * Called once per upstream request this call issues, naming the class of

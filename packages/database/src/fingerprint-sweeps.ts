@@ -175,7 +175,7 @@ export async function finishFingerprintSweep(
     published: boolean;
     at: Date;
     limitationCode: string | null;
-    continuationAdmission?: FingerprintContinuationAdmission;
+    continuationAdmission?: FingerprintContinuationAdmission | undefined;
     /**
      * Omitted by a caller that has no claim on the sweep cursor. The resume
      * columns are then left exactly as they are, so finishing one reservation
@@ -184,7 +184,7 @@ export async function finishFingerprintSweep(
     cursor?: {
       resumeAfter: string | null;
       resumeLimitationCode: string | null;
-      historicalGuilds?: readonly CharacterGuild[];
+      historicalGuilds?: readonly CharacterGuild[] | undefined;
       resumeSnapshotId: string | null;
       advanced: boolean;
     };

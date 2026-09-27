@@ -113,8 +113,8 @@ export type CharacterIdentityFieldsProps = Readonly<{
   idPrefix: string;
   value: CharacterIdentity;
   onChange: (next: CharacterIdentity) => void;
-  errorId?: string;
-  invalid?: boolean;
+  errorId?: string | undefined;
+  invalid?: boolean | undefined;
   disabled?: boolean;
   /** Lets a dialog move initial focus to the first field. */
   characterRef?: Ref<HTMLInputElement>;
