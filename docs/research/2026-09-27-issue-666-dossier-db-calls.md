@@ -158,12 +158,12 @@ things differ from the local fixtures and are not modelled:
 ## Follow-ups
 
 - **Add the latency mode to the profiler** once #670 merges, for example as
-  `PROFILE_DB_RTT_MS`, using the proxy above.
+  `PROFILE_DB_RTT_MS`, using the proxy above (#685).
 - **Seed production-sized evidence** in a profiler scenario, so the time
-  outside the database shows up locally.
+  outside the database shows up locally (#686).
 - **Time the read path's own work.** A bucket for dossier assembly and
   response validation would split the unexplained 370 ms in production
-  without any new call names in the logs.
+  without any new call names in the logs (#687).
 - **Correct the baseline's note on log retention.**
   `2026-09-27-dossier-load-baseline.md` says Railway keeps only the current
   deployment's logs, but removed deployments can still be read by id.
