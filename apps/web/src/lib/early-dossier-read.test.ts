@@ -24,6 +24,8 @@ const schema = {
 
 /** Runs the shell's script as the browser would, at global scope. */
 function runScript(script = earlyDossierReadScript(path)) {
+  // The script under test is the shell's inline source, so it is run as source.
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
   new Function(script)();
 }
 

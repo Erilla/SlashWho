@@ -150,6 +150,12 @@ afterEach(() => {
   void takeEarlyDossierRead(dossierPath);
 });
 
+/** Runs the shell's inline read script, as the browser does before hydration. */
+function runShellScript() {
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  new Function(earlyDossierReadScript(dossierPath))();
+}
+
 async function startFirstLiveEvidenceRead() {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1_000);
@@ -1135,7 +1141,7 @@ describe("DossierPageClient staged research", () => {
         : Promise.reject(new Error(`Unexpected request: ${input}`))
     );
     vi.stubGlobal("fetch", fetchMock);
-    new Function(earlyDossierReadScript(dossierPath))();
+    runShellScript();
 
     render(
       <DossierPageClient
@@ -1159,7 +1165,7 @@ describe("DossierPageClient staged research", () => {
       return Promise.reject(new Error(`Unexpected request: ${input}`));
     });
     vi.stubGlobal("fetch", fetchMock);
-    new Function(earlyDossierReadScript(dossierPath))();
+    runShellScript();
 
     render(
       <DossierPageClient
