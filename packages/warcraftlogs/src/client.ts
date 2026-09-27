@@ -9,6 +9,7 @@ import { positiveInteger, validCharacterKey } from "./decode/primitives";
 import { rateLimitFacts } from "./decode/rate-limit";
 import {
   rateLimitQuery,
+  rateLimitWithCharacterQuery,
   resolveCharacterByIdQuery,
   resolveCharacterQuery
 } from "./queries";
@@ -73,6 +74,28 @@ export function createWarcraftLogsClient(
     return result.kind === "success" ? canonicalIdentity(result.value) : result;
   }
 
+  async function getRateLimitWithIdentity(
+    requestedKey: CharacterKey,
+    signal?: AbortSignal
+  ): ReturnType<WarcraftLogsGateway["getRateLimitWithIdentity"]> {
+    const key = validCharacterKey(requestedKey);
+    const result = await graphql(
+      rateLimitWithCharacterQuery,
+      { name: key.name, realm: key.realm, region: key.region },
+      signal
+    );
+    // A GraphQL error about the character (a private one, say) fails the
+    // whole document. The allowance is still worth its own point, since
+    // without it the admission gate would fail open.
+    if (result.kind !== "success") {
+      return { rateLimit: await getRateLimit(signal), identity: null };
+    }
+    return {
+      rateLimit: rateLimitFacts(result.value),
+      identity: canonicalIdentity(result.value)
+    };
+  }
+
   async function resolveCharacterById(
     characterId: number,
     signal?: AbortSignal
@@ -96,6 +119,7 @@ export function createWarcraftLogsClient(
 
   return {
     getRateLimit,
+    getRateLimitWithIdentity,
     resolveCharacter,
     resolveCharacterById,
     getRankedKillReports: (key, rankedOptions) =>

@@ -146,7 +146,10 @@ export type WorkerRuntimeDependencies = {
     logger?: DiscoveryLogger
   ) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit"> &
     Partial<
-      Pick<WarcraftLogsGateway, "resolveCharacter" | "resolveCharacterById">
+      Pick<
+        WarcraftLogsGateway,
+        "resolveCharacter" | "resolveCharacterById" | "getRateLimitWithIdentity"
+      >
     >;
   createFingerprintIntegration?: (
     config: WorkerConfig,

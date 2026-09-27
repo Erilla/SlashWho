@@ -477,6 +477,20 @@ export interface WarcraftLogsGateway {
     signal?: AbortSignal
   ): Promise<WarcraftLogsIdentityResult>;
   getRateLimit(signal?: AbortSignal): Promise<WarcraftLogsRateLimitResult>;
+  /**
+   * The allowance and `resolveCharacter`'s answer from one request. A refused
+   * document falls back to a lone allowance read and leaves `identity` null:
+   * that question was not answered, so the caller asks it itself.
+   */
+  getRateLimitWithIdentity(
+    key: CharacterKey,
+    signal?: AbortSignal
+  ): Promise<
+    Readonly<{
+      rateLimit: WarcraftLogsRateLimitResult;
+      identity: WarcraftLogsIdentityResult | null;
+    }>
+  >;
   getFirstKillReports(
     key: CharacterKey,
     options: Readonly<{

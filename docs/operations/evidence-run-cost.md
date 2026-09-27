@@ -244,18 +244,44 @@ The one thing it would save is round trips.
 Measured on 2026-09-27 (#712), the same way. Every request costs at least one
 point, and a report is charged per part that is loaded, not per field:
 
-| Selection                                                   | Points |
-| ----------------------------------------------------------- | ------ |
-| Any request (the floor)                                     | 1      |
-| 10 reports, `code startTime zone owner guild` only          | 1      |
-| 100 reports, the same fields                                | 2.03   |
-| 10 reports with `fights`                                    | 10.11  |
-| 10 reports with `masterData`                                | 10.11  |
-| 10 reports with both                                        | 20.11  |
-| 10 `report(code)` aliases with both, in one request         | 20     |
-| `rankedCharacters`, once `fights` or `masterData` is loaded | 0      |
+| Selection                                           | Points |
+| --------------------------------------------------- | ------ |
+| Any request (the floor)                             | 1      |
+| 10 reports, `code startTime zone owner guild` only  | 1      |
+| 100 reports, the same fields                        | 2.03   |
+| 10 reports with `fights`                            | 10.11  |
+| 10 reports with `masterData`                        | 10.11  |
+| 10 reports with both                                | 20.11  |
+| 10 `report(code)` aliases with both, in one request | 20     |
+| `rankedCharacters`, once `fights` is loaded         | 0      |
 
 Filters do not change it: `fights(difficulty: 5)` costs the same as `fights`.
+
+`rankedCharacters` is free only beside `fights`. Beside `masterData` and
+`rankings` alone, as in `ReportFightParses`, it costs 0.01 a ranked character:
+0.22 for 22 and 0.31 for 31, repeated exactly (2026-09-28). Taking it there to
+drop `RankingCharacterIdentities` would save that request's 1 point a run but
+add about 0.25 a parse report, so it breaks even at four reports and costs
+more at the seven a capped run can reach. It agreed with `character(id)` on all
+120 identities sampled, renamed characters included, so the identity proof
+would hold; the points are what rule it out.
+
+### The opening read
+
+A run's opening allowance and its `ResolveCharacter` travel in one document
+since #712: apart they cost a point each, together one. An in-document
+`rateLimitData` reports the counter as it stood before that document's own
+charge, exactly as a lone `RateLimit` read does (three repeats, each reading
+exactly 1 above the preceding lone read and 1 below the following one), so
+`points_remaining_before` means what it meant and the handover gap below stays
+
+1. `points_spent_by_run` falls by the one point saved.
+
+A document Warcraft Logs refuses outright — a private character's GraphQL
+error fails the whole thing — falls back to a lone `RateLimit` read, and the
+run resolves the character on its own as before. A character Warcraft Logs
+does not know is not a refusal: it answers `character: null` beside the
+allowance.
 
 Only about a third of a character's reports hold a Mythic encounter fight (40
 of 117 across six raiders), and nothing else can become a kill or a wipe. So
