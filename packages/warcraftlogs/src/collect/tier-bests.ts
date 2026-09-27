@@ -7,8 +7,8 @@ import { unavailableOnTimeout, type CollectionRun } from "./context";
 
 /**
  * The best parse per boss in each zone the caller's plan picks from the
- * run's kills, one request a zone. Spends from `parseRequestCap`, leaving the rest for per-fight
- * hydration.
+ * run's kills, one request a zone. Spends from `parseRequestCap`, leaving the
+ * rest for per-fight hydration.
  */
 export async function collectTierBests(
   run: CollectionRun,
