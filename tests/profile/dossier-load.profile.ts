@@ -2,10 +2,17 @@ import { test, type Browser } from "playwright/test";
 import type { CharacterKey } from "@slashwho/domain";
 
 import {
+  credentialStorageKey,
+  type StoredApiCredentials
+} from "../../apps/web/src/lib/api-credentials";
+import { earlyReadSlot } from "../../apps/web/src/lib/early-dossier-read";
+import {
+  findSessionCheck,
   formatLoadSummary,
   parseServerTiming,
   summariseLoads,
-  type LoadSample
+  type LoadSample,
+  type PreludeFetch
 } from "../e2e/support/load-profile";
 import {
   latestEvidencePublishedAt,
@@ -21,7 +28,9 @@ import {
  *
  * PROFILE_LOADS sets how many loads each warm scenario takes (default 20).
  * PROFILE_PROVIDER_LATENCY_MS sets how long the fake Raider.IO and Blizzard
- * take to answer in the provider scenario (default 150).
+ * take to answer in the provider scenarios (default 150).
+ * PROFILE_DB_RTT_MS adds that round trip to every database call the web server
+ * makes, through a proxy the global setup starts (#685); unset, there is none.
  */
 const loads = Math.max(1, Number(process.env.PROFILE_LOADS ?? 20) || 20);
 const providerLatencyMs = Math.max(
@@ -29,6 +38,14 @@ const providerLatencyMs = Math.max(
   Number(process.env.PROFILE_PROVIDER_LATENCY_MS ?? 150) || 0
 );
 const settleTimeoutMs = 45_000;
+// Set by the global setup only when it started the latency proxy, so the
+// summaries print what was injected rather than what was asked for.
+const summaryOptions = {
+  databaseRttMs:
+    process.env.E2E_DB_RTT_MS === undefined
+      ? undefined
+      : Number(process.env.E2E_DB_RTT_MS)
+};
 
 /** Sets the fakes' answer delay; the e2e suite always runs them at 0. */
 async function setProviderLatency(ms: number): Promise<void> {
@@ -43,6 +60,10 @@ async function setProviderLatency(ms: number): Promise<void> {
 }
 
 type PageMarks = {
+  /** The shell's inline script left an early read for the client (#684). */
+  earlyRead: boolean;
+  /** The first dossier read carried provider keys saved in the browser. */
+  keysSent: boolean;
   requestedMs?: number;
   headersMs?: number;
   firstResponseMs?: number;
@@ -65,14 +86,35 @@ type PageMarks = {
  * "Gathering" is `waiting` or `scanning`: a run not yet published. The page's
  * own poll also continues through `partial`, which can be final and then
  * never ends (#663), so settling on the page's rule would hang the profile.
+ *
+ * It also watches `slot`, where the shell's script leaves the read it started
+ * early, and whether the first read carried keys saved in the browser.
  */
-function instrumentDossierLoad(): void {
-  const marks: PageMarks = { serverTiming: null, prelude: [], reads: {} };
+function instrumentDossierLoad(slot: string): void {
+  const marks: PageMarks = {
+    earlyRead: false,
+    keysSent: false,
+    serverTiming: null,
+    prelude: [],
+    reads: {}
+  };
   const countRead = (kind: string) => {
     if (marks.settledMs === undefined)
       marks.reads[kind] = (marks.reads[kind] ?? 0) + 1;
   };
   (window as unknown as { __dossierLoad: PageMarks }).__dossierLoad = marks;
+
+  // The client takes the early read with a read and a `delete`, so the slot
+  // stays an ordinary configurable property apart from noting the write.
+  let early: unknown;
+  Object.defineProperty(window, slot, {
+    configurable: true,
+    get: () => early,
+    set: (value: unknown) => {
+      marks.earlyRead = true;
+      early = value;
+    }
+  });
 
   type Character = { excluded?: boolean; evidenceState?: string };
   type Raid = { tierSearch?: { state?: string } | null };
@@ -103,7 +145,15 @@ function instrumentDossierLoad(): void {
         ? { path: `${method} ${url.pathname}`, startMs: startedAt }
         : undefined;
     if (prelude) marks.prelude.push(prelude);
-    if (dossierRead) marks.requestedMs ??= startedAt;
+    if (dossierRead && marks.requestedMs === undefined) {
+      marks.requestedMs = startedAt;
+      const headers = new Headers(init?.headers ?? request?.headers);
+      marks.keysSent = [
+        "x-blizzard-client-id",
+        "x-raiderio-access-key",
+        "x-wcl-client-id"
+      ].some((name) => headers.has(name));
+    }
     if (dossierRead) countRead("dossier");
     else if (url.pathname === "/api/dossiers/evidence-runs")
       countRead("progress");
@@ -148,7 +198,7 @@ function instrumentDossierLoad(): void {
 }
 
 /** The most recent load's pre-read fetches, printed with each summary. */
-let lastPrelude: PageMarks["prelude"] = [];
+let lastPrelude: readonly PreludeFetch[] = [];
 
 function formatPrelude(): string {
   if (lastPrelude.length === 0) return "  (no fetch before the first read)";
@@ -161,21 +211,45 @@ function formatPrelude(): string {
 }
 
 /**
- * One load of `path`. `gathers` names the character whose evidence the load
- * waits for, so its publish can be placed on the page's clock.
+ * Dummy provider keys, shaped as the settings page saves them. They only ever
+ * reach the local fakes, which accept any value; they are not keys.
  */
+const storedKeys: StoredApiCredentials = {
+  blizzardClientId: "profile-fake-blizzard-id",
+  blizzardClientSecret: "profile-fake-blizzard-secret",
+  raiderIoAccessKey: "profile-fake-raiderio-key",
+  wclClientId: "profile-fake-wcl-id",
+  wclClientSecret: "profile-fake-wcl-secret"
+};
+
+/**
+ * `gathers` names the character whose evidence the load waits for, so its
+ * publish can be placed on the page's clock.
+ */
+type LoadOptions = Readonly<{
+  withStoredKeys?: boolean;
+  gathers?: CharacterKey;
+}>;
+
 async function loadOnce(
   browser: Browser,
   path: string,
-  gathers?: CharacterKey
+  options: LoadOptions = {}
 ): Promise<LoadSample> {
-  // A fresh context per load: no HTTP cache, no storage, no warm page.
+  // A fresh context per load: no HTTP cache, no storage, no warm page. The
+  // stored-keys scenarios put the keys back before any page script runs.
   const context = await browser.newContext({
     extraHTTPHeaders: { "x-real-ip": "127.0.0.1" }
   });
   try {
     const page = await context.newPage();
-    await page.addInitScript(instrumentDossierLoad);
+    if (options.withStoredKeys) {
+      await page.addInitScript(
+        ({ key, value }) => window.localStorage.setItem(key, value),
+        { key: credentialStorageKey, value: JSON.stringify(storedKeys) }
+      );
+    }
+    await page.addInitScript(instrumentDossierLoad, earlyReadSlot);
     await page.goto(path);
     await page
       .waitForFunction(
@@ -210,12 +284,19 @@ async function loadOnce(
         timeOrigin: performance.timeOrigin
       };
     });
-    const publishedAt = gathers
-      ? await latestEvidencePublishedAt(gathers)
+    const publishedAt = options.gathers
+      ? await latestEvidencePublishedAt(options.gathers)
       : null;
     lastPrelude = marks.prelude;
+    const sessionCheck = findSessionCheck(marks.prelude, marks.requestedMs);
     return {
       shellMs,
+      ...(sessionCheck === undefined
+        ? {}
+        : {
+            sessionCheckStartMs: sessionCheck.startMs,
+            sessionCheckEndMs: sessionCheck.endMs
+          }),
       ...(marks.requestedMs === undefined
         ? {}
         : { requestedMs: marks.requestedMs }),
@@ -227,6 +308,8 @@ async function loadOnce(
         : { publishedMs: publishedAt.getTime() - timeOrigin }),
       settledMs: marks.settledMs!,
       server: parseServerTiming(marks.serverTiming),
+      earlyRead: marks.earlyRead,
+      keysSent: marks.keysSent,
       requests: marks.reads
     };
   } finally {
@@ -253,18 +336,19 @@ async function profile(
   browser: Browser,
   scenario: string,
   path: string,
-  count: number
+  count: number,
+  options: LoadOptions = {}
 ): Promise<void> {
   // One discarded load first, so the process's first-request costs (route
   // compilation into memory, pool connections, JIT) are not billed to the
   // scenario. It is reported separately because a visitor can hit it too.
-  const warmUp = await loadOnce(browser, path);
+  const warmUp = await loadOnce(browser, path, options);
   const samples: LoadSample[] = [];
   for (let index = 0; index < count; index += 1) {
-    samples.push(await loadOnce(browser, path));
+    samples.push(await loadOnce(browser, path, options));
   }
   console.log(
-    `${formatLoadSummary(scenario, summariseLoads(samples))}\n${formatPrelude()}\n  (warm-up load: rendered ${Math.round(warmUp.renderedMs)} ms, settled ${Math.round(warmUp.settledMs ?? 0)} ms)\n`
+    `${formatLoadSummary(scenario, summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n  (warm-up load: rendered ${Math.round(warmUp.renderedMs)} ms, settled ${Math.round(warmUp.settledMs ?? 0)} ms)\n`
   );
 }
 
@@ -335,13 +419,13 @@ test("read that gathers Warcraft Logs evidence", async ({ browser }) => {
     const sample = await loadOnce(
       browser,
       `/dossiers/eu/silvermoon/${root.name}`,
-      root
+      { gathers: root }
     );
     // The first is the discarded warm-up, as in the warm scenarios.
     if (index > 0) samples.push(sample);
   }
   console.log(
-    `${formatLoadSummary("gathering", summariseLoads(samples))}\n${formatPrelude()}\n`
+    `${formatLoadSummary("gathering", summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n`
   );
 });
 
@@ -375,7 +459,7 @@ test("read that needs Blizzard and Raider.IO rankings", async ({ browser }) => {
     await setProviderLatency(0);
   }
   console.log(
-    `${formatLoadSummary(`providers at ${providerLatencyMs} ms`, summariseLoads(samples))}\n${formatPrelude()}\n`
+    `${formatLoadSummary(`providers at ${providerLatencyMs} ms`, summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n`
   );
 });
 
@@ -391,11 +475,64 @@ test("cold read through discovery", async ({ browser }) => {
     const sample = await loadOnce(
       browser,
       `/dossiers/eu/silvermoon/${root.name}`,
-      root
+      { gathers: root }
     );
     if (index > 0) samples.push(sample);
   }
   console.log(
-    `${formatLoadSummary("cold", summariseLoads(samples))}\n${formatPrelude()}\n`
+    `${formatLoadSummary("cold", summariseLoads(samples), summaryOptions)}\n${formatPrelude()}\n`
   );
+});
+
+test("warm read for a visitor with saved provider keys", async ({
+  browser
+}) => {
+  // The warm single read, but the browser holds provider keys (#689). The
+  // shell's early read stands aside, the page checks the account session
+  // before sending the keys, and the read goes through the visitor's own
+  // gateways, which neither read nor write the shared provider caches.
+  const root = key("profilestored");
+  await seedSnapshot({
+    key: root,
+    displayName: title(root.name),
+    refreshedAt: new Date()
+  });
+  await seedCharacterEvidence(root);
+
+  await profile(
+    browser,
+    "stored keys, warm",
+    `/dossiers/eu/silvermoon/${root.name}`,
+    loads,
+    { withStoredKeys: true }
+  );
+});
+
+test("read for a visitor with saved provider keys at provider latency", async ({
+  browser
+}) => {
+  // The same character on every load, with the fakes answering after
+  // PROFILE_PROVIDER_LATENCY_MS. An anonymous visitor's repeat reads would be
+  // served its achievements from the shared cache; the visitor's own gateway
+  // has none, so every load waits on the fake Blizzard.
+  const root = key("profilestoredslow");
+  await seedSnapshot({
+    key: root,
+    displayName: title(root.name),
+    refreshedAt: new Date()
+  });
+  await seedCharacterEvidence(root);
+
+  await setProviderLatency(providerLatencyMs);
+  try {
+    await profile(
+      browser,
+      `stored keys, providers at ${providerLatencyMs} ms`,
+      `/dossiers/eu/silvermoon/${root.name}`,
+      Math.max(1, Math.ceil(loads / 2)),
+      { withStoredKeys: true }
+    );
+  } finally {
+    await setProviderLatency(0);
+  }
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  findSessionCheck,
   formatLoadSummary,
   parseServerTiming,
   summariseLoads,
@@ -33,7 +34,9 @@ describe("summariseLoads", () => {
     firstResponseMs: renderedMs - 10,
     renderedMs,
     ...(settledMs === undefined ? {} : { settledMs }),
-    server
+    server,
+    earlyRead: true,
+    keysSent: false
   });
 
   it("reports p50, p95 and max for every phase and server metric", () => {
@@ -82,6 +85,16 @@ describe("summariseLoads", () => {
     });
   });
 
+  it("counts the loads whose read started early and the loads that sent keys", () => {
+    const summary = summariseLoads([
+      { ...sample(100, {}), earlyRead: false, keysSent: true },
+      sample(100, {}),
+      sample(100, {})
+    ]);
+    expect(summary.earlyReads).toBe(2);
+    expect(summary.keysSent).toBe(1);
+  });
+
   it("leaves a phase out when no load reached it", () => {
     const summary = summariseLoads([sample(100, {})]);
     expect(summary.phases.settledMs).toBeUndefined();
@@ -97,16 +110,61 @@ describe("formatLoadSummary", () => {
           shellMs: 10,
           firstResponseMs: 20,
           renderedMs: 30,
-          server: { total: 8 }
+          server: { total: 8 },
+          earlyRead: true,
+          keysSent: false
         }
-      ])
+      ]),
+      { databaseRttMs: undefined }
     );
     expect(text.split("\n")).toEqual([
-      "warm (1 loads)",
+      "warm (1 loads, no injected database RTT)",
       "  shell                 p50      10  p95      10  max      10",
       "  firstResponse         p50      20  p95      20  max      20",
       "  rendered              p50      30  p95      30  max      30",
-      "  server total          p50       8  p95       8  max       8"
+      "  server total          p50       8  p95       8  max       8",
+      "  early read fired      1 of 1 loads",
+      "  saved keys sent       0 of 1 loads"
     ]);
+  });
+
+  it("states the injected database round trip", () => {
+    // Break caught: two runs at different PROFILE_DB_RTT_MS settings print
+    // identical headers and get compared as if they were like for like.
+    const text = formatLoadSummary("warm", summariseLoads([]), {
+      databaseRttMs: 5
+    });
+    expect(text.split("\n")[0]).toBe(
+      "warm (0 loads, database RTT +5 ms injected)"
+    );
+  });
+});
+
+describe("findSessionCheck", () => {
+  const session = (startMs: number, endMs?: number) => ({
+    path: "GET /api/account/session",
+    startMs,
+    ...(endMs === undefined ? {} : { endMs })
+  });
+
+  it("takes the session request that finished last before the read", () => {
+    // The account hook's check finishes first; the read waits on the second.
+    expect(findSessionCheck([session(90, 110), session(95, 130)], 131)).toEqual(
+      { startMs: 95, endMs: 130 }
+    );
+  });
+
+  it("finds none when the read started before any session request finished", () => {
+    // Break caught: an anonymous read's concurrent account check reported as
+    // a check the read waited on.
+    expect(findSessionCheck([session(90, 140)], 60)).toBeUndefined();
+    expect(findSessionCheck([session(90)], 120)).toBeUndefined();
+  });
+
+  it("ignores other requests and a load with no read", () => {
+    expect(
+      findSessionCheck([{ path: "GET /api/other", startMs: 1, endMs: 2 }], 10)
+    ).toBeUndefined();
+    expect(findSessionCheck([session(1, 2)], undefined)).toBeUndefined();
   });
 });

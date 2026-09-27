@@ -233,8 +233,14 @@ export function createEvidenceRepositories(
           // publication or cursor; retain the last published cursor and back
           // off for 30 minutes after a failure so a low points balance cannot
           // create a tight retry loop.
-          const rankedContinuation = await client.query<{
+          //
+          // Every capped walk is read, not only the due ones: one that is not
+          // due yet is when fresh evidence next changes, and a page stops
+          // following evidence it has no such time for (#663). `due_at` is
+          // the later of the walk's retry time and the failure cool-down.
+          const rankedContinuations = await client.query<{
             tier_search_raid_id: string;
+            due_at: Date;
           }>(
             `WITH latest AS (
                SELECT DISTINCT ON (tier_search_raid_id)
@@ -247,25 +253,37 @@ export function createEvidenceRepositories(
                   AND status IN ('complete', 'partial')
                 ORDER BY tier_search_raid_id, created_at DESC, id DESC
              )
-             SELECT tier_search_raid_id FROM latest
+             SELECT tier_search_raid_id,
+                    GREATEST(
+                      retry_after_at,
+                      (SELECT MAX(failed.completed_at) + interval '30 minutes'
+                         FROM character_evidence_runs failed
+                        WHERE failed.region = $1 AND failed.realm_slug = $2
+                          AND failed.normalized_name = $3
+                          AND failed.tier_search_raid_id = latest.tier_search_raid_id
+                          AND failed.mode = 'tier_search'
+                          AND failed.status = 'failed'
+                          AND failed.created_at > latest.created_at)
+                    ) AS due_at
+               FROM latest
               WHERE status = 'partial' AND ranked_backfill_attempted = true
                 AND jsonb_typeof(ranked_backfill_cursor) = 'object'
-                AND retry_after_at <= $4
-                AND NOT EXISTS (
-                  SELECT 1 FROM character_evidence_runs failed
-                   WHERE failed.region = $1 AND failed.realm_slug = $2
-                     AND failed.normalized_name = $3
-                     AND failed.tier_search_raid_id = latest.tier_search_raid_id
-                     AND failed.mode = 'tier_search' AND failed.status = 'failed'
-                     AND failed.created_at > latest.created_at
-                     AND failed.completed_at > $4 - interval '30 minutes'
-                )
-              ORDER BY retry_after_at, tier_search_raid_id
-              LIMIT 1`,
-            [key.region, key.realm, key.name, at]
+                AND retry_after_at IS NOT NULL
+              ORDER BY retry_after_at, tier_search_raid_id`,
+            [key.region, key.realm, key.name]
           );
           const continuationRaidId =
-            rankedContinuation.rows[0]?.tier_search_raid_id ?? null;
+            rankedContinuations.rows.find((row) => row.due_at <= at)
+              ?.tier_search_raid_id ?? null;
+          const pendingContinuations = rankedContinuations.rows
+            .map((row) => row.due_at)
+            .filter((dueAt) => dueAt > at);
+          const tierSearchResumesAt =
+            pendingContinuations.length === 0
+              ? null
+              : new Date(
+                  Math.min(...pendingContinuations.map((due) => due.getTime()))
+                );
           if (
             completed !== null &&
             completed.evidenceVersion !== undefined &&
@@ -284,7 +302,8 @@ export function createEvidenceRepositories(
               kind: "fresh",
               run: completed.run,
               completed,
-              active: activeRun
+              active: activeRun,
+              tierSearchResumesAt
             } satisfies EvidenceReservationResult;
           }
 

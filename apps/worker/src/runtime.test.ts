@@ -1,5 +1,5 @@
 import {
-  applicationConfigSchema,
+  BLIZZARD_WEB_REQUEST_LIMITS,
   encryptAccountMail,
   encryptCredential,
   upstreamThrottleRecord
@@ -248,6 +248,9 @@ function runtimeFakes(
   }> = [];
   const fingerprintAdmissions: string[] = [];
   const waitingFingerprintRuns: string[] = [];
+  // Chains with a cursor and no live admission. Queuing one consumes it, as
+  // the repository's inserted `waiting` row takes it out of the next batch.
+  const strandedContinuationRuns: string[] = [];
   const admittedFingerprintRuns = new Set<string>();
   const admittedUndispatchedFingerprintRuns: string[] = [];
   const dispatchedFingerprintRuns: string[] = [];
@@ -441,6 +444,9 @@ function runtimeFakes(
       async listWaiting(limit: number, offset = 0) {
         return waitingFingerprintRuns.slice(offset, offset + limit);
       },
+      async requeueStrandedContinuations({ limit }: { limit: number }) {
+        return strandedContinuationRuns.splice(0, limit);
+      },
       async listAdmittedUndispatched() {
         return [...admittedUndispatchedFingerprintRuns];
       },
@@ -492,6 +498,7 @@ function runtimeFakes(
     evidenceEnqueues,
     fingerprintAdmissions,
     waitingFingerprintRuns,
+    strandedContinuationRuns,
     admittedFingerprintRuns,
     admittedUndispatchedFingerprintRuns,
     dispatchedFingerprintRuns,
@@ -555,25 +562,19 @@ describe("worker runtime", () => {
     });
   });
 
-  it("leaves the web service headroom inside Blizzard's per-second allowance", () => {
-    // Break caught: the worker's rate limit and the web service's provider
-    // concurrency are set in different packages and carve the same 100 a
-    // second, so raising either could overrun the shared credentials with
-    // nothing to say so. The web reads are bounded only by concurrency, so its
-    // share is taken at the pessimistic 100 ms response the limit was sized on,
-    // and at the most concurrency the config accepts rather than its default:
-    // a deployment override must fail at config load, not at Blizzard.
+  it("leaves headroom inside Blizzard's per-second allowance for both services' limits", () => {
+    // Break caught: the worker's and the web's Blizzard rate limits are set in
+    // different packages and carve the same 100 a second, so raising either
+    // could overrun the shared credentials with nothing to say so. Both are
+    // enforced by their clients' request limiters, whatever Blizzard's
+    // response time, so their sum is the most the two can start in a second.
     const blizzardPerSecond = 100;
-    const pessimisticResponseSeconds = 0.1;
-    // A schema with no maximum leaves the web unbounded, which must fail.
-    const webConcurrency =
-      applicationConfigSchema.shape.DOSSIER_PROVIDER_CONCURRENCY.unwrap()
-        .maxValue ?? Number.POSITIVE_INFINITY;
-    const webPerSecond = webConcurrency / pessimisticResponseSeconds;
 
     expect(BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond).toBe(40);
+    expect(BLIZZARD_WEB_REQUEST_LIMITS.maxPerSecond).toBe(20);
     expect(
-      BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond + webPerSecond
+      BLIZZARD_WORKER_REQUEST_LIMITS.maxPerSecond +
+        BLIZZARD_WEB_REQUEST_LIMITS.maxPerSecond
     ).toBeLessThanOrEqual(blizzardPerSecond * 0.8);
   });
 
@@ -1600,6 +1601,54 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("queues a sweep chain stranded after startup on the five-minute tick", async () => {
+    // Break caught: an admitted cycle deduplicated onto the job that queued it
+    // never runs, and only a restart used to find its chain again.
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+    const stranded = "00000000-0000-4000-8000-000000000500";
+    fakes.strandedContinuationRuns.push(stranded);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.fingerprintAdmissions).toEqual([stranded]);
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "fingerprint_continuations_recovered",
+      recovered: 1
+    });
+    await runtime.stop();
+  });
+
+  it("still sweeps when stranded chain recovery fails", async () => {
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+    fakes.repositories.fingerprintSweeps.requeueStrandedContinuations =
+      async () => {
+        throw new RangeError("boom");
+      };
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "fingerprint_continuation_recovery_failed",
+      failure: "RangeError"
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "evidence_resume_sweep" })
+    );
+    await runtime.stop();
+  });
+
   it("releases abandoned runs before it resumes waiting ones", async () => {
     // Load-bearing ordering, not housekeeping: a character freed by recovery
     // is only resumable once its dead run is out of the active set, so
@@ -2359,6 +2408,23 @@ describe("worker runtime", () => {
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
 
     expect(fakes.fingerprintAdmissions).toEqual(fakes.waitingFingerprintRuns);
+    await runtime.stop();
+  });
+
+  it("queues every stranded sweep chain before readiness", async () => {
+    // Break caught: a process that died between a failed continuation's
+    // release and its re-admission left a cursor nothing would ever resume.
+    const fakes = runtimeFakes();
+    const stranded = Array.from(
+      { length: 101 },
+      (_unused, index) =>
+        `00000000-0000-4000-8000-${String(index + 300).padStart(12, "0")}`
+    );
+    fakes.strandedContinuationRuns.push(...stranded);
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.fingerprintAdmissions).toEqual(stranded);
     await runtime.stop();
   });
 

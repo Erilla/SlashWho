@@ -87,6 +87,10 @@ function fixture(
     evidenceParseLimitationCodesSeen?: readonly string[];
     omittedInvalidTimestamp?: boolean;
     evidenceCompletedAt?: Date;
+    /** When the last run said the next read may collect again. */
+    evidenceRetryAfterAt?: Date;
+    /** When a capped tier search is next due to continue. */
+    tierSearchResumesAt?: Date;
     storedEvidence?: boolean;
     historicWorldRank?: number | null;
     historicRankCheckedAt?: string | null;
@@ -209,6 +213,7 @@ function fixture(
         ),
       reserve: vi.fn().mockImplementation(async ({ key }) => ({
         kind: options.gatheringCharacter === key ? "active" : "fresh",
+        tierSearchResumesAt: options.tierSearchResumesAt ?? null,
         active:
           options.gatheringCharacter === key ||
           options.refreshingCharacter === key
@@ -267,6 +272,7 @@ function fixture(
                 }
               : {}),
             omittedInvalidTimestamp: options.omittedInvalidTimestamp ?? false,
+            retryAfterAt: options.evidenceRetryAfterAt ?? null,
             errorCode: null,
             createdAt: new Date("2026-09-11T12:00:00.000Z"),
             startedAt: new Date("2026-09-11T12:00:00.000Z"),
@@ -1438,6 +1444,7 @@ describe("applicant dossier service", () => {
         },
         async markRetrying() {},
         async completeWithLiveSweepSnapshot() {},
+        async recordGuildReadsDropped() {},
         async fail() {},
         async find() {
           return null;
@@ -1623,6 +1630,48 @@ describe("applicant dossier service", () => {
     await dossiers.readInitial(root, undefined, undefined, scope);
 
     expect(scope.totals().dbCalls).toBeGreaterThan(0);
+  });
+
+  it("times assembly once the evidence is in, less its database reads", async () => {
+    // Issue #687: about 370 ms of a production dossier read sat in no bucket.
+    // `assemble` is the read's own work on evidence already in hand, so time
+    // spent gathering that evidence, and the two reads made while assembling,
+    // must stay in `db` rather than being charged to it.
+    const { dossiers, repositories } = fixture();
+    let now = 0;
+    const scope = createMeasurementScope(() => now);
+    Object.assign(repositories.evidence, {
+      historicAliases: vi.fn(async () => {
+        now += 1000;
+        return [];
+      }),
+      latestTierSearches: vi.fn(async () => {
+        now += 30;
+        return [];
+      }),
+      withCompletedEvidence: vi.fn(async () => {
+        now += 50;
+        return [root];
+      })
+    });
+
+    const result = await dossiers.read(root, undefined, undefined, scope);
+
+    expect(result.kind).toBe("ready");
+    const totals = scope.totals();
+    expect(totals.assembleCalls).toBe(1);
+    expect(totals.assembleMs).toBe(0);
+    expect(totals.dbMs).toBeGreaterThanOrEqual(1080);
+  });
+
+  it("times the readInitial path's assembly as well", async () => {
+    const { dossiers } = fixture();
+    const scope = createMeasurementScope();
+
+    await dossiers.readInitial(root, undefined, undefined, scope);
+
+    expect(scope.totals().assembleCalls).toBe(1);
+    expect(scope.totals().assembleMs).toEqual(expect.any(Number));
   });
 
   it("threads the request scope through addConnectedCharacter's call to search.create", async () => {
@@ -1953,6 +2002,60 @@ describe("applicant dossier service", () => {
         ]
       }
     });
+  });
+
+  it("says when partial evidence will collect again, and only then (#663)", async () => {
+    // Break caught: the page could not tell a partial run that the next read
+    // after its retry time resumes from one that is final, so it re-read the
+    // whole dossier every 10 s for as long as the tab stayed open.
+    const resumesAt = new Date("2026-09-27T13:00:00.000Z");
+    const resuming = await fixture({
+      evidenceStatus: "partial",
+      evidenceRetryAfterAt: resumesAt
+    }).dossiers.read(root);
+    if (resuming.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(resuming.dossier.characters).toMatchObject([
+      {
+        key: root,
+        evidenceState: "partial",
+        evidenceResumesAt: resumesAt.toISOString()
+      },
+      {
+        key: alt,
+        evidenceState: "partial",
+        evidenceResumesAt: resumesAt.toISOString()
+      }
+    ]);
+
+    // A capped tier search adds to the evidence too, and the sooner of the
+    // two is the read that changes the row.
+    const tierSearchDue = new Date("2026-09-27T12:30:00.000Z");
+    const walking = await fixture({
+      evidenceStatus: "partial",
+      evidenceRetryAfterAt: resumesAt,
+      tierSearchResumesAt: tierSearchDue
+    }).dossiers.read(root);
+    if (walking.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(walking.dossier.characters[0]).toMatchObject({
+      evidenceResumesAt: tierSearchDue.toISOString()
+    });
+    const walkingOnly = await fixture({
+      evidenceStatus: "partial",
+      tierSearchResumesAt: tierSearchDue
+    }).dossiers.read(root);
+    if (walkingOnly.kind !== "ready") throw new Error("dossier_not_ready");
+    expect(walkingOnly.dossier.characters[0]).toMatchObject({
+      evidenceResumesAt: tierSearchDue.toISOString()
+    });
+
+    const final = await fixture({ evidenceStatus: "partial" }).dossiers.read(
+      root
+    );
+    if (final.kind !== "ready") throw new Error("dossier_not_ready");
+    for (const character of final.dossier.characters) {
+      expect(character).toMatchObject({ evidenceState: "partial" });
+      expect(character).not.toHaveProperty("evidenceResumesAt");
+    }
   });
 
   it("discloses skipped fight times without making finished evidence partial", async () => {

@@ -282,6 +282,7 @@ function policyFixture(
       },
       async markRetrying() {},
       async completeWithLiveSweepSnapshot() {},
+      async recordGuildReadsDropped() {},
       async fail() {},
       async find(id) {
         return activeRun?.id === id ? activeRun : null;
@@ -462,6 +463,12 @@ function policyFixture(
       },
       async recordContinuationFailure() {
         return 0;
+      },
+      async requeueContinuation() {
+        return false;
+      },
+      async requeueStrandedContinuations() {
+        return [];
       },
       async recordRequest() {},
       async finish() {},

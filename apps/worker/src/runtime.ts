@@ -4,6 +4,7 @@ import {
   cleanupExpired,
   createDiscoveryJobHandler,
   recoverPendingSearches,
+  recoverStrandedContinuations,
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
@@ -270,9 +271,9 @@ export async function readQueueDepths(
  * evidence runs share, so they bound the process rather than one caller.
  * Blizzard allows the credentials 100 requests a second and the web service
  * spends the same allowance, so the worker takes two fifths of it; the web's
- * pessimistic share at the most concurrency its config accepts takes another
- * two, leaving a fifth spare. The rate limit, not the concurrency, is what
- * bounds that share: 10 in flight at a pessimistic 100 ms would be 100 a
+ * own limiter (BLIZZARD_WEB_REQUEST_LIMITS) takes another fifth, and the
+ * runtime test holds the sum to 80. The rate limit, not the concurrency, is
+ * what bounds that share: 10 in flight at a pessimistic 100 ms would be 100 a
  * second. The concurrency is sized to reach the limit instead: at 40 a second
  * and 6 in flight, a measured full run managed only 24 a second, because 6
  * reads at the 219 ms mean it saw cannot go faster (#655). 10 in flight reaches
@@ -406,7 +407,11 @@ function fingerprintAdmissionRetry(retryAt: Date): Error & {
 } {
   return Object.assign(new Error("fingerprint_admission_waiting"), {
     retryable: true as const,
-    retryAfterMs: Math.max(1_000, retryAt.getTime() - Date.now())
+    // Whole seconds: the queue ignores any other delay and falls back to its
+    // default, which would miss a deferred continuation's time by up to a
+    // minute.
+    retryAfterMs:
+      Math.ceil(Math.max(1_000, retryAt.getTime() - Date.now()) / 1_000) * 1_000
   });
 }
 
@@ -593,15 +598,20 @@ function fingerprintRunDispatcher(
 }
 
 /**
- * Picks up fingerprint work a previous process left behind: re-enqueues every
- * run still waiting for admission, and dispatches every run that was admitted
- * but never sent back to discovery.
+ * Picks up fingerprint work a previous process left behind: queues the next
+ * cycle of every sweep chain it stranded, re-enqueues every run still waiting
+ * for admission, and dispatches every run that was admitted but never sent
+ * back to discovery.
  */
 async function drainFingerprintBacklog(
   context: WorkerContext,
   dispatch: (runId: string) => Promise<void>
 ): Promise<void> {
-  const { repositories, queue } = context;
+  const { repositories, queue, logger } = context;
+  const recovered = await recoverStrandedContinuations(repositories, queue);
+  if (recovered > 0) {
+    logger?.info({ event: "fingerprint_continuations_recovered", recovered });
+  }
   for (let offset = 0; ;) {
     const waitingFingerprintRuns =
       await repositories.fingerprintSweeps.listWaiting(100, offset);
@@ -694,6 +704,21 @@ async function evidenceResumeSweep(context: WorkerContext): Promise<void> {
   } catch (error) {
     logger?.info({
       event: "queue_depth_failed",
+      failure: error instanceof Error ? error.name : "unknown"
+    });
+  }
+  // A sweep chain can strand without a restart too: an admitted cycle whose
+  // discovery job was deduplicated onto the still-running cycle that queued
+  // it never runs, and its chain becomes recoverable once that reservation
+  // expires. Guarded for the same reason as the reads around it.
+  try {
+    const recovered = await recoverStrandedContinuations(repositories, queue);
+    if (recovered > 0) {
+      logger?.info({ event: "fingerprint_continuations_recovered", recovered });
+    }
+  } catch (error) {
+    logger?.info({
+      event: "fingerprint_continuation_recovery_failed",
       failure: error instanceof Error ? error.name : "unknown"
     });
   }

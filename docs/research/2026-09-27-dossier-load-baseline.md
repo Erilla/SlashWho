@@ -14,10 +14,29 @@ need a new character for every load take fewer: half as many for the provider
 scenario, and a quarter as many for the gathering and cold scenarios.
 `PROFILE_PROVIDER_LATENCY_MS` (default 150) sets how long the fake Raider.IO
 and the fake Blizzard achievement read take to answer in the provider
-scenario. Every other scenario, and the whole e2e suite, runs the fakes with
+scenarios. Every other scenario, and the whole e2e suite, runs the fakes with
 no delay.
 
-The five scenarios are:
+`PROFILE_DB_RTT_MS` adds a database round trip. Locally, PostgreSQL answers
+in almost no time, so a change that removes or parallelises database calls
+looks free. When the variable is set, the global setup puts a TCP proxy in
+front of PostgreSQL for the web server only. The proxy holds every chunk for
+half the round trip in each direction. The worker, migrations and seeds keep
+a direct connection. `0` runs through the proxy with no delay, which shows the
+proxy's own overhead. Unset, there is no proxy, and neither `test:e2e` nor CI
+ever sets it. Every summary header states the round trip it ran with.
+
+```bash
+PROFILE_DB_RTT_MS=5 corepack pnpm profile:dossier
+```
+
+For choosing a value, see
+[the #666 note](2026-09-27-issue-666-dossier-db-calls.md#modelling-railways-latency).
+At about 5 ms, `dbMs / dbCalls` and `dbMaxCallMs` match production reads on
+`test`. Latency alone does not reproduce production's request time at any
+setting.
+
+The seven scenarios are:
 
 | Scenario  | What the read has to do                                                                                                                                                   |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -26,6 +45,15 @@ The five scenarios are:
 | Gathering | A fresh snapshot but no evidence, so the read queues a Warcraft Logs run and the page polls until it is published                                                         |
 | Providers | Completed evidence with no world ranks and no stored Cutting Edge, so the read looks up Raider.IO rankings and Blizzard achievements, each delayed by the latency setting |
 | Cold      | No snapshot at all, so the page starts research, polls the discovery job, then reads the dossier and waits for its evidence                                               |
+
+The two stored-keys scenarios (#689) repeat the warm single read for a visitor
+who has saved provider keys in the browser: once with no provider latency, and
+once with the latency setting and half the loads. Before each load the
+profiler writes dummy values for all five keys to the page's `localStorage`,
+where the settings page keeps them. They are test values that only reach the
+local fakes, which accept any key. Each stored-keys scenario reads the same
+character on every load, because the visitor's own gateways have no cache to
+warm.
 
 The provider scenario gives every load a new character and a new guild. The
 rankings cache is keyed by raid and guild, the achievement cache by character,
@@ -62,8 +90,20 @@ The worker and the browser run on the same machine, so the two clocks agree.
 `completed_at` is taken just before the publish transaction commits, so
 `settleLag` slightly overstates how late the page was.
 
+Two more phases appear only when a session check held the first read back:
+
+| Phase               | Meaning                                                    |
+| ------------------- | ---------------------------------------------------------- |
+| `sessionCheckStart` | The `GET /api/account/session` the read waited on was sent |
+| `sessionCheckEnd`   | Its response arrived; the read starts straight after       |
+
+The account hook sends the same request, so the profiler takes the session
+request that finished last before the read started. An anonymous read starts
+before either finishes, so it has no session check.
+
 The profiler also prints each fetch the page started before its first dossier
-read.
+read, and counts the loads in which the shell's early read fired (#684) and
+the loads whose first read carried saved keys.
 
 `settled` deliberately does not follow the page's own rule for when to stop
 polling. The page keeps polling while any character is `partial`, and a
@@ -74,6 +114,14 @@ partial result can be final, in which case the poll never ends (#663).
 only when `SERVER_TIMING_ENABLED` is exactly `true`. The e2e global setup
 turns it on, and production leaves it unset. The header carries durations
 only: no call names, counts, flags or request data.
+
+Besides the database, provider and limiter buckets, the dossier read times its
+own CPU work (#687). `assemble` is everything the dossier service does once the
+evidence is in hand, from building the dossier to validating it against the
+contract, less the two database reads it makes on the way, which stay in `db`.
+`respond` is the route's wipe compaction, validation and JSON serialisation,
+plus `withHttpRequest` reading the body back to count it. Both are serial, so
+read them against `total` directly rather than against the summed `db`.
 
 The gate exists because even durations say too much in production. On the
 dossier read, `limiterWait` shows any visitor how close the shared provider
@@ -106,6 +154,48 @@ The warm scenarios' warm-up loads rendered at 393 ms (1 character) and 280 ms
 `discovery_not_ready` refusal (10 ms of server time), and the dossier renders
 once discovery has published a snapshot.
 
+### A visitor with saved provider keys
+
+Issue #689. Same machine, 2026-09-27, `main` after #684 (the early read),
+default load counts, provider latency 150 ms. The warm single column comes
+from the same run, for comparison. All values are p50 in milliseconds.
+
+| Phase             | Warm, 1 | Stored keys | Stored keys, 150 ms |
+| ----------------- | ------: | ----------: | ------------------: |
+| shell             |      39 |          46 |                  45 |
+| sessionCheckStart |         |         139 |                 144 |
+| sessionCheckEnd   |         |         147 |                 152 |
+| requested         |      30 |         148 |                 153 |
+| headers           |      90 |         199 |                 347 |
+| rendered          |     171 |         216 |                 364 |
+| server total      |      34 |          46 |                 188 |
+| server `blizzard` |         |          12 |                 157 |
+| early read fired  |   20/20 |        0/20 |                0/10 |
+| saved keys sent   |    0/20 |       20/20 |               10/10 |
+
+- **The early read stands aside.** It fired in none of the stored-keys loads,
+  so the read waits for the client page to start: it was requested at
+  148 ms, against 30 ms for an anonymous visitor, whose read goes out while
+  the HTML is still parsing.
+- **The session check is short locally but serial.** It took about 8 ms, and
+  the read started about 1 ms after it returned. In production it would add
+  a full round trip plus about 7–20 ms of server time before the read.
+- **The panel renders about 45 ms later.** Rendering waits for hydration in
+  both cases, so the anonymous early read only hides the read behind start-up;
+  with stored keys the read and its server time come after it instead.
+- **The lost cache is paid on every load.** An anonymous warm read of a
+  character is served its Blizzard achievements from the shared cache, so
+  `blizzard` is absent. The visitor's own gateway has no cache, so every
+  stored-keys load calls the fake Blizzard: 12 ms at no latency, and 157 ms
+  at 150 ms, which takes the server time from 46 ms to 188 ms and the render
+  from 216 ms to 364 ms. Raider.IO did not appear because these characters
+  have no guild, so the read has no ranking to look up.
+
+A first run of the same scenarios, straight after building the web app, had
+p95 values three to five times the p50 in the shell phase and in the
+stored-keys scenario at 150 ms. The rerun above was steady, so treat a single
+run's p95 with care.
+
 ## Where the time goes
 
 1. **Before the read starts: about 80 ms after the shell, and about 110–120 ms
@@ -119,9 +209,16 @@ once discovery has published a snapshot.
    read, not before it. The read waits on a session round trip of its own
    only when the browser holds stored provider keys: `dossierFetch` awaits
    `credentialHeadersForRequest()`, which then checks the session before
-   sending them. That serial round trip is not in this profile. In
+   sending them. The stored-keys scenarios measure it (see above). In
    production it would cost a full round trip plus about 7–20 ms of server
    time (the `account_session` `http_request` records on `test`).
+
+   Since this baseline was taken, #684 has started the first read from an
+   inline script while the HTML is parsed, so for an anonymous visitor the
+   read no longer waits for the page to start. The numbers above predate that
+   change; re-run the profiler to see the new gap. A visitor with saved
+   provider keys still takes the old path, because the early read stands
+   aside for them (#689).
 
 2. **The server read: 28–45 ms locally when no provider is called.** This is
    almost all database time. At 12 characters, `db` sums to about 210 ms
@@ -167,16 +264,19 @@ on the 1 s, 2 s, 4 s, 8 s, then 10 s backoff. It now watches its runs:
 ### Before and after
 
 Same machine and method as "Results", `PROFILE_LOADS=40` (10 gathering and
-10 cold loads), 2026-09-27. `main` is `1fd50055` run with this branch's
-profiler, which adds `published`, `settleLag` and the read counts.
+10 cold loads), 2026-09-27, with no injected database round trip. `main` is
+`1fd50055` run with this branch's profiler, which adds `published`,
+`settleLag` and the read counts. #690 is this branch merged with `1428aa73`.
+A run of #690 on `1fd50055` itself gave a lower lag (p50 99 and 87 ms) with
+the same read counts.
 
 | p50 / p95, ms  | Gathering, `main` | Gathering, #690 |  Cold, `main` |    Cold, #690 |
 | -------------- | ----------------: | --------------: | ------------: | ------------: |
-| published      |     1,262 / 1,471 |   1,250 / 1,316 | 1,475 / 1,788 | 1,198 / 1,242 |
-| settled        |     3,274 / 3,513 |   1,305 / 1,845 | 2,446 / 3,640 | 1,298 / 1,345 |
-| settleLag      |     1,966 / 2,102 |        99 / 558 |   934 / 2,041 |      87 / 140 |
+| published      |     1,262 / 1,471 |   1,298 / 1,485 | 1,475 / 1,788 | 1,363 / 1,479 |
+| settled        |     3,274 / 3,513 |   1,770 / 1,793 | 2,446 / 3,640 | 1,789 / 1,843 |
+| settleLag      |     1,966 / 2,102 |       296 / 475 |   934 / 2,041 |     431 / 513 |
 | dossier reads  |             3 / 3 |           3 / 3 |         6 / 6 |         5 / 5 |
-| progress reads |                   |           4 / 5 |               |         3 / 3 |
+| progress reads |                   |           5 / 5 |               |         4 / 4 |
 
 `settled` now follows the publish rather than the backoff: the page is late
 by at most one progress interval and one full read. Full reads per load are
@@ -244,20 +344,25 @@ count failed fetches separately. A total is valid only when no fetch failed.
 
 ## Follow-ups
 
-- **Start the first read sooner (#667).** The read cannot begin until the
-  client page has started, about 80 ms after the shell locally and more on a
-  slow device. The server shell could fetch the first read itself, or the page
-  could start it before hydration.
-- **Profile a visitor with stored provider keys.** Their read waits on a
-  serial `/api/account/session` round trip, and none of these scenarios
-  covers that.
+Done:
+
+- **Start the first read sooner: done (#667, #684).** The first read now
+  starts from an inline script before hydration.
+- **Profile a visitor with stored provider keys: done (#689).** See "A
+  visitor with saved provider keys".
 - **Production's 62 database calls: answered (#666, #682).** Production makes
   the same 31 calls as local, and slower. The 62-call read was a cache-miss
   outlier. See "Production records".
-- **Add a database-latency mode to the profiler.** #682 modelled Railway with a
-  local TCP proxy (set `noDelay`, and do not delay with `setTimeout` on
-  Windows, which rounds to about 15.6 ms). Folding that into
+
+Open:
+
+- **Add a database-latency mode to the profiler (#685).** #682 modelled
+  Railway with a local TCP proxy (set `noDelay`, and do not delay with
+  `setTimeout` on Windows, which rounds to about 15.6 ms). Folding that into
   `profile:dossier` would let the local baseline include database latency.
+- **Profile production-sized evidence (#686)** and **time assembly and
+  validation on the read path (#687).** Both target the roughly 370 ms of a
+  production read that the local fixtures do not exercise.
 - **Evidence appears only at the next poll: answered (#690).** The page now
   watches its runs through a cheap progress read. See "Noticing a publish".
-- **Unbounded polling on `partial`:** #663.
+- **Unbounded polling on `partial` (#663).**

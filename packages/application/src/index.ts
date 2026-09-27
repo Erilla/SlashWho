@@ -1,4 +1,7 @@
-export { createDiscoveryJobHandler } from "./discovery-job-handler";
+export {
+  createDiscoveryJobHandler,
+  recoverStrandedContinuations
+} from "./discovery-job-handler";
 export { collectionProgress } from "./collection-progress";
 export { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 export { startApplicantCollection } from "./start-applicant-collection";
@@ -89,6 +92,7 @@ export {
   createApplicantDossierService,
   evidenceRunProgressView
 } from "./applicant-dossier-service";
+export { BLIZZARD_WEB_REQUEST_LIMITS } from "./dossier-gateways";
 export type {
   ApplicantDossierService,
   CreateDossierCommand,

@@ -32,6 +32,7 @@ const allowlist = new Set([
   "realm",
   "name",
   "characterCount",
+  "guildReadsDropped",
   "limitationCode",
   "fingerprintQueueWaitMs",
   "fingerprintReservedRequests",

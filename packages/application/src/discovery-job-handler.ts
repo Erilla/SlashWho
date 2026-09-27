@@ -6,8 +6,7 @@ import type {
 } from "@slashwho/database";
 import type {
   BlizzardGateway,
-  BlizzardProfileRequestObserver,
-  BlizzardSlotWait
+  BlizzardProfileRequestObserver
 } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
@@ -21,6 +20,7 @@ import {
 } from "@slashwho/domain";
 
 import { bestEffort } from "./best-effort";
+import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
 import {
@@ -43,15 +43,28 @@ function scopedRaiderIoGateway(
   gateway: RaiderIoGateway,
   scope: MeasurementScope
 ): RaiderIoGateway {
+  // Each call is labelled with its operation name, so `raiderIoMaxCallName`
+  // says which one set `raiderIoMaxCallMs`. Never with an argument: an owner
+  // id or a profile guess must not reach the logs.
   return {
     getCharacter: (key, signal) =>
-      scope.time("raiderIo", () => gateway.getCharacter(key, signal)),
+      scope.time(
+        "raiderIo",
+        () => gateway.getCharacter(key, signal),
+        "getCharacter"
+      ),
     getClaimedCharacters: (ownerId, signal) =>
-      scope.time("raiderIo", () =>
-        gateway.getClaimedCharacters(ownerId, signal)
+      scope.time(
+        "raiderIo",
+        () => gateway.getClaimedCharacters(ownerId, signal),
+        "getClaimedCharacters"
       ),
     resolveProfileGuess: (value, signal) =>
-      scope.time("raiderIo", () => gateway.resolveProfileGuess(value, signal))
+      scope.time(
+        "raiderIo",
+        () => gateway.resolveProfileGuess(value, signal),
+        "resolveProfileGuess"
+      )
   };
 }
 
@@ -82,20 +95,8 @@ function scopedBlizzardGateway(
           excluded(async () => {
             await onProfileRequest();
           });
-  // Time spent queued in the client's request limiter is not Blizzard's: it
-  // is kept out of `blizzardMs`, so the per-call mean stays a latency, and
-  // reported on its own as `blizzardLimiterWaitMs`.
-  const excludeSlotWait =
-    (excluded: ExcludeFromBucket): BlizzardSlotWait =>
-    (wait) =>
-      excluded(async () => {
-        const queuedAt = monotonic();
-        try {
-          return await wait();
-        } finally {
-          scope.observe("blizzardLimiterWaitMs", monotonic() - queuedAt);
-        }
-      });
+  const excludeSlotWait = (excluded: ExcludeFromBucket) =>
+    excludeBlizzardSlotWait(scope, monotonic, excluded);
 
   return {
     getGuildRoster: (root, signal, onProfileRequest) =>
@@ -239,6 +240,8 @@ type DiscoveryRunRecord = {
   state: string | null;
   limitationCode: string | null;
   characterCount: number;
+  /** Guild reads this delivery's discovery lost to an upstream failure. */
+  guildReadsDropped: number;
   durationMs: number;
   correlationId: string | null;
   queueWaitMs: number | null;
@@ -305,6 +308,53 @@ function isFingerprintReleaseRetryableError(
  * resumes from where the chain stopped instead of restarting at candidate one.
  */
 const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
+
+/**
+ * How long a continuation cycle that failed waits before the next one may be
+ * admitted: doubling from two minutes with each consecutive failure, and never
+ * sooner than the upstream's own Retry-After. Without it the admission gate is
+ * almost always open, so a fault lasting under a minute spent every attempt
+ * the give-up bound allows and abandoned the chain for good. The four retries
+ * before give-up span half an hour. Capped at the hour the budget rolls over.
+ */
+function continuationRetryDelayMs(
+  failures: number,
+  retryAfterMs?: number
+): number {
+  const backoffMs = 2 * 60_000 * 2 ** Math.max(0, failures - 1);
+  return Math.min(60 * 60_000, Math.max(backoffMs, retryAfterMs ?? 0));
+}
+
+/**
+ * Queues the next cycle of every chain left with a cursor and no live
+ * admission, and re-enqueues its admission job. A cycle that ends without
+ * publishing queues its own successor, but a process that dies between the
+ * cycle's release and that re-admission leaves nothing that would ever resume
+ * the chain. A chain that already gave up stays given up. Returns how many
+ * chains it queued.
+ */
+export async function recoverStrandedContinuations(
+  repositories: Pick<Repositories, "fingerprintSweeps">,
+  queue: { enqueueFingerprintAdmission(runId: string): Promise<unknown> },
+  at: Date = new Date()
+): Promise<number> {
+  let recovered = 0;
+  for (;;) {
+    // Each batch leaves its chains with a waiting admission, so the next one
+    // finds only chains it has not seen.
+    const runIds =
+      await repositories.fingerprintSweeps.requeueStrandedContinuations({
+        at,
+        maxFailures: MAX_CONTINUATION_NON_PROGRESS_CYCLES,
+        limit: 100
+      });
+    for (const runId of runIds) {
+      await queue.enqueueFingerprintAdmission(runId);
+    }
+    recovered += runIds.length;
+    if (runIds.length < 100) return recovered;
+  }
+}
 
 function historicalGuildsFromEvidence(
   evidenceSets: readonly Awaited<
@@ -451,6 +501,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         state: null,
         limitationCode: null,
         characterCount: 0,
+        guildReadsDropped: 0,
         durationMs: 0,
         correlationId: context.correlationId ?? null,
         queueWaitMs: queueWaitMs(context.enqueuedAt, startedAt),
@@ -470,13 +521,26 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
        * Re-enqueues a continuation cycle that made no progress, giving up once
        * the same chain has done so too many times in a row. Returns true when
        * the chain was re-enqueued and false when it gave up.
+       *
+       * The admission job admits only a `waiting` row, and a cycle that did
+       * not publish leaves none, so the next cycle's row is queued here: a
+       * bare re-enqueue settled without dispatching and stranded the chain.
        */
-      const continueWithoutProgress = async (): Promise<boolean> => {
+      const continueWithoutProgress = async (
+        retryAfterMs?: number
+      ): Promise<boolean> => {
         const failures =
           await repositories.fingerprintSweeps.recordContinuationFailure(
             run.rootKey
           );
         if (failures >= MAX_CONTINUATION_NON_PROGRESS_CYCLES) return false;
+        const at = now();
+        await repositories.fingerprintSweeps.requeueContinuation(runId, {
+          at,
+          notBefore: new Date(
+            at.getTime() + continuationRetryDelayMs(failures, retryAfterMs)
+          )
+        });
         await options.enqueueFingerprintAdmission?.(runId);
         return true;
       };
@@ -538,7 +602,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               // discovery, so this value must never reach the snapshot: the
               // real limitation is `resume.limitationCode`, stored by cycle 1.
               limitationCode: "privacy_hidden",
-              characters: []
+              characters: [],
+              guildReadsDropped: 0
             }
           : await discoverCharacter(
               run.rootKey,
@@ -554,6 +619,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               }
             );
         context.signal.throwIfAborted();
+        if (!resume && outcome.kind === "snapshot") {
+          record.guildReadsDropped = outcome.guildReadsDropped;
+          // A new row already holds 0, so only a loss, or a redelivery that may
+          // be replacing an earlier attempt's count, needs the write.
+          if (outcome.guildReadsDropped > 0 || context.attempt > 1) {
+            await repositories.runs.recordGuildReadsDropped(
+              runId,
+              outcome.guildReadsDropped
+            );
+          }
+        }
         const persistenceTime = now();
         if (!withinJobLifetime(persistenceTime)) {
           record.outcome = "lifetime_exceeded";
@@ -717,7 +793,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     // as a fresh continuation instead, throttled by the
                     // admission gate exactly as the `waiting` path already is,
                     // and bounded so a dead upstream cannot cycle forever.
-                    record.outcome = (await continueWithoutProgress())
+                    record.outcome = (await continueWithoutProgress(
+                      sweep.retryAfterMs
+                    ))
                       ? "continuation_retrying"
                       : "continuation_abandoned";
                     return;
