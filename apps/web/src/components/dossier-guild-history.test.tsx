@@ -123,10 +123,10 @@ it("shows the details in a tooltip on hover and on focus", () => {
   ).toContain("3 raid nights: Ryun");
 });
 
-it("anchors every tooltip to the top of the frame, whatever its lane", () => {
-  // SeriouslyCasual raids alongside Rancour, so the bars take two lanes.
+/** Two lanes of bars: SeriouslyCasual raids alongside Rancour. */
+function renderTwoLanes() {
   const [casualHistory, , rancourHistory] = guildHistory;
-  render(
+  return render(
     <DossierGuildHistory
       characters={characters}
       guildHistory={[
@@ -139,29 +139,132 @@ it("anchors every tooltip to the top of the frame, whatever its lane", () => {
       today="2026-09-26"
     />
   );
-  const tooltip = () =>
-    document.querySelector<HTMLElement>(".dossier-guild-timeline-tooltip");
-  const bars = screen.getAllByRole("img", { name: /raid night/ });
-  const lanes = new Set(
-    bars.map((bar) => bar.querySelector("rect")!.getAttribute("y"))
+}
+
+/**
+ * Lays the page out as jsdom cannot: a fixed header ending at
+ * `headerBottom`, the timeline frame's top at `frameTop`, and a tooltip
+ * `tooltipHeight` tall, all in viewport pixels.
+ */
+function withPage(
+  // Read on every call, so a test can scroll the page by moving the frame.
+  page: { headerBottom: number; frameTop: number; tooltipHeight: number },
+  run: () => void
+) {
+  const rect = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "getBoundingClientRect"
+  )!;
+  const height = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "offsetHeight"
   );
-  expect(lanes.size).toBeGreaterThan(1);
-  const targets = [
-    ...bars,
-    ...screen.getAllByRole("img", { name: / today\./ }),
-    document.querySelector(".dossier-guild-timeline-band")!
-  ];
-  for (const target of targets) {
-    fireEvent.mouseEnter(target);
-    // Out of the scroller, and placed above the frame by its stylesheet
-    // rather than at a lane's y, so it never covers the chart.
-    expect(tooltip()?.parentElement).toHaveClass(
-      "dossier-guild-timeline-frame"
-    );
-    expect(tooltip()?.style.top).toBe("");
-    expect(tooltip()?.style.bottom).toBe("");
-    fireEvent.mouseLeave(target.closest("svg")!);
+  const header = document.createElement("header");
+  header.className = "site-header";
+  document.body.prepend(header);
+  Object.defineProperty(Element.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value(this: Element) {
+      if (this === header)
+        return DOMRect.fromRect({ height: page.headerBottom });
+      if (this.classList.contains("dossier-guild-timeline-frame")) {
+        return DOMRect.fromRect({ y: page.frameTop, height: 200 });
+      }
+      return rect.value.call(this);
+    }
+  });
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList.contains("dossier-guild-timeline-tooltip")
+        ? page.tooltipHeight
+        : 0;
+    }
+  });
+  try {
+    run();
+  } finally {
+    Object.defineProperty(Element.prototype, "getBoundingClientRect", rect);
+    if (height) {
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", height);
+    }
+    header.remove();
   }
+}
+
+const tooltip = () =>
+  document.querySelector<HTMLElement>(".dossier-guild-timeline-tooltip");
+
+it("shows every tooltip above the frame, whatever its lane, when it fits under the header", () => {
+  withPage({ headerBottom: 112, frameTop: 400, tooltipHeight: 60 }, () => {
+    renderTwoLanes();
+    const bars = screen.getAllByRole("img", { name: /raid night/ });
+    const lanes = new Set(
+      bars.map((bar) => bar.querySelector("rect")!.getAttribute("y"))
+    );
+    expect(lanes.size).toBeGreaterThan(1);
+    const targets = [
+      ...bars,
+      ...screen.getAllByRole("img", { name: / today\./ }),
+      document.querySelector(".dossier-guild-timeline-band")!
+    ];
+    for (const target of targets) {
+      fireEvent.mouseEnter(target);
+      // Out of the scroller, and placed above the frame by its stylesheet
+      // rather than at a lane's y, so it never covers the chart.
+      expect(tooltip()?.parentElement).toHaveClass(
+        "dossier-guild-timeline-frame"
+      );
+      expect(tooltip()).not.toHaveClass(
+        "dossier-guild-timeline-tooltip--below"
+      );
+      expect(tooltip()?.style.top).toBe("");
+      fireEvent.mouseLeave(target.closest("svg")!);
+    }
+  });
+});
+
+it("puts a tooltip back beside its bar when the header leaves no room above the frame", () => {
+  // 112 + 60 + the gap does not fit above a frame starting at 150.
+  withPage({ headerBottom: 112, frameTop: 150, tooltipHeight: 60 }, () => {
+    renderTwoLanes();
+    const bars = screen.getAllByRole("img", { name: /raid night/ });
+    const lower = bars.reduce((lowest, bar) =>
+      Number(bar.querySelector("rect")!.getAttribute("y")) >
+      Number(lowest.querySelector("rect")!.getAttribute("y"))
+        ? bar
+        : lowest
+    );
+    const barY = Number(lower.querySelector("rect")!.getAttribute("y"));
+    act(() => lower.focus());
+    expect(tooltip()).toHaveClass("dossier-guild-timeline-tooltip--below");
+    expect(tooltip()?.style.top).toBe(`${barY + 24}px`);
+  });
+});
+
+it("moves an open tooltip above the frame once the page scrolls it clear of the header", () => {
+  let frameTop = 150;
+  withPage(
+    {
+      headerBottom: 112,
+      get frameTop() {
+        return frameTop;
+      },
+      tooltipHeight: 60
+    },
+    () => {
+      renderTwoLanes();
+      const [bar] = screen.getAllByRole("img", { name: /raid night/ });
+      act(() => bar!.focus());
+      expect(tooltip()).toHaveClass("dossier-guild-timeline-tooltip--below");
+      frameTop = 400;
+      fireEvent.scroll(window);
+      expect(tooltip()).not.toHaveClass(
+        "dossier-guild-timeline-tooltip--below"
+      );
+      expect(tooltip()?.style.top).toBe("");
+    }
+  );
 });
 
 /** Gives the scroller a view width and a scroll offset jsdom does not have. */
