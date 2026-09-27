@@ -41,7 +41,7 @@ import {
 export type CreateSearchCommand = Readonly<{
   characterUrl: string;
   headers: Pick<Headers, "get">;
-  correlationId?: string;
+  correlationId?: string | undefined;
 }>;
 
 export type CreateSearchResult =

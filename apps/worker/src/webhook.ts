@@ -3,7 +3,7 @@ import type { DiscoveryLogger } from "@slashwho/application";
 export const DEFAULT_WEBHOOK_TIMEOUT_MS = 5_000;
 
 export type WebhookOptions = {
-  logger?: DiscoveryLogger;
+  logger?: DiscoveryLogger | undefined;
   fetch?: typeof globalThis.fetch;
   timeoutMs?: number;
   /**

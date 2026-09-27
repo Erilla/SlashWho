@@ -59,7 +59,7 @@ export async function searchDossierTier(options: {
   at: Date;
   repositories: Pick<Repositories, "evidence">;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-  credentials?: { accountId: string; credentialVersion: number };
+  credentials?: { accountId: string; credentialVersion: number } | undefined;
   scope?: MeasurementScope;
   limit?: number;
 }): Promise<SearchDossierTierResult> {

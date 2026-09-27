@@ -355,7 +355,7 @@ function reportedClassName(value: unknown): string | null {
 function specPerformance(
   identity: SpecIdentity | null,
   knownClassName?: string
-): WarcraftLogsPerformance["spec"] {
+): Exclude<WarcraftLogsPerformance["spec"], undefined> {
   if (identity === null) return null;
   const iconUrl = specIconUrl(
     identity.specName,

@@ -162,7 +162,7 @@ export type CreateRaiderIoClientOptions = {
   fetch: typeof globalThis.fetch;
   baseUrl: string;
   timeoutMs: number;
-  accessKey?: string;
+  accessKey?: string | undefined;
   onThrottle?: ThrottleObserver;
 };
 

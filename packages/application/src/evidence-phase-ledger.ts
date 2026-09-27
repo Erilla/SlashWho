@@ -130,7 +130,7 @@ export function fullEvidencePhasePlan(): EvidencePhasePlan {
 
 export function createEvidencePhaseLedger(options: {
   plan: EvidencePhasePlan;
-  initialPhases?: readonly PersistedEvidencePhase[];
+  initialPhases?: readonly PersistedEvidencePhase[] | undefined;
   now: () => Date;
   persist: Persist;
 }) {

@@ -31,7 +31,7 @@ export type CreateBlizzardClientOptions = Readonly<{
   clientId: string;
   clientSecret: string;
   /** Overrides both Blizzard hosts for deterministic local integration tests. */
-  baseUrl?: string;
+  baseUrl?: string | undefined;
   onThrottle?: ThrottleObserver;
   /**
    * Bounds every API read this client makes, across all of its callers. A
@@ -233,7 +233,7 @@ export function createBlizzardClient(
           Authorization: `Bearer ${token}`,
           Accept: "application/json"
         },
-        signal
+        signal: signal ?? null
       });
     } catch {
       if (signal?.aborted) throw signal.reason;

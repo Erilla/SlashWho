@@ -77,7 +77,7 @@ export type WebContainerDependencies = Readonly<{
     fetch: typeof globalThis.fetch;
     baseUrl: string;
     timeoutMs: number;
-    accessKey?: string;
+    accessKey?: string | undefined;
     onThrottle?(event: { retryAfterMs: number | undefined }): void;
   }): RaiderIoGateway;
   createBlizzardGateway(options: {
@@ -105,7 +105,7 @@ export type WebContainerDependencies = Readonly<{
     raiderio: Pick<RaiderIoGateway, "getCharacter">;
     config: ApplicationConfig;
     evidenceJobCredentialEncryptionKey: Buffer;
-    onCacheEvent?: (source: string, event: string) => void;
+    onCacheEvent?: ((source: string, event: string) => void) | undefined;
     logger?: { info(value: Record<string, unknown>): void };
   }): ApplicantDossierService;
 }>;
