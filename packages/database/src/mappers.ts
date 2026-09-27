@@ -1,4 +1,4 @@
-import type { PublicErrorCode } from "@slashwho/contracts";
+import type { EvidenceRunOrigin, PublicErrorCode } from "@slashwho/contracts";
 import type { CharacterKey } from "@slashwho/domain";
 import type {
   Account,
@@ -216,6 +216,7 @@ export interface EvidenceRunRow {
   account_credential_version?: number | null;
   class_name: string | null;
   mode?: EvidenceRunMode;
+  origin?: EvidenceRunOrigin;
   tier_search_raid_id?: string | null;
   publication_scope?: "full" | "tier";
 }
@@ -373,7 +374,7 @@ function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
 // What a run was reserved to do. Selected everywhere a run is mapped, so a
 // re-claimed tier search is still a tier search.
 function evidenceRunModeSql(alias = "character_evidence_runs"): string {
-  return `${alias}.mode, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh`;
+  return `${alias}.mode, ${alias}.origin, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh`;
 }
 
 const evidenceRunColumnNames = [
@@ -437,6 +438,7 @@ export function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
     accountCredentialVersion: row.account_credential_version ?? null,
     className: row.class_name,
     mode: row.mode ?? "full",
+    origin: row.origin ?? "unknown",
     tierSearchRaidId: row.tier_search_raid_id ?? null
   };
 }

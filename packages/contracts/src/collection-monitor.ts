@@ -4,6 +4,30 @@ import { characterKeySchema, collectionPhaseSchema } from "./dossier";
 
 const timestampSchema = z.iso.datetime({ offset: true });
 
+/**
+ * Why an evidence run was queued: the path that reserved it (#708). A class,
+ * never an identity -- no visitor, account, request URL or referrer.
+ * `unknown` is a run reserved before origins were recorded, and is never a
+ * guess at which path that was.
+ */
+export const evidenceRunOriginSchema = z.enum([
+  "dossier_initial",
+  "dossier_read",
+  "refresh",
+  "rebuild",
+  "historic_alias",
+  "tier_search",
+  "resume_sweep",
+  "applicant_sheet",
+  "fingerprint_admission",
+  "unknown"
+]);
+
+export type EvidenceRunOrigin = z.infer<typeof evidenceRunOriginSchema>;
+
+/** Every origin a reservation can be made with; `unknown` is history only. */
+export type EvidenceRunRequestOrigin = Exclude<EvidenceRunOrigin, "unknown">;
+
 /** How many more completed runs the monitor reveals each time it loads more. */
 export const collectionMonitorCompletedPageSize = 50;
 /** The most completed runs one monitor read returns, however far it scrolls. */
@@ -13,6 +37,7 @@ export const collectionMonitorInFlightRunSchema = z
   .object({
     character: characterKeySchema,
     status: z.enum(["queued", "running", "retrying"]),
+    origin: evidenceRunOriginSchema,
     attempt: z.number().int().nonnegative(),
     startedAt: timestampSchema.nullable(),
     elapsedSeconds: z.number().int().nonnegative().nullable(),
@@ -26,6 +51,7 @@ export const collectionMonitorCompletedRunSchema = z
   .object({
     character: characterKeySchema,
     state: z.enum(["complete", "partial"]),
+    origin: evidenceRunOriginSchema,
     limitationCode: z.string().min(1).nullable(),
     parseLimitationCode: z.string().min(1).nullable(),
     completedAt: timestampSchema.nullable(),
@@ -36,6 +62,7 @@ export const collectionMonitorCompletedRunSchema = z
 export const collectionMonitorFailedRunSchema = z
   .object({
     character: characterKeySchema,
+    origin: evidenceRunOriginSchema,
     errorCode: z.string().min(1).nullable(),
     stoppedAt: timestampSchema.nullable()
   })

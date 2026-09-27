@@ -50,6 +50,7 @@ describe("resumeWaitingEvidence", () => {
     expect(evidence.listResumable).toHaveBeenCalledWith(25, at);
     expect(evidence.reserve).toHaveBeenCalledWith({
       key: ryii,
+      origin: "resume_sweep",
       freshnessCutoff,
       at,
       phasePlan: [
@@ -101,6 +102,7 @@ describe("resumeWaitingEvidence", () => {
 
     expect(evidence.reserve).toHaveBeenCalledWith({
       key: ryii,
+      origin: "resume_sweep",
       freshnessCutoff,
       at,
       phasePlan: [

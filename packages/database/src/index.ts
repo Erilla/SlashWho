@@ -51,6 +51,8 @@ export type {
   EvidenceRunCost,
   EvidenceReservationResult,
   EvidenceRunMode,
+  EvidenceRunOrigin,
+  EvidenceRunRequestOrigin,
   EvidenceRunStatus,
   EvidenceRunPhase,
   EvidenceRunProgress,

@@ -1,5 +1,7 @@
 import type {
   DiscoveryRunStatus,
+  EvidenceRunOrigin,
+  EvidenceRunRequestOrigin,
   PublicErrorCode,
   SnapshotState
 } from "@slashwho/contracts";
@@ -319,6 +321,8 @@ export interface CharacterEvidenceRun {
   className: string | null;
   /** What the run was reserved to do; see `EvidenceRunMode`. */
   mode: EvidenceRunMode;
+  /** Why the run was queued, fixed when it was reserved (#708). */
+  origin: EvidenceRunOrigin;
   /** The Journal raid id a `tier_search` run searches, and null otherwise. */
   tierSearchRaidId: string | null;
 }
@@ -333,6 +337,8 @@ export interface CharacterEvidenceRun {
  * continuations; completed guild attendance can be reused.
  */
 export type EvidenceRunMode = "full" | "tier_search";
+
+export type { EvidenceRunOrigin, EvidenceRunRequestOrigin };
 
 /**
  * Why a tier search was or was not reserved. `recent` is the per-tier,
@@ -380,6 +386,7 @@ export type TierSearchReservationResult =
 export type EvidenceMonitorRun = Readonly<{
   key: CharacterKey;
   status: EvidenceRunStatus;
+  origin: EvidenceRunOrigin;
   evidenceVersion: number;
   attempt: number;
   limitationCode: string | null;
@@ -783,6 +790,8 @@ export type EvidenceRunCost = Readonly<{
   /** Upstream requests by class, as the log line counts them. */
   /** The run's mode; absent is `full`. */
   mode?: EvidenceRunMode;
+  /** The run's origin; absent is `unknown`. */
+  origin?: EvidenceRunOrigin;
   requests: Readonly<{
     historyScan: number;
     /** Absent is zero: only a tier search reads it. */
@@ -857,6 +866,11 @@ export interface EvidenceRepository {
   ): Promise<"removed" | "missing">;
   reserve(input: {
     key: CharacterKey;
+    /**
+     * Why this caller wants the character collected. Recorded on a run this
+     * call creates; a run it joins keeps the origin it was reserved with.
+     */
+    origin: EvidenceRunRequestOrigin;
     freshnessCutoff: Date;
     at: Date;
     /** The ordered collection plan fixed when a new run is reserved. */

@@ -65,6 +65,7 @@ export function createCollectionMonitorService(options: {
           response.inFlight.push({
             character: row.key,
             status: row.status,
+            origin: row.origin,
             attempt: row.attempt,
             startedAt: row.startedAt?.toISOString() ?? null,
             elapsedSeconds:
@@ -90,6 +91,7 @@ export function createCollectionMonitorService(options: {
           response.completed.push({
             character: row.key,
             state: row.status,
+            origin: row.origin,
             limitationCode: row.limitationCode,
             parseLimitationCode: row.parseLimitationCode,
             completedAt: row.completedAt?.toISOString() ?? null,
@@ -100,6 +102,7 @@ export function createCollectionMonitorService(options: {
 
         response.failed.push({
           character: row.key,
+          origin: row.origin,
           errorCode: row.errorCode,
           stoppedAt: row.completedAt?.toISOString() ?? null
         });

@@ -34,6 +34,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "queued" },
         status: "queued",
+        origin: "dossier_initial",
         evidenceVersion: 13,
         attempt: 0,
         limitationCode: null,
@@ -47,6 +48,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "retrying" },
         status: "retrying",
+        origin: "resume_sweep",
         evidenceVersion: 13,
         attempt: 2,
         limitationCode: "rate_limited",
@@ -60,6 +62,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "running" },
         status: "running",
+        origin: "tier_search",
         evidenceVersion: 13,
         attempt: 1,
         limitationCode: null,
@@ -85,6 +88,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "partial" },
         status: "partial",
+        origin: "refresh",
         evidenceVersion: 12,
         attempt: 1,
         limitationCode: "request_cap",
@@ -98,6 +102,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "failed" },
         status: "failed",
+        origin: "unknown",
         evidenceVersion: 13,
         attempt: 3,
         limitationCode: null,
@@ -126,6 +131,7 @@ describe("operator collection monitor", () => {
         {
           character: { region: "eu", realm: "silvermoon", name: "queued" },
           status: "queued",
+          origin: "dossier_initial",
           attempt: 0,
           startedAt: null,
           elapsedSeconds: null,
@@ -138,6 +144,7 @@ describe("operator collection monitor", () => {
             name: "retrying"
           },
           status: "retrying",
+          origin: "resume_sweep",
           attempt: 2,
           startedAt: "2026-09-20T11:45:00.000Z",
           elapsedSeconds: 900,
@@ -150,6 +157,7 @@ describe("operator collection monitor", () => {
             name: "running"
           },
           status: "running",
+          origin: "tier_search",
           attempt: 1,
           startedAt: "2026-09-20T11:50:00.000Z",
           elapsedSeconds: 600,
@@ -169,6 +177,7 @@ describe("operator collection monitor", () => {
         {
           character: { region: "eu", realm: "silvermoon", name: "partial" },
           state: "partial",
+          origin: "refresh",
           limitationCode: "request_cap",
           parseLimitationCode: "parse_request_cap",
           completedAt: "2026-09-20T11:00:00.000Z",
@@ -179,6 +188,7 @@ describe("operator collection monitor", () => {
       failed: [
         {
           character: { region: "eu", realm: "silvermoon", name: "failed" },
+          origin: "unknown",
           errorCode: "warcraft_logs_unavailable",
           stoppedAt: "2026-09-20T09:30:00.000Z"
         }
@@ -192,6 +202,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "complete" },
         status: "complete",
+        origin: "dossier_read",
         evidenceVersion: 13,
         attempt: 1,
         limitationCode: null,
@@ -205,6 +216,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "partial" },
         status: "partial",
+        origin: "refresh",
         evidenceVersion: 12,
         attempt: 1,
         limitationCode: "request_cap",
@@ -218,6 +230,7 @@ describe("operator collection monitor", () => {
       {
         key: { region: "eu", realm: "silvermoon", name: "failed" },
         status: "failed",
+        origin: "unknown",
         evidenceVersion: 13,
         attempt: 3,
         limitationCode: null,
@@ -356,6 +369,7 @@ describe("operator collection monitor", () => {
     ): EvidenceMonitorRun => ({
       key: { region: "eu", realm: "silvermoon", name },
       status: "complete",
+      origin: "dossier_read",
       evidenceVersion: 13,
       attempt: 1,
       limitationCode: null,

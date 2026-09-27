@@ -2557,7 +2557,45 @@ describe("applicant evidence job handler", () => {
 
       await handler.execute("run-3");
 
-      expect(records[0]).toMatchObject({ outcome: "not_claimed" });
+      // An attempt that never owned the run has no run to read an origin
+      // from, and does not guess one.
+      expect(records[0]).toMatchObject({
+        outcome: "not_claimed",
+        origin: null
+      });
+    });
+
+    it("records why the run was queued on the log line and the cost row", async () => {
+      // Break caught: nothing said which path queued a run, so explaining a
+      // backed-up queue meant inferring each run's origin from indirect
+      // clues (#708). The origin is read off the claimed run, so a re-claimed
+      // attempt reports what the first one did.
+      const records: Array<Record<string, unknown>> = [];
+      const costs: EvidenceRunCost[] = [];
+      const handler = handlerFor({
+        ...baseOptions(),
+        evidence: evidenceStore({
+          claim: async (id) => ({ ...run, id, origin: "resume_sweep" }),
+          async recordRunCost(cost) {
+            costs.push(cost);
+          }
+        }),
+        logger: { info: (record) => records.push(record) }
+      });
+
+      await handler.execute("run-origin", {
+        attempt: 2,
+        maxAttempts: 3,
+        signal: new AbortController().signal
+      });
+
+      expect(records[0]).toMatchObject({
+        event: "evidence_job",
+        origin: "resume_sweep"
+      });
+      expect(costs).toEqual([
+        expect.objectContaining({ attempt: 2, origin: "resume_sweep" })
+      ]);
     });
 
     it("emits nothing when no logger is supplied", async () => {
@@ -2902,6 +2940,9 @@ describe("applicant evidence job handler", () => {
             requestCapUsed: 300,
             parseRequestCapUsed: 8,
             mode: "full",
+            // The fixture run predates origins, so it is `unknown`, not a
+            // guess at the path that reserved it.
+            origin: "unknown",
             // No tier was asked for: null, not an empty search.
             tierSearch: null,
             requests: {

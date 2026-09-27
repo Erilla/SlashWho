@@ -61,6 +61,7 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
     run: () =>
       refreshCharacter({
         key,
+        origin: rebuild ? "rebuild" : "refresh",
         at,
         cooldownMs,
         ...(rebuild ? { rebuild: true } : {}),
@@ -93,6 +94,7 @@ describe("refreshCharacter", () => {
     expect(h.reserve).toHaveBeenCalledWith(
       expect.objectContaining({
         key,
+        origin: "refresh",
         freshnessCutoff: at,
         lightRefresh: false
       })
@@ -168,6 +170,7 @@ describe("refreshCharacter", () => {
 
     await refreshCharacter({
       key,
+      origin: "refresh",
       at,
       cooldownMs,
       repositories: { evidence: h } as never,
@@ -365,6 +368,7 @@ describe("refreshCharacter", () => {
 
     await refreshCharacter({
       key,
+      origin: "refresh",
       at,
       cooldownMs,
       scope,
@@ -435,6 +439,18 @@ describe("refreshCharacter", () => {
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
       expect.objectContaining({ mode: "full" })
+    );
+  });
+
+  it("reserves with the origin its caller names", async () => {
+    // Three callers share this function and nothing in it can tell them
+    // apart, so the run records what the caller said it was (#708).
+    const h = harness(new Date("2026-09-16T11:00:00.000Z"), true);
+
+    await h.run();
+
+    expect(h.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ origin: "rebuild" })
     );
   });
 });

@@ -90,9 +90,14 @@ export {
   collectionMonitorDiscoveryRunSchema,
   collectionMonitorFailedRunSchema,
   collectionMonitorInFlightRunSchema,
-  collectionMonitorResponseSchema
+  collectionMonitorResponseSchema,
+  evidenceRunOriginSchema
 } from "./collection-monitor";
-export type { CollectionMonitorResponse } from "./collection-monitor";
+export type {
+  CollectionMonitorResponse,
+  EvidenceRunOrigin,
+  EvidenceRunRequestOrigin
+} from "./collection-monitor";
 export {
   createSearchRequestSchema,
   createSearchResponseSchema,

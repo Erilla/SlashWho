@@ -888,6 +888,10 @@ export const characterEvidenceRuns = pgTable(
     // payload so a re-claimed attempt is still a tier search, and so nothing
     // that re-enqueues without a payload can turn one into a default.
     mode: text("mode").default("full").notNull(),
+    // Why the run was queued: the path that reserved it (#708). Set once, at
+    // reservation, and kept on the run for the same reason as `mode`. A
+    // class, never an identity. `unknown` is a run from before this column.
+    origin: text("origin").default("unknown").notNull(),
     /** The Journal raid id a `tier_search` run searches; null otherwise. */
     tierSearchRaidId: text("tier_search_raid_id"),
     // What the published snapshot vouches for. `full` is an ordinary
@@ -928,6 +932,10 @@ export const characterEvidenceRuns = pgTable(
     check(
       "character_evidence_runs_mode_check",
       sql`(${table.mode} = 'full' AND ${table.tierSearchRaidId} IS NULL) OR (${table.mode} = 'tier_search' AND ${table.tierSearchRaidId} IS NOT NULL)`
+    ),
+    check(
+      "character_evidence_runs_origin_check",
+      sql`${table.origin} IN ('dossier_initial', 'dossier_read', 'refresh', 'rebuild', 'historic_alias', 'tier_search', 'resume_sweep', 'applicant_sheet', 'fingerprint_admission', 'unknown')`
     ),
     check(
       "character_evidence_runs_publication_scope_check",
@@ -1120,6 +1128,8 @@ export const characterEvidenceRunCosts = pgTable(
     attendanceRecoveredKills: integer("attendance_recovered_kills"),
     /** The run's mode, so a tier search's cost can be read apart (#435). */
     mode: text("mode").default("full").notNull(),
+    /** The run's origin, so spend can be read by what asked for it (#708). */
+    origin: text("origin").default("unknown").notNull(),
     /**
      * Physical requests to the other two upstreams: Raider.IO `raid-progress`
      * (one per tier), Raider.IO boss rankings (two per guild query) and the

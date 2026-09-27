@@ -192,6 +192,7 @@ export function createEvidenceRepositories(
         key,
         freshnessCutoff,
         at,
+        origin,
         credentials,
         phasePlan,
         lightRefresh
@@ -332,10 +333,10 @@ export function createEvidenceRepositories(
             `INSERT INTO character_evidence_runs
               (region, realm_slug, normalized_name, mode, tier_search_raid_id,
                wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-               light_refresh)
+               light_refresh, origin)
              VALUES ($1, $2, $3,
                      CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
-                     $4, $5, $6, $7, $8, $9)
+                     $4, $5, $6, $7, $8, $9, $10)
              RETURNING ${evidenceRunColumns()}`,
             [
               key.region,
@@ -355,7 +356,10 @@ export function createEvidenceRepositories(
                 ? credentials.credentialVersion
                 : null,
               // A tier continuation is its own mode, never a light refresh.
-              continuationRaidId === null && lightRefresh === true
+              continuationRaidId === null && lightRefresh === true,
+              // A continuation is still whatever asked for this run: the
+              // caller, not the tier search that capped, queued it.
+              origin
             ]
           );
           const reservedRun = mapEvidenceRun(one(inserted));
@@ -524,8 +528,8 @@ export function createEvidenceRepositories(
           }
           const inserted = await client.query<EvidenceRunRow>(
             `INSERT INTO character_evidence_runs
-               (region, realm_slug, normalized_name, mode, tier_search_raid_id, created_at, account_credential_owner_id, account_credential_version)
-             VALUES ($1, $2, $3, 'tier_search', $4, $5, $6, $7)
+               (region, realm_slug, normalized_name, mode, tier_search_raid_id, created_at, account_credential_owner_id, account_credential_version, origin)
+             VALUES ($1, $2, $3, 'tier_search', $4, $5, $6, $7, 'tier_search')
              RETURNING ${columns}`,
             [
               key.region,
@@ -1725,6 +1729,7 @@ export function createEvidenceRepositories(
           realm_slug: string;
           normalized_name: string;
           status: CharacterEvidenceRun["status"];
+          origin: CharacterEvidenceRun["origin"];
           evidence_version: number;
           attempt: number;
           limitation_code: string | null;
@@ -1740,14 +1745,14 @@ export function createEvidenceRepositories(
           // Completed runs are the only set that grows without bound, so only
           // they are limited, newest first to match the outer ordering.
           `WITH runs AS (
-             (SELECT id, region, realm_slug, normalized_name, status,
+             (SELECT id, region, realm_slug, normalized_name, status, origin,
                      evidence_version, attempt, limitation_code,
                      parse_limitation_code, retry_after_at, error_code,
                      created_at, started_at, completed_at
                 FROM character_evidence_runs
                WHERE status NOT IN ('complete', 'partial'))
              UNION ALL
-             (SELECT id, region, realm_slug, normalized_name, status,
+             (SELECT id, region, realm_slug, normalized_name, status, origin,
                      evidence_version, attempt, limitation_code,
                      parse_limitation_code, retry_after_at, error_code,
                      created_at, started_at, completed_at
@@ -1757,7 +1762,7 @@ export function createEvidenceRepositories(
                LIMIT $1)
            )
            SELECT runs.region, runs.realm_slug, runs.normalized_name,
-                  runs.status, runs.evidence_version, runs.attempt,
+                  runs.status, runs.origin, runs.evidence_version, runs.attempt,
                   runs.limitation_code, runs.parse_limitation_code,
                   runs.retry_after_at, runs.error_code, runs.started_at,
                   runs.completed_at, steps.phases
@@ -1796,6 +1801,7 @@ export function createEvidenceRepositories(
             name: row.normalized_name
           },
           status: row.status,
+          origin: row.origin,
           evidenceVersion: row.evidence_version,
           attempt: row.attempt,
           limitationCode: row.limitation_code,
@@ -1869,12 +1875,12 @@ export function createEvidenceRepositories(
              raiderio_historic_requests, raiderio_rankings_requests,
              blizzard_achievements_requests,
              duration_ms, queue_wait_ms, warcraft_logs_ms,
-             warcraft_logs_historic_alias_ms, db_ms, db_max_call_name
+             warcraft_logs_historic_alias_ms, db_ms, db_max_call_name, origin
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
                    $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
-                   $33, $34, $35, $36, $37, $38, $39, $40, $41)
+                   $33, $34, $35, $36, $37, $38, $39, $40, $41, $42)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -1917,7 +1923,8 @@ export function createEvidenceRepositories(
              warcraft_logs_historic_alias_ms =
                EXCLUDED.warcraft_logs_historic_alias_ms,
              db_ms = EXCLUDED.db_ms,
-             db_max_call_name = EXCLUDED.db_max_call_name`,
+             db_max_call_name = EXCLUDED.db_max_call_name,
+             origin = EXCLUDED.origin`,
           [
             cost.runId,
             cost.attempt,
@@ -1959,7 +1966,8 @@ export function createEvidenceRepositories(
             cost.timings?.warcraftLogsMs ?? null,
             cost.timings?.warcraftLogsHistoricAliasMs ?? null,
             cost.timings?.dbMs ?? null,
-            cost.timings?.dbMaxCallName ?? null
+            cost.timings?.dbMaxCallName ?? null,
+            cost.origin ?? "unknown"
           ]
         );
       },

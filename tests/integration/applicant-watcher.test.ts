@@ -322,6 +322,7 @@ it("does not admit against points already reserved by queued evidence", async ()
   );
   const repositories = createPostgresRepositories(pool);
   await repositories.evidence.reserve({
+    origin: "dossier_read",
     key: { region: "eu", realm: "example", name: "budget" },
     freshnessCutoff: new Date(),
     at: new Date()

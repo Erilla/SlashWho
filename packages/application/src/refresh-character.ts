@@ -1,4 +1,8 @@
-import type { Repositories, DiscoveryQueue } from "@slashwho/database";
+import type {
+  Repositories,
+  DiscoveryQueue,
+  EvidenceRunRequestOrigin
+} from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 
 import { measuredRepositories } from "./measured-repositories";
@@ -64,6 +68,16 @@ async function lightCollectionIsSettled(options: {
  */
 export async function refreshCharacter(options: {
   key: CharacterKey;
+  /**
+   * Which of the three callers this is: the reader's refresh control, an
+   * operator's rebuild, or a historic alias edit. Passed in because nothing
+   * here can tell them apart -- an alias edit is an ordinary refresh with no
+   * cooldown.
+   */
+  origin: Extract<
+    EvidenceRunRequestOrigin,
+    "refresh" | "rebuild" | "historic_alias"
+  >;
   at: Date;
   cooldownMs: number;
   repositories: Pick<Repositories, "evidence">;
@@ -125,6 +139,7 @@ export async function refreshCharacter(options: {
 
   const reservation = await evidence.reserve({
     key: options.key,
+    origin: options.origin,
     freshnessCutoff: options.at,
     at: options.at,
     phasePlan: fullEvidencePhasePlan(),
