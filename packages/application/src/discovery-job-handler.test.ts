@@ -1668,10 +1668,11 @@ describe("discovery job handler", () => {
         // timed is the one that set the maximum.
         dbMaxCallName: "runs.claim",
         raiderIoMs: 0,
-        // Two calls walk the relationships; the rest read each discovered
-        // character's guild, which the profile payload does not carry.
+        // Two calls walk the relationships; the rest read each claimed
+        // character's guild, which the profile payload does not carry. The
+        // root's own payload already answered its guild, so it is not re-read.
         raiderIoCallMs: 0,
-        raiderIoCalls: 5,
+        raiderIoCalls: 4,
         raiderIoMaxCallMs: 0,
         // The first Raider.IO call reaches the 0ms maximum, as for db above.
         raiderIoMaxCallName: "getCharacter"
@@ -2075,7 +2076,7 @@ describe("discovery job handler", () => {
       event: "discovery_run",
       correlationId: "c1",
       queueWaitMs: 1_000,
-      raiderIoCalls: 5,
+      raiderIoCalls: 4,
       raiderIoMs: expect.any(Number),
       raiderIoMaxCallMs: expect.any(Number),
       dbCalls: expect.any(Number),
