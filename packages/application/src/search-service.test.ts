@@ -464,6 +464,12 @@ function policyFixture(
       async recordContinuationFailure() {
         return 0;
       },
+      async requeueContinuation() {
+        return false;
+      },
+      async requeueStrandedContinuations() {
+        return [];
+      },
       async recordRequest() {},
       async finish() {},
       async release() {},

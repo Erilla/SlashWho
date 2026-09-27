@@ -45,6 +45,7 @@ export type WorkerConfig = {
   blizzardClientSecret: string;
   warcraftLogsClientId: string;
   warcraftLogsClientSecret: string;
+  warcraftLogsBaseUrl?: string | undefined;
   evidenceRequestCap: number;
   evidenceParseRequestCap: number;
   evidenceTierSearchRequestCap: number;
@@ -296,6 +297,10 @@ export function loadWorkerConfig(
     blizzardClientSecret: shared.blizzardClientSecret,
     warcraftLogsClientId,
     warcraftLogsClientSecret,
+    warcraftLogsBaseUrl: optionalHttpUrl(
+      environment.WARCRAFT_LOGS_BASE_URL,
+      "invalid_warcraft_logs_base_url"
+    ),
     // Pages of report history one run may scan. A ceiling, not the value a
     // run gets: `effectiveRequestCap` scales it to the allowance the run's own
     // credentials report and to whose credentials those are, so 500 is only

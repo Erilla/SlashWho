@@ -213,6 +213,11 @@ type EvidenceResult = Readonly<{
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
   evidenceState: DossierEvidenceState;
+  /**
+   * When a read may next collect over fresh evidence: the last run's retry
+   * time, past which its evidence stops counting as fresh.
+   */
+  resumesAt: Date | null;
   /** When this character's evidence last finished collecting. */
   collectedAt: Date | null;
 }>;
@@ -479,6 +484,15 @@ async function gatherCharacterEvidence(
           (await options.repositories.evidence.listPhases?.(activeRun.id)) ?? []
         )
       : [],
+    // Either of two things adds to fresh evidence without a refresh: the last
+    // run's own retry, and a capped tier search continuing its walk.
+    resumesAt:
+      reservation.kind === "fresh"
+        ? earliest(
+            completed?.run.retryAfterAt ?? null,
+            reservation.tierSearchResumesAt ?? null
+          )
+        : null,
     evidenceState:
       reservation.kind === "fresh"
         ? completed?.run.status === "partial"
@@ -488,6 +502,14 @@ async function gatherCharacterEvidence(
           ? "scanning"
           : "waiting"
   };
+}
+
+function earliest(...times: readonly (Date | null)[]): Date | null {
+  return times.reduce<Date | null>(
+    (soonest, time) =>
+      time !== null && (soonest === null || time < soonest) ? time : soonest,
+    null
+  );
 }
 
 const EVIDENCE_STATE_SEVERITY: Readonly<Record<DossierEvidenceState, number>> =
@@ -549,6 +571,8 @@ function mergeIdentityEvidence(
     ),
     collectedAt:
       collected.length === 0 ? null : new Date(Math.min(...collected)),
+    // The soonest any name resumes: that read is the one that changes the row.
+    resumesAt: earliest(...results.map((item) => item.resumesAt)),
     gathering: results.some((item) => item.gathering),
     // One row shows one collection's steps: the subject's own while it runs,
     // otherwise whichever other name is still collecting.
@@ -680,6 +704,7 @@ function serializeDossierSubject(
   character: DossierSubject,
   evidence?: {
     evidenceState: DossierEvidenceState;
+    resumesAt?: Date | null;
     gathering: boolean;
     collectionProgress?: readonly CollectionPhase[];
   },
@@ -708,6 +733,9 @@ function serializeDossierSubject(
     ...(evidence
       ? {
           evidenceState: evidence.evidenceState,
+          ...(evidence.resumesAt
+            ? { evidenceResumesAt: evidence.resumesAt.toISOString() }
+            : {}),
           // Keyed on the run, not on `evidenceState`. A refresh over evidence
           // that is still fresh leaves the stored state `complete`, so
           // deriving the spinner from it left the row static through exactly

@@ -35,6 +35,7 @@ import {
 } from "./notifiers";
 import {
   BLIZZARD_WORKER_REQUEST_LIMITS,
+  createEvidenceGateway,
   createFingerprintIntegration,
   createRaiderIoGateway,
   createWorkerRuntime,
@@ -248,6 +249,9 @@ function runtimeFakes(
   }> = [];
   const fingerprintAdmissions: string[] = [];
   const waitingFingerprintRuns: string[] = [];
+  // Chains with a cursor and no live admission. Queuing one consumes it, as
+  // the repository's inserted `waiting` row takes it out of the next batch.
+  const strandedContinuationRuns: string[] = [];
   const admittedFingerprintRuns = new Set<string>();
   const admittedUndispatchedFingerprintRuns: string[] = [];
   const dispatchedFingerprintRuns: string[] = [];
@@ -441,6 +445,9 @@ function runtimeFakes(
       async listWaiting(limit: number, offset = 0) {
         return waitingFingerprintRuns.slice(offset, offset + limit);
       },
+      async requeueStrandedContinuations({ limit }: { limit: number }) {
+        return strandedContinuationRuns.splice(0, limit);
+      },
       async listAdmittedUndispatched() {
         return [...admittedUndispatchedFingerprintRuns];
       },
@@ -492,6 +499,7 @@ function runtimeFakes(
     evidenceEnqueues,
     fingerprintAdmissions,
     waitingFingerprintRuns,
+    strandedContinuationRuns,
     admittedFingerprintRuns,
     admittedUndispatchedFingerprintRuns,
     dispatchedFingerprintRuns,
@@ -1594,6 +1602,54 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("queues a sweep chain stranded after startup on the five-minute tick", async () => {
+    // Break caught: an admitted cycle deduplicated onto the job that queued it
+    // never runs, and only a restart used to find its chain again.
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+    const stranded = "00000000-0000-4000-8000-000000000500";
+    fakes.strandedContinuationRuns.push(stranded);
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(fakes.fingerprintAdmissions).toEqual([stranded]);
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "fingerprint_continuations_recovered",
+      recovered: 1
+    });
+    await runtime.stop();
+  });
+
+  it("still sweeps when stranded chain recovery fails", async () => {
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      config,
+      fakes.dependencies,
+      logger
+    );
+    fakes.repositories.fingerprintSweeps.requeueStrandedContinuations =
+      async () => {
+        throw new RangeError("boom");
+      };
+
+    await fakes.evidenceResumeHandler?.();
+
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "fingerprint_continuation_recovery_failed",
+      failure: "RangeError"
+    });
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "evidence_resume_sweep" })
+    );
+    await runtime.stop();
+  });
+
   it("releases abandoned runs before it resumes waiting ones", async () => {
     // Load-bearing ordering, not housekeeping: a character freed by recovery
     // is only resumable once its dead run is out of the active set, so
@@ -2356,6 +2412,23 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("queues every stranded sweep chain before readiness", async () => {
+    // Break caught: a process that died between a failed continuation's
+    // release and its re-admission left a cursor nothing would ever resume.
+    const fakes = runtimeFakes();
+    const stranded = Array.from(
+      { length: 101 },
+      (_unused, index) =>
+        `00000000-0000-4000-8000-${String(index + 300).padStart(12, "0")}`
+    );
+    fakes.strandedContinuationRuns.push(...stranded);
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.fingerprintAdmissions).toEqual(stranded);
+    await runtime.stop();
+  });
+
   it("drops readiness before gracefully draining and closing PostgreSQL", async () => {
     // Break caught: shutdown could close storage under an in-flight job.
     const fakes = runtimeFakes();
@@ -2508,6 +2581,102 @@ describe("createRaiderIoGateway", () => {
       expect(url.searchParams.has("access_key")).toBe(false);
     } finally {
       vi.restoreAllMocks();
+    }
+  });
+});
+
+describe("Warcraft Logs base URL", () => {
+  // Answers the token request, so the client goes on to its GraphQL request.
+  function recordingFetch() {
+    const urls: URL[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      urls.push(url);
+      return url.pathname === "/oauth/token"
+        ? Response.json({ access_token: "token", expires_in: 3600 })
+        : Response.json({ data: {} });
+    });
+    return { urls, fetchMock };
+  }
+
+  async function requestedOrigins(
+    gateway: Pick<WarcraftLogsGateway, "getRateLimit">,
+    urls: URL[]
+  ): Promise<string[]> {
+    await gateway.getRateLimit().catch(() => undefined);
+    expect(urls.map((url) => url.pathname)).toEqual([
+      "/oauth/token",
+      "/api/v2/client"
+    ]);
+    return urls.map((url) => url.origin);
+  }
+
+  it("sends the shared client's token and GraphQL requests to the configured origin", async () => {
+    // Break caught: the worker built its shared client without a base URL, so
+    // e2e evidence runs sent the inert e2e credentials to live Warcraft Logs.
+    const { urls, fetchMock } = recordingFetch();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = createEvidenceGateway({
+        ...config,
+        warcraftLogsBaseUrl: "http://127.0.0.1:43102"
+      });
+
+      expect(await requestedOrigins(gateway, urls)).toEqual([
+        "http://127.0.0.1:43102",
+        "http://127.0.0.1:43102"
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("keeps the shared client on warcraftlogs.com when no base URL is set", async () => {
+    // Break caught: a default that moved production off Warcraft Logs' host.
+    const { urls, fetchMock } = recordingFetch();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = createEvidenceGateway(config);
+
+      expect(await requestedOrigins(gateway, urls)).toEqual([
+        "https://www.warcraftlogs.com",
+        "https://www.warcraftlogs.com"
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("sends a visitor-credential run's requests to the configured origin", async () => {
+    // Break caught: the per-run client built from a visitor's own key had no
+    // base URL, so under e2e that key would have gone to live Warcraft Logs.
+    const fakes = runtimeFakes();
+    let evidenceOptions: ApplicantEvidenceJobHandlerOptions | undefined;
+    Object.assign(fakes.dependencies, {
+      createEvidenceHandler(options: ApplicantEvidenceJobHandlerOptions) {
+        evidenceOptions = options;
+        return fakes.evidenceHandler;
+      }
+    });
+    const runtime = await createWorkerRuntime(
+      { ...config, warcraftLogsBaseUrl: "http://127.0.0.1:43102" },
+      fakes.dependencies
+    );
+    const { urls, fetchMock } = recordingFetch();
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchMock);
+    try {
+      const gateway = evidenceOptions!.createWarcraftLogsGateway!({
+        clientId: "visitor-id",
+        clientSecret: "visitor-secret"
+      });
+
+      expect(await requestedOrigins(gateway, urls)).toEqual([
+        "http://127.0.0.1:43102",
+        "http://127.0.0.1:43102"
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+      await runtime.stop();
     }
   });
 });

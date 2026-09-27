@@ -4,6 +4,7 @@ import {
   cleanupExpired,
   createDiscoveryJobHandler,
   recoverPendingSearches,
+  recoverStrandedContinuations,
   recoverAbandonedEvidenceRuns,
   resumeWaitingEvidence,
   fullEvidencePhasePlan,
@@ -333,6 +334,23 @@ export function createRaiderIoGateway(
   });
 }
 
+/**
+ * The shared Warcraft Logs client. `baseUrl` moves both the OAuth token and the
+ * GraphQL requests; unset, they go to warcraftlogs.com.
+ */
+export function createEvidenceGateway(
+  config: WorkerConfig,
+  logger?: DiscoveryLogger
+): WarcraftLogsGateway {
+  return createWarcraftLogsClient({
+    fetch: globalThis.fetch,
+    clientId: config.warcraftLogsClientId,
+    clientSecret: config.warcraftLogsClientSecret,
+    baseUrl: config.warcraftLogsBaseUrl,
+    onThrottle: throttleReporter(logger, "warcraftlogs")
+  });
+}
+
 export function createAccountWarcraftLogsResolver(
   repository:
     | {
@@ -380,13 +398,7 @@ const defaultDependencies: WorkerRuntimeDependencies = {
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
   createGateway: createRaiderIoGateway,
-  createEvidenceGateway: (config, logger) =>
-    createWarcraftLogsClient({
-      fetch: globalThis.fetch,
-      clientId: config.warcraftLogsClientId,
-      clientSecret: config.warcraftLogsClientSecret,
-      onThrottle: throttleReporter(logger, "warcraftlogs")
-    }),
+  createEvidenceGateway,
   createFingerprintIntegration,
   createFingerprintAlertNotifier: (config, logger) =>
     createFingerprintAlertNotifier(config, { logger }),
@@ -406,7 +418,11 @@ function fingerprintAdmissionRetry(retryAt: Date): Error & {
 } {
   return Object.assign(new Error("fingerprint_admission_waiting"), {
     retryable: true as const,
-    retryAfterMs: Math.max(1_000, retryAt.getTime() - Date.now())
+    // Whole seconds: the queue ignores any other delay and falls back to its
+    // default, which would miss a deferred continuation's time by up to a
+    // minute.
+    retryAfterMs:
+      Math.ceil(Math.max(1_000, retryAt.getTime() - Date.now()) / 1_000) * 1_000
   });
 }
 
@@ -538,6 +554,7 @@ function buildHandlers(
         fetch: globalThis.fetch,
         clientId: credentials.clientId,
         clientSecret: credentials.clientSecret,
+        baseUrl: config.warcraftLogsBaseUrl,
         onThrottle: throttleReporter(logger, "warcraftlogs")
       }),
     decryptionKey: config.evidenceJobCredentialEncryptionKey,
@@ -593,15 +610,20 @@ function fingerprintRunDispatcher(
 }
 
 /**
- * Picks up fingerprint work a previous process left behind: re-enqueues every
- * run still waiting for admission, and dispatches every run that was admitted
- * but never sent back to discovery.
+ * Picks up fingerprint work a previous process left behind: queues the next
+ * cycle of every sweep chain it stranded, re-enqueues every run still waiting
+ * for admission, and dispatches every run that was admitted but never sent
+ * back to discovery.
  */
 async function drainFingerprintBacklog(
   context: WorkerContext,
   dispatch: (runId: string) => Promise<void>
 ): Promise<void> {
-  const { repositories, queue } = context;
+  const { repositories, queue, logger } = context;
+  const recovered = await recoverStrandedContinuations(repositories, queue);
+  if (recovered > 0) {
+    logger?.info({ event: "fingerprint_continuations_recovered", recovered });
+  }
   for (let offset = 0; ;) {
     const waitingFingerprintRuns =
       await repositories.fingerprintSweeps.listWaiting(100, offset);
@@ -694,6 +716,21 @@ async function evidenceResumeSweep(context: WorkerContext): Promise<void> {
   } catch (error) {
     logger?.info({
       event: "queue_depth_failed",
+      failure: error instanceof Error ? error.name : "unknown"
+    });
+  }
+  // A sweep chain can strand without a restart too: an admitted cycle whose
+  // discovery job was deduplicated onto the still-running cycle that queued
+  // it never runs, and its chain becomes recoverable once that reservation
+  // expires. Guarded for the same reason as the reads around it.
+  try {
+    const recovered = await recoverStrandedContinuations(repositories, queue);
+    if (recovered > 0) {
+      logger?.info({ event: "fingerprint_continuations_recovered", recovered });
+    }
+  } catch (error) {
+    logger?.info({
+      event: "fingerprint_continuation_recovery_failed",
       failure: error instanceof Error ? error.name : "unknown"
     });
   }
