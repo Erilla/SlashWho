@@ -21,7 +21,11 @@ const loads = Math.max(1, Number(process.env.PROFILE_LOADS ?? 20) || 20);
 const settleTimeoutMs = 45_000;
 
 type PageMarks = {
+  requestedMs?: number;
+  headersMs?: number;
   firstResponseMs?: number;
+  /** Every fetch the page started before its first dossier read. */
+  prelude: { path: string; startMs: number; endMs?: number }[];
   renderedMs?: number;
   settledMs?: number;
   serverTiming: string | null;
@@ -39,7 +43,7 @@ type PageMarks = {
  * never ends (#663), so settling on the page's rule would hang the profile.
  */
 function instrumentDossierLoad(): void {
-  const marks: PageMarks = { serverTiming: null };
+  const marks: PageMarks = { serverTiming: null, prelude: [] };
   (window as unknown as { __dossierLoad: PageMarks }).__dossierLoad = marks;
 
   type Character = { excluded?: boolean; evidenceState?: string };
@@ -56,14 +60,23 @@ function instrumentDossierLoad(): void {
 
   const original = window.fetch.bind(window);
   window.fetch = async (input, init) => {
-    const response = await original(input, init);
     const request = input instanceof Request ? input : undefined;
     const url = new URL(request?.url ?? String(input), window.location.href);
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
-    if (
+    const dossierRead =
       method === "GET" &&
-      /^\/api\/dossiers\/[^/]+\/[^/]+\/[^/]+$/.test(url.pathname)
-    ) {
+      /^\/api\/dossiers\/[^/]+\/[^/]+\/[^/]+$/.test(url.pathname);
+    const startedAt = performance.now();
+    const prelude =
+      !dossierRead && marks.requestedMs === undefined
+        ? { path: `${method} ${url.pathname}`, startMs: startedAt }
+        : undefined;
+    if (prelude) marks.prelude.push(prelude);
+    if (dossierRead) marks.requestedMs ??= startedAt;
+    const response = await original(input, init);
+    if (prelude) prelude.endMs = performance.now();
+    if (dossierRead) {
+      marks.headersMs ??= performance.now();
       const body = (await response
         .clone()
         .json()
@@ -98,6 +111,19 @@ function instrumentDossierLoad(): void {
     }
   });
   observer.observe(document, { childList: true, subtree: true });
+}
+
+/** The most recent load's pre-read fetches, printed with each summary. */
+let lastPrelude: PageMarks["prelude"] = [];
+
+function formatPrelude(): string {
+  if (lastPrelude.length === 0) return "  (no fetch before the first read)";
+  return lastPrelude
+    .map(
+      ({ path, startMs, endMs }) =>
+        `  before the first read: ${path} ${Math.round(startMs)}-${endMs === undefined ? "?" : Math.round(endMs)} ms`
+    )
+    .join("\n");
 }
 
 async function loadOnce(browser: Browser, path: string): Promise<LoadSample> {
@@ -141,8 +167,13 @@ async function loadOnce(browser: Browser, path: string): Promise<LoadSample> {
         shellMs: navigation.domContentLoadedEventEnd
       };
     });
+    lastPrelude = marks.prelude;
     return {
       shellMs,
+      ...(marks.requestedMs === undefined
+        ? {}
+        : { requestedMs: marks.requestedMs }),
+      ...(marks.headersMs === undefined ? {} : { headersMs: marks.headersMs }),
       firstResponseMs: marks.firstResponseMs!,
       renderedMs: marks.renderedMs!,
       settledMs: marks.settledMs!,
@@ -183,7 +214,7 @@ async function profile(
     samples.push(await loadOnce(browser, path));
   }
   console.log(
-    `${formatLoadSummary(scenario, summariseLoads(samples))}\n  (warm-up load: rendered ${Math.round(warmUp.renderedMs)} ms, settled ${Math.round(warmUp.settledMs ?? 0)} ms)\n`
+    `${formatLoadSummary(scenario, summariseLoads(samples))}\n${formatPrelude()}\n  (warm-up load: rendered ${Math.round(warmUp.renderedMs)} ms, settled ${Math.round(warmUp.settledMs ?? 0)} ms)\n`
   );
 }
 
@@ -258,5 +289,7 @@ test("read that gathers Warcraft Logs evidence", async ({ browser }) => {
     // The first is the discarded warm-up, as in the warm scenarios.
     if (index > 0) samples.push(sample);
   }
-  console.log(`${formatLoadSummary("gathering", summariseLoads(samples))}\n`);
+  console.log(
+    `${formatLoadSummary("gathering", summariseLoads(samples))}\n${formatPrelude()}\n`
+  );
 });

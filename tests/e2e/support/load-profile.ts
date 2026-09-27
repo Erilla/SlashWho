@@ -10,6 +10,10 @@
 export type LoadSample = Readonly<{
   /** The server shell's DOMContentLoaded. */
   shellMs: number;
+  /** The page asked for its first dossier read. */
+  requestedMs?: number;
+  /** That read's response headers arrived. */
+  headersMs?: number;
   /** The first dossier API response the page received, fully read. */
   firstResponseMs: number;
   /** The connected-characters panel first in the DOM. */
@@ -30,6 +34,8 @@ export type LoadSummary = Readonly<{
 
 const phases = [
   "shellMs",
+  "requestedMs",
+  "headersMs",
   "firstResponseMs",
   "renderedMs",
   "settledMs"
