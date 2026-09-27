@@ -892,6 +892,13 @@ export const characterEvidenceRuns = pgTable(
     // reservation, and kept on the run for the same reason as `mode`. A
     // class, never an identity. `unknown` is a run from before this column.
     origin: text("origin").default("unknown").notNull(),
+    // The dossier root whose discovery this run serves: the character that
+    // was searched, not necessarily the one being collected. Set once, at
+    // reservation, like `origin`. Null where the reserving path has no root
+    // (a refresh, a rebuild, the resume sweep) and on runs from before it.
+    rootRegion: text("root_region"),
+    rootRealmSlug: text("root_realm_slug"),
+    rootNormalizedName: text("root_normalized_name"),
     /** The Journal raid id a `tier_search` run searches; null otherwise. */
     tierSearchRaidId: text("tier_search_raid_id"),
     // What the published snapshot vouches for. `full` is an ordinary
@@ -936,6 +943,10 @@ export const characterEvidenceRuns = pgTable(
     check(
       "character_evidence_runs_origin_check",
       sql`${table.origin} IN ('dossier_initial', 'dossier_read', 'refresh', 'rebuild', 'historic_alias', 'tier_search', 'resume_sweep', 'applicant_sheet', 'fingerprint_admission', 'unknown')`
+    ),
+    check(
+      "character_evidence_runs_root_check",
+      sql`(${table.rootRegion} IS NULL AND ${table.rootRealmSlug} IS NULL AND ${table.rootNormalizedName} IS NULL) OR (${table.rootRegion} IS NOT NULL AND ${table.rootRealmSlug} IS NOT NULL AND ${table.rootNormalizedName} IS NOT NULL)`
     ),
     check(
       "character_evidence_runs_publication_scope_check",

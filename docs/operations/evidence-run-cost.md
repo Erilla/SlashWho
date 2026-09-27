@@ -668,6 +668,37 @@ ORDER BY points_spent DESC NULLS LAST;
 `unmeasured` counts the attempts whose allowance could not be read. Their
 spend is unknown, not zero, so `points_spent` leaves them out.
 
+## Which search it serves
+
+A run also records its root: the dossier it was reserved for, held in
+`root_region`, `root_realm_slug` and `root_normalized_name`. That is the
+character whose search started the discovery, not necessarily the character
+being collected. An alt's run names the main that was searched. Like `origin`,
+it is set once at reservation, and a caller that joins a run in flight does not
+change it. The collection monitor links it in the Started by column.
+
+| `origin`                                      | Root                                           |
+| --------------------------------------------- | ---------------------------------------------- |
+| `dossier_initial`, `dossier_read`             | the dossier being read                         |
+| `historic_alias`                              | the dossier the alias was edited in            |
+| `tier_search`                                 | the dossier the search was pressed on          |
+| `applicant_sheet`                             | the applicant, the root of its own discovery   |
+| `fingerprint_admission`                       | the root of the discovery that admitted it     |
+| `refresh`, `rebuild`, `resume_sweep`, unknown | none: these reach one character, not a dossier |
+
+A missing root is null in all three columns, never the run's own key. A check
+constraint keeps the three columns all set or all null.
+
+Which searches the queue is working for:
+
+```sql
+SELECT root_region, root_realm_slug, root_normalized_name, count(*) AS runs
+FROM character_evidence_runs
+WHERE status IN ('queued', 'running', 'retrying')
+GROUP BY 1, 2, 3
+ORDER BY runs DESC;
+```
+
 ## Keeping this honest
 
 `tests/integration/repositories-evidence-searches.test.ts` extracts every query

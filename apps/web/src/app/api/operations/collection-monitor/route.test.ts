@@ -27,6 +27,7 @@ const monitor = {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
       status: "running",
       origin: "dossier_initial",
+      root: null,
       attempt: 1,
       startedAt: "2026-09-20T11:45:00.000Z",
       elapsedSeconds: 900,

@@ -46,6 +46,8 @@ export type SearchCharacterTierResult =
  */
 export async function searchCharacterTier(options: {
   key: CharacterKey;
+  /** The dossier the search was pressed on, recorded on the run. */
+  root: CharacterKey;
   /** The Journal raid id the dossier keys the tier by. */
   raidId: string;
   at: Date;
@@ -65,6 +67,7 @@ export async function searchCharacterTier(options: {
     : options.repositories.evidence;
   const reservation = await evidence.reserveTierSearch({
     key: options.key,
+    root: options.root,
     raidId: options.raidId,
     at: options.at,
     searchedSince: new Date(options.at.getTime() - TIER_SEARCH_SPACING_MS),

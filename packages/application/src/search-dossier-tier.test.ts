@@ -94,6 +94,7 @@ function harness(reservations: Readonly<Record<string, Reservation>>) {
       options: { raidId?: string; limit?: number } = {}
     ) =>
       searchDossierTier({
+        root: ryii,
         subjects,
         raidId: options.raidId ?? eternalPalace,
         at,
@@ -131,6 +132,8 @@ describe("searching a dossier tier for every character", () => {
       [ryii, alt].map((key) =>
         expect.objectContaining({
           key,
+          // Every character's run names the dossier the press was made on.
+          root: ryii,
           raidId: eternalPalace,
           at,
           searchedSince: new Date(at.getTime() - TIER_SEARCH_SPACING_MS)

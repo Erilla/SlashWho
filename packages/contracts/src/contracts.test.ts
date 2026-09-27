@@ -588,6 +588,7 @@ it("defines a strict operator collection monitor without internal run fields", (
         character: applicantCharacter,
         status: "retrying",
         origin: "resume_sweep",
+        root: null,
         attempt: 2,
         startedAt: "2026-09-20T11:45:00.000Z",
         elapsedSeconds: 900,
@@ -599,6 +600,7 @@ it("defines a strict operator collection monitor without internal run fields", (
         character: applicantCharacter,
         state: "partial",
         origin: "unknown",
+        root: null,
         limitationCode: "request_cap",
         parseLimitationCode: null,
         completedAt: "2026-09-20T11:30:00.000Z",
@@ -610,6 +612,7 @@ it("defines a strict operator collection monitor without internal run fields", (
       {
         character: applicantCharacter,
         origin: "tier_search",
+        root: applicantCharacter,
         errorCode: "warcraft_logs_unavailable",
         stoppedAt: "2026-09-20T10:00:00.000Z"
       }
@@ -670,6 +673,18 @@ it("defines a strict operator collection monitor without internal run fields", (
         {
           ...response.inFlight[0],
           origin: "https://example.com/?ref=visitor"
+        }
+      ]
+    })
+  ).toThrow();
+  // A root is a character key or null, never a request URL or free text.
+  expect(() =>
+    collectionMonitorResponseSchema.parse({
+      ...response,
+      failed: [
+        {
+          ...response.failed[0],
+          root: "https://example.com/?ref=visitor"
         }
       ]
     })

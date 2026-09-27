@@ -23,6 +23,7 @@ const inFlightMonitor: CollectionMonitorResponse = {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
       status: "running",
       origin: "dossier_initial",
+      root: null,
       attempt: 1,
       startedAt: "2026-09-20T11:45:00.000Z",
       elapsedSeconds: 900,
@@ -32,6 +33,7 @@ const inFlightMonitor: CollectionMonitorResponse = {
       character: { region: "us", realm: "illidan", name: "blocked" },
       status: "running",
       origin: "dossier_read",
+      root: { region: "eu", realm: "draenor", name: "searcher" },
       attempt: 1,
       startedAt: "2026-09-20T11:50:00.000Z",
       elapsedSeconds: 600,
@@ -43,6 +45,7 @@ const inFlightMonitor: CollectionMonitorResponse = {
       character: { region: "us", realm: "area-52", name: "unrelated" },
       state: "complete",
       origin: "dossier_read",
+      root: null,
       limitationCode: null,
       parseLimitationCode: null,
       completedAt: "2026-09-20T11:00:00.000Z",
@@ -63,6 +66,7 @@ const partialMonitor: CollectionMonitorResponse = {
       character: { region: "eu", realm: "silvermoon", name: "ryii" },
       state: "partial",
       origin: "dossier_read",
+      root: null,
       limitationCode: "request_cap",
       parseLimitationCode: null,
       completedAt: "2026-09-20T12:01:00.000Z",
@@ -96,7 +100,8 @@ const multipleTerminalMonitor: CollectionMonitorResponse = {
   failed: [
     {
       character: { region: "us", realm: "illidan", name: "blocked" },
-      origin: "dossier_read",
+      origin: "fingerprint_admission",
+      root: { region: "eu", realm: "draenor", name: "searcher" },
       errorCode: "warcraft_logs_unavailable",
       stoppedAt: "2026-09-20T12:03:00.000Z"
     }
@@ -242,9 +247,48 @@ describe("CollectionMonitorClient", () => {
     ).toBeVisible();
     expect(
       within(screen.getByRole("table", { name: "Failed" })).getByText(
-        "dossier_read"
+        "fingerprint_admission"
       )
     ).toBeVisible();
+  });
+
+  it("links each evidence run to the character whose search started it", () => {
+    // Break caught: an alt's run named only the alt, so a queue full of alts
+    // could not be traced back to the searches that queued them.
+    render(
+      <CollectionMonitorClient
+        initialMonitor={{
+          ...inFlightMonitor,
+          failed: multipleTerminalMonitor.failed
+        }}
+      />
+    );
+
+    for (const name of ["In flight and pending", "Completed", "Failed"]) {
+      const table = screen.getByRole("table", { name });
+      expect(
+        within(table).getByRole("columnheader", { name: "Started by" })
+      ).toBeVisible();
+    }
+    const inFlight = screen.getByRole("table", {
+      name: "In flight and pending"
+    });
+    const [, unrooted, rooted] = within(inFlight).getAllByRole("row");
+    expect(
+      within(rooted!).getByRole("link", { name: /searcher — draenor/i })
+    ).toHaveAttribute("href", "/dossiers/eu/draenor/searcher");
+    // No root is said as such, never shown as the run's own character.
+    expect(within(unrooted!).getByText("No root recorded")).toBeInTheDocument();
+    expect(
+      within(unrooted!)
+        .getAllByRole("link")
+        .map((link) => link.textContent)
+    ).toEqual(["ryii — silvermoon (EU)"]);
+    expect(
+      within(screen.getByRole("table", { name: "Failed" })).getByRole("link", {
+        name: /searcher — draenor/i
+      })
+    ).toHaveAttribute("href", "/dossiers/eu/draenor/searcher");
   });
 
   it("says when no discovery runs have been requested", () => {
@@ -261,8 +305,8 @@ describe("CollectionMonitorClient", () => {
     render(<CollectionMonitorClient initialMonitor={inFlightMonitor} />);
 
     expect(
-      screen.getByRole("link", { name: /ryii — silvermoon/i })
-    ).toHaveAttribute("href", "/dossiers/eu/silvermoon/ryii");
+      screen.getByRole("link", { name: /searcher — draenor/i })
+    ).toHaveAttribute("href", "/dossiers/eu/draenor/searcher");
     expect(
       screen.getByRole("link", { name: /unrelated — area-52/i })
     ).toHaveAttribute("href", "/dossiers/us/area-52/unrelated");
@@ -387,6 +431,7 @@ describe("CollectionMonitorClient", () => {
         },
         state: "complete",
         origin: "dossier_read",
+        root: null,
         limitationCode: null,
         parseLimitationCode: null,
         completedAt: new Date(

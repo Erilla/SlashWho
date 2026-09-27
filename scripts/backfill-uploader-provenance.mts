@@ -90,6 +90,7 @@ export function createUploaderProvenanceBackfillDependencies(options: {
       await refreshCharacter({
         key: parseRaiderIoCharacterUrl(characterUrl),
         origin: "rebuild",
+        root: null,
         at: now(),
         cooldownMs: 0,
         rebuild: true,

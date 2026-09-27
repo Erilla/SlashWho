@@ -163,6 +163,33 @@ describe("history pages load actors only where evidence can be", () => {
     });
   });
 
+  it("judges a report by its fights, not by the zone it is filed under", async () => {
+    // Break caught: a raid night that also ran Mythic+ is filed under the
+    // dungeon season, so choosing reports by `report.zone` would skip the
+    // actors of a night that holds real raid kills.
+    const filedAsDungeons = {
+      ...report("raidNight", [{ id: 4, encounterID: 2902, difficulty: 5 }]),
+      zone: { id: 39, name: "Mythic+ Season 2", encounters: [] }
+    };
+    const { client, sent } = harness([[filedAsDungeons]]);
+
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 1,
+      parseRequestCap: 1,
+      plan
+    });
+
+    const follow = sent.filter((body) => body.query.includes("ReportActors"));
+    expect(follow.map((body) => Object.values(body.variables))).toEqual([
+      ["raidNight"]
+    ]);
+    expect(result).toMatchObject({
+      kills: [
+        { reportCode: "raidNight", fightId: 4, raidName: "Nerub-ar Palace" }
+      ]
+    });
+  });
+
   it("sends no follow-up for a page with no Mythic encounter", async () => {
     const { client, sent } = harness([
       [report("dungeons", [{ id: 1, encounterID: 12_660, difficulty: 10 }])]

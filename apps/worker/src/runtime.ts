@@ -495,7 +495,7 @@ function buildHandlers(
     ...(discoveryRunNotifier ? { discoveryRunNotifier } : {}),
     enqueueFingerprintAdmission: (runId) =>
       queue.enqueueFingerprintAdmission(runId),
-    enqueueFullEvidence: async (key) => {
+    enqueueFullEvidence: async (key, root) => {
       const at = new Date();
       // A fingerprint admission is a genuinely new dossier connection, so
       // use `at` as the cutoff and collect its complete public log history.
@@ -504,6 +504,7 @@ function buildHandlers(
       const reservation = await repositories.evidence.reserve({
         key,
         origin: "fingerprint_admission",
+        root,
         freshnessCutoff: at,
         at,
         phasePlan: fullEvidencePhasePlan()

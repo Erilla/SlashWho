@@ -1927,6 +1927,8 @@ describe("PostgreSQL repositories: character evidence", () => {
       status: "partial",
       // Inserted with no origin, as every row from before #708 was.
       origin: "unknown",
+      // Nor a root: an old row has none, and the monitor says so.
+      root: null,
       evidenceVersion: 13,
       attempt: 1,
       limitationCode: "request_cap",
