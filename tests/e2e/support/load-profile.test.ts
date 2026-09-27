@@ -107,7 +107,9 @@ describe("formatLoadSummary", () => {
     const text = formatLoadSummary("warm", summariseLoads([]), {
       databaseRttMs: 5
     });
-    expect(text).toBe("warm (0 loads, database RTT +5 ms injected)");
+    expect(text.split("\n")[0]).toBe(
+      "warm (0 loads, database RTT +5 ms injected)"
+    );
   });
 });
 

@@ -71,9 +71,20 @@ function relay(
   delayMs: number
 ): DelayLine {
   const line = createDelayLine(delayMs);
+  // Backpressure: while the destination is full, stop reading the source, so
+  // a slow reader cannot make the proxy buffer a whole result in memory.
+  let draining = false;
+  destination.on("drain", () => {
+    draining = false;
+    source.resume();
+  });
   source.on("data", (chunk: Buffer) => {
     line.push(() => {
-      if (!destination.destroyed) destination.write(chunk);
+      if (destination.destroyed) return;
+      if (!destination.write(chunk) && !draining) {
+        draining = true;
+        source.pause();
+      }
     });
   });
   // Through the same queue, so the end can never overtake the data before it.
@@ -108,7 +119,13 @@ export async function startLatencyProxy(options: {
     ];
     for (const { socket, peer, inbound } of pairs) {
       sockets.add(socket);
-      socket.on("error", () => undefined);
+      // The close that follows ends the pair. Say why when PostgreSQL is the
+      // side that failed, since the web sees only "Connection terminated".
+      socket.on("error", (error) => {
+        if (socket === upstream) {
+          console.error(`latency_proxy_upstream_error: ${error.message}`);
+        }
+      });
       socket.on("close", (hadError) => {
         sockets.delete(socket);
         // Nothing more can reach this socket. A clean close has already
