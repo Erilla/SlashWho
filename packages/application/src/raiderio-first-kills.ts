@@ -433,7 +433,7 @@ export async function collectRaiderIoFirstKills(
           }
         ];
       }
-      let presenceChecked = false;
+      let presenceChecked = established.has(id);
       if (encounter.rosterState === "available") {
         if (established.has(id)) {
           presenceChecked = true;

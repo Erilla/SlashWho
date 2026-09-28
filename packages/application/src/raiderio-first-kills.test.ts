@@ -714,6 +714,7 @@ describe("collectRaiderIoFirstKills", () => {
     expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
     expect(raiderio.getCharacter).not.toHaveBeenCalled();
     expect(result.kills).toHaveLength(1);
+    expect(result.kills[0]).toMatchObject({ presenceChecked: true });
   });
 
   it("checks presence once a hidden roster it accepted a kill through opens", async () => {
@@ -973,6 +974,51 @@ describe("collectRaiderIoFirstKills", () => {
     });
   });
 
+  it("keeps an established kill's flag true when its due re-read now finds the roster hidden", async () => {
+    // Fix round 1: spec §4 says a read kill is published `presenceChecked`
+    // true "when its roster was visible and held the character's id in this
+    // run's check, or when the flag was already true" — an already-true flag
+    // must survive a re-read that turns the roster private, not fall back to
+    // false just because this run's roster is not `available`.
+    const published: CharacterRaiderIoFirstKillInput = {
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      killedAt: "2026-07-20T17:25:57.301Z",
+      guild: killGuild,
+      loggedEncounterId: 700_001,
+      encounterState: "read",
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: null,
+      presenceChecked: true
+    };
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async () =>
+        encounter("midnight-falls", { state: "unavailable", reason: "private" })
+      )
+    });
+
+    const result = await collect([midnightFalls], raiderio, {
+      published: [published],
+      storedEncounters: async () => ({
+        encounters: [
+          storedRead({
+            shareRaidUntil: null,
+            readAt: "2026-08-20T00:00:00.000Z"
+          })
+        ],
+        unavailable: []
+      })
+    });
+
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(1);
+    expect(raiderio.getCharacter).not.toHaveBeenCalled();
+    expect(result.kills[0]).toMatchObject({
+      encounterState: "read",
+      presenceChecked: true
+    });
+  });
+
   it("no id: accepts the kill unchecked, without a shortfall, when the character read has no id", async () => {
     // Break caught (#734 follow-up review): a profile Raider.IO gives no id,
     // such as a tournament character, held every run partial for good.
@@ -999,6 +1045,7 @@ describe("collectRaiderIoFirstKills", () => {
         presenceChecked: false
       })
     ]);
+    expect(raiderio.getCharacter).toHaveBeenCalledTimes(1);
   });
 
   it("queues due re-reads with current raids first, then by oldest read_at", async () => {
