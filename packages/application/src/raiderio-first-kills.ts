@@ -177,8 +177,13 @@ export async function collectRaiderIoFirstKills(
       Partial<Pick<RaiderIoGateway, "getCharacter">>;
     signal: AbortSignal;
     now: () => Date;
-    /** Raids of tiers asked anyway; their due re-reads queue before the back catalogue's. */
-    priorityRaidSlugs?: ReadonlySet<string>;
+    /**
+     * Every raid of a settled tier. A due re-read outside this set --
+     * current content, whether or not it is in an asked tier's pinned list
+     * -- queues before the back catalogue's. With no set given, everything
+     * is priority 0, and the order falls back to oldest `read_at`.
+     */
+    settledRaidSlugs?: ReadonlySet<string>;
     /** Called once per logged-encounter request actually sent. */
     onEncounterRequest?: () => void;
     /** Called once for the character read, if one is made. */
@@ -236,7 +241,7 @@ export async function collectRaiderIoFirstKills(
     )
   ]);
   const priority = (id: number) =>
-    input.priorityRaidSlugs?.has(killById.get(id)!.raidSlug) ? 0 : 1;
+    input.settledRaidSlugs?.has(killById.get(id)!.raidSlug) ? 1 : 0;
   // A re-read already has an answer to show, so first reads go first. Among
   // re-reads, current raids first, then the oldest answer: a back catalogue
   // falling due at once must not crowd out rosters a recruiter is looking at

@@ -288,7 +288,10 @@ describe("raiderIoVerifiedKills", () => {
     expect(result.kills).toEqual([]);
     expect(result.guilds).toEqual([]);
     expect(result.backCatalogueTierOrdinals).toContain(32);
-    expect(result.currentRaidSlugs).toEqual(["tier-mn-1"]);
+    // Every settled tier's raid, never the last pinned tier's: "tier-mn-1"
+    // rides along on every response, so it is never in the settled set.
+    expect(result.settledRaidSlugs).toContain("nerubar-palace");
+    expect(result.settledRaidSlugs).not.toContain("tier-mn-1");
   });
 });
 

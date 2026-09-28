@@ -1051,10 +1051,14 @@ describe("collectRaiderIoFirstKills", () => {
     expect(raiderio.getCharacter).toHaveBeenCalledTimes(1);
   });
 
-  it("queues due re-reads with current raids first, then by oldest read_at", async () => {
+  it("queues due re-reads with raids outside the settled set first, then by oldest read_at", async () => {
     const settledA = { ...kill("a", 1), raidSlug: "nerubar-palace" };
     const settledB = { ...kill("b", 2), raidSlug: "nerubar-palace" };
-    const current = kill("c", 3);
+    const pinnedCurrent = kill("c", 3);
+    // Current content that rides along on a response without being in the
+    // pinned tier's own raid list -- released into the last tier, or added
+    // later. Not in the settled set, so it is priority too (#742 follow-up).
+    const unlisted = { ...kill("d", 4), raidSlug: "unlisted-raid" };
     const due = (
       id: number,
       bossSlug: string,
@@ -1066,26 +1070,29 @@ describe("collectRaiderIoFirstKills", () => {
       getLoggedEncounter: vi.fn(async (raidSlug: string, id: number) => {
         order.push(id);
         return {
-          ...encounter(["a", "b", "c"][id - 1]!),
+          ...encounter(["a", "b", "c", "d"][id - 1]!),
           raidSlug
         };
       })
     });
 
-    await collect([settledA, settledB, current], raiderio, {
-      priorityRaidSlugs: new Set(["tier-mn-1"]),
+    await collect([settledA, settledB, pinnedCurrent, unlisted], raiderio, {
+      settledRaidSlugs: new Set(["nerubar-palace"]),
       storedEncounters: async () => ({
         encounters: [
           due(1, "a", "nerubar-palace", "2026-08-10T00:00:00.000Z"),
           due(2, "b", "nerubar-palace", "2026-08-01T00:00:00.000Z"),
-          due(3, "c", "tier-mn-1", "2026-08-20T00:00:00.000Z")
+          due(3, "c", "tier-mn-1", "2026-08-20T00:00:00.000Z"),
+          due(4, "d", "unlisted-raid", "2026-08-15T00:00:00.000Z")
         ],
         unavailable: []
       })
     });
 
-    // Concurrency 4 starts all three at once, in queue order.
-    expect(order).toEqual([3, 2, 1]);
+    // Concurrency 4 starts all four at once, in queue order: not-settled
+    // raids first (oldest read_at within that group), then the settled
+    // raid's re-reads, oldest read_at first.
+    expect(order).toEqual([4, 3, 2, 1]);
   });
 });
 

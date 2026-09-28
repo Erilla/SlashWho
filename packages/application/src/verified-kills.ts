@@ -33,8 +33,8 @@ export type VerifiedKillsResult = Readonly<{
   askedRaidSlugs?: readonly string[];
   /** The tiers asked only because they were unmarked, evidence only. */
   backCatalogueTierOrdinals?: readonly number[];
-  /** The raids of asked tiers that are not settled. */
-  currentRaidSlugs?: readonly string[];
+  /** Every raid of a settled tier; a re-read outside this set is priority. */
+  settledRaidSlugs?: readonly string[];
 }>;
 
 /**
@@ -104,11 +104,8 @@ export async function raiderIoVerifiedKills(
       ])
     ].sort(),
     backCatalogueTierOrdinals,
-    currentRaidSlugs: raiderIoHistoricTiers
-      .filter(
-        (tier) =>
-          tierOrdinals.includes(tier.ordinal) && !settled.has(tier.ordinal)
-      )
+    settledRaidSlugs: raiderIoHistoricTiers
+      .filter((tier) => settled.has(tier.ordinal))
       .flatMap((tier) => tier.raidSlugs)
       .sort()
   };

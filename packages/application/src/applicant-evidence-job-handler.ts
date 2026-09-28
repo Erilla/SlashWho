@@ -2353,7 +2353,7 @@ export function createApplicantEvidenceJobHandler(
                 key: run.key,
                 kills: firstKills,
                 published: storedFirstKills,
-                priorityRaidSlugs: new Set(verified.currentRaidSlugs ?? []),
+                settledRaidSlugs: new Set(verified.settledRaidSlugs ?? []),
                 storedEncounters: async (ids) =>
                   (await evidence.raiderIoLoggedEncounters?.(ids)) ?? {
                     encounters: [],
