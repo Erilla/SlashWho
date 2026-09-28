@@ -121,6 +121,17 @@ export {
 export type { ThrottledProvider, ThrottleUnit } from "./throttle-attribution";
 export { measuredRepositories } from "./measured-repositories";
 export {
+  auditDrift,
+  auditLedger,
+  comparePages,
+  replayCharacterGroups
+} from "./character-groups-replay";
+export type {
+  ReplayConfig,
+  ReplayFinding,
+  ReplayReport
+} from "./character-groups-replay";
+export {
   compareByLevelThenKey,
   legacyResolveSubjects
 } from "./dossier-subjects";

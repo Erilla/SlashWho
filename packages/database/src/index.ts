@@ -1,6 +1,13 @@
 export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
 export { mergeRaiderIoFirstKills } from "./evidence/merge";
+export { loadCharacterGroupsAudit } from "./character-groups-audit";
+export type {
+  CharacterGroupsAudit,
+  CharacterGroupsLedgerRow,
+  CharacterGroupsObservation,
+  CharacterGroupsPublication
+} from "./character-groups-audit";
 export {
   accountCanonicalEmailMaxLength,
   operatorCanonicalLoginMaxLength
