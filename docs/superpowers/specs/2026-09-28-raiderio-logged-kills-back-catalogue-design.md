@@ -79,8 +79,8 @@ Nothing else about #732 changes:
   in its SQL would have to learn a fourth value.
 - **What counts as marked.** A tier counts as marked only while both hold:
   - its mark is at the current version;
-  - its `read_at` is at most `RAIDER_IO_TIER_READ_TTL_MS` old, which is 90
-    days.
+  - its `read_at` is at most `RAIDER_IO_TIER_READ_TTL_MS` (90 days) plus the
+    character's offset old (see below).
 - **Why marks expire.** Raider.IO can attach a logged encounter to an old kill
   later, for example after a late upload, or it can withdraw one. A mark keyed
   by name also outlives a change of owner. Expiry bounds all of these, at no
@@ -93,11 +93,19 @@ Nothing else about #732 changes:
   The other rules stand: no floor, or a floor that can't be read, keeps every
   tier, and the last pinned tier is always kept.
 - **A back-catalogue tier is evidence only.** A tier asked only because it is
-  unmarked (every raid closed before the floor) contributes to `firstKills`
-  and nothing else. Its raids' kills are kept out of `kills` (search hints)
-  and out of `guilds` (a tier search's attendance walk). So the ask costs
-  Raider.IO one request and costs no Warcraft Logs points, including on a
-  tier-search run.
+  unmarked (every raid closed before the floor) is:
+  - **included in** `firstKills` and `askedRaidSlugs`;
+  - **kept out of** `kills` (search hints) and `guilds` (a tier search's
+    attendance walk).
+
+  So the ask costs Raider.IO one request and costs no Warcraft Logs points,
+  including on a tier-search run. Its raids must be in `askedRaidSlugs`: that
+  is how a complete marking run, and every re-ask after expiry, drops a stored
+  kill that Raider.IO no longer lists, whether withdrawn or belonging to a
+  name's previous owner.
+- **Expiries are spread out.** Each character's TTL is 90 days plus an offset
+  of 0-14 days, taken from a stable hash of the character key. Tiers marked in
+  the same rollout week therefore don't all expire on the same day.
 - **The repository** gains three methods:
   - `raiderIoTierReads(key, since)` returns the ordinals marked at the current
     version with `read_at >= since`;
@@ -105,7 +113,7 @@ Nothing else about #732 changes:
     `GREATEST`, so a worker from an older release can never lower it during a
     rolling deploy, and sets `read_at`;
   - `clearTerminalTiers(key)` also deletes the character's tier reads, in the
-    same statement batch. A rebuild then re-asks Raider.IO even if its first
+    same transaction. A rebuild then re-asks Raider.IO even if its first
     run is rate limited and writes terminal marks again.
 
   If the marks can't be read, they are treated as none. That costs a few
@@ -159,9 +167,14 @@ Nothing else about #732 changes:
   kill, and counts toward `request_cap`. A rebuilt kill with no logged
   encounter costs nothing.
 - **Queue order.** Re-reads queue behind first reads within the 50-read cap.
-  Among re-reads, the run's own kills come first, then rebuilt kills by oldest
-  `read_at`. About 30 days after rollout a veteran's whole back catalogue
-  falls due at once, and it must not crowd out current rosters.
+  Among re-reads, the order is:
+  1. kills in raids of tiers that would be asked anyway (not closed before the
+     floor);
+  2. every other kill, by oldest `read_at`.
+
+  This holds whichever path supplied the kill, the kill list or a rebuild. So
+  neither the rollout's first due date nor a 90-day re-ask lets a whole back
+  catalogue crowd out current rosters.
 - **They count as asked.** The rebuilt kills' raid slugs join `askedRaidSlugs`,
   so `mergeRaiderIoFirstKills` treats them like any asked raid:
   - a kill found again is kept;
@@ -174,7 +187,11 @@ Nothing else about #732 changes:
   today.
 - **The phase ledger.** It counts rebuilt kills when deciding whether any
   logged kill exists. So a run whose only logged kills are rebuilt records the
-  phase as `active`, then `completed` or `limited`, not `skipped`.
+  phase as `active`, then `completed` or `limited`, not `skipped`. To make this
+  possible, `storedRaiderIoFirstKills` loads before the `active`/`skipped`
+  transition, not inside the phase's `try`. If that load throws, the phase is
+  recorded as `active` and then `limited` with `unavailable`, never `skipped`,
+  and the run is partial as today.
 
 ### 4. Presence recorded on the first kill
 
@@ -191,15 +208,46 @@ Nothing else about #732 changes:
   visible before this run". So a kill accepted behind a hidden roster whose
   roster has since opened is checked on every run until one checks it. A
   partial run can no longer carry it past the check.
-- **The merge.** `mergeFirstKill` keeps the incoming flag when the run found
-  the kill again. A carried row keeps its own flag, so a partial run cannot
-  change it either way.
+- **The merge.**
+  - `mergeFirstKill` keeps the incoming flag when the run found the kill
+    again.
+  - When `keepRead` restores `read` from the previous row, because Raider.IO
+    dropped the kill's link, it restores the previous row's flag too.
+  - A carried row keeps its own flag, so a partial run cannot change it
+    either way.
+- **A missing flag reads as false.** This covers a staged
+  `raiderIoFirstKills` collection written before the deploy and published
+  after it, and a publish by an old worker during a rolling deploy. Both reset
+  flags to false, which is the safe direction: the kill is checked again.
 - **Backfill.** Existing rows start false. Each character with a visible
   stored roster then makes one Raider.IO character read on its next run, and
-  every such kill is checked again. No encounter is re-read for it.
-- **A failed check is final.** A kill whose visible roster lacks the character
-  is dropped by the next complete publish. A log's roster doesn't change, so
-  the drop is permanent unless a later re-read finds the character.
+  every such kill is checked again against the stored members. No encounter is
+  re-read for it.
+- **No version bump.** Neither `CURRENT_EVIDENCE_VERSION` nor
+  `CURRENT_COLLECTION_VERSIONS` changes:
+  - the dossier doesn't read the flag;
+  - the backfill already forces the re-check;
+  - a bump would re-collect every character.
+- **A character read with no id.** A character read can succeed but return no
+  Raider.IO id, for example for a tournament profile. That answer doesn't
+  change, so it is permanent, not a shortfall:
+  - a kill that needs a check is emitted as `read` with the flag false,
+    accepted on Raider.IO's attribution, as behind a hidden roster;
+  - the phase does not fall short for it, so the run is not held partial and
+    tiers can still be marked.
+
+  A character read that throws is still a shortfall (`unavailable`), as today.
+  Such a character makes one character read per run while any kill waits on
+  its check.
+- **A failed check is permanent.** A kill whose visible roster lacks the
+  character is dropped by the next complete publish. A log's roster doesn't
+  change, a dropped kill is not stored to be re-read, and a later re-ask meets
+  the same roster.
+- **Name reuse is not closed here.** First-kill rows are keyed by name, so a
+  new owner inherits the old owner's checked rows. This already exists on
+  main. On settled tiers it now lasts only until the tier's mark expires,
+  when the re-ask drops what Raider.IO no longer lists. Storing the Raider.IO
+  id that passed the check would close it fully; that is left out.
 
 ### 5. What does not change
 
@@ -217,7 +265,10 @@ Nothing else about #732 changes:
   tier is always asked.
 - **Back catalogue.** A veteran's logged kills drain at 50 encounter reads a
   run, as #732's rollout backlog does.
-- **Backfill.** At most one character read per character.
+- **Backfill.** One character read on each character's next run. A character
+  whose Raider.IO profile has no id makes one character read per run for as
+  long as a kill waits on its check. That is one request, and it never holds
+  the run partial.
 - **Steady state.** Re-reads of settled kills fall due at most weekly for a
   private roster, and every 30 days for a visible roster or a refusal.
 
@@ -233,16 +284,22 @@ traffic.
   - a mark at an older version is ignored;
   - the no-floor and last-tier rules are unchanged.
 - **`raiderIoVerifiedKills`:** a back-catalogue tier's kills reach
-  `firstKills` but never `kills` or `guilds`.
+  `firstKills`, and its raids reach `askedRaidSlugs`. Its kills never reach
+  `kills` or `guilds`.
+- **The expiry offset:** it is stable for a key, stays within 0-14 days, and
+  differs across keys.
 - **`collectRaiderIoFirstKills`:**
   - a rebuilt kill with a stored answer is re-read only when due, and one
     with a retryable code is a first read;
   - a due re-read that finds the roster hidden turns it private;
   - one that finds the roster visible without the character leaves the kill
     out;
-  - re-reads queue with the run's own kills first, then rebuilt ones by
-    oldest `read_at`;
-  - `established` follows `presenceChecked`.
+  - re-reads queue with current-tier raids first, then everything else by
+    oldest `read_at`, including kills from a re-asked back-catalogue tier;
+  - `established` follows `presenceChecked`;
+  - a character read that succeeds with no id publishes the kill with the flag
+    false and no shortfall, while a character read that throws still falls
+    short.
 - **The presence regression:** a partial run opens a roster without the
   character, and the next run still checks the kill and a complete publish
   drops it.
@@ -252,7 +309,11 @@ traffic.
   - the second complete run does not ask for the tier's kill list, but
     re-reads a due roster from it. It also keeps the tier's rebuilt kills
     that are not due and those with no logged encounter;
-  - a mark older than 90 days asks the tier again;
+  - an expired mark asks the tier again, and a complete re-ask drops a stored
+    kill in that tier that the kill list no longer returns;
+  - a character with no Raider.IO id completes its run and marks its tiers;
+  - a throw from `storedRaiderIoFirstKills` records the phase as `limited`,
+    not `skipped`;
   - nothing is marked after a failed publish, a partial publish, a phase that
     threw, a phase that never ran, or a targeted run;
   - a capped phase marks nothing, the next run asks the tier again, and
@@ -265,6 +326,8 @@ traffic.
   - `GREATEST` keeps a newer version;
   - `clearTerminalTiers` clears the marks;
   - `presence_checked` round-trips through publish and the merge;
+  - `keepRead` restores the previous row's flag;
+  - a staged collection with no flag publishes it as false;
   - the migrations test covers `0067`.
 
 ### 8. Documentation
