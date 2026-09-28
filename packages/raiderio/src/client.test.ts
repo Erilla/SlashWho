@@ -1281,6 +1281,7 @@ describe("Raider.IO logged encounters", () => {
       },
       deathCount: 2,
       vantusCount: 16,
+      shareRaidUntil: "2020-01-04T00:00:00.000Z",
       roster: {
         state: "available",
         members: [
@@ -1360,6 +1361,37 @@ describe("Raider.IO logged encounters", () => {
 
     expect(result.kind).toBe("encounter");
     expect(JSON.stringify(result)).not.toMatch(/Uploader|avatar|sources/);
+  });
+
+  it("reads no end to the guild's sharing where it names none or an unreadable one", async () => {
+    const { client: hidden } = loggedEncounterClient(
+      readHandBuilt("logged-encounter-private-roster")
+    );
+    const { client: pug } = loggedEncounterClient(
+      readRecorded("logged-encounter-no-guild")
+    );
+    const { client: garbled } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      (body) => {
+        details(body).guildPrivacy = {
+          raidComps: true,
+          shareRaidUntil: "not a date"
+        };
+      }
+    );
+
+    await expect(
+      hidden.getLoggedEncounter("tier-mn-1", 700_001)
+    ).resolves.toMatchObject({ shareRaidUntil: null });
+    await expect(
+      pug.getLoggedEncounter("tier-mn-1", 700_002)
+    ).resolves.toMatchObject({ shareRaidUntil: null });
+    await expect(
+      garbled.getLoggedEncounter("tier-mn-1", 700_001)
+    ).resolves.toMatchObject({
+      roster: { state: "available" },
+      shareRaidUntil: null
+    });
   });
 
   it("keeps a guild-less kill with its roster", async () => {

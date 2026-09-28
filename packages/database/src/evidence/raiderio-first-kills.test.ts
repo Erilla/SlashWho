@@ -34,6 +34,7 @@ function encounter(loggedEncounterId: number): RaiderIoLoggedEncounterInput {
     itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
     deathCount: 2,
     vantusCount: 16,
+    shareRaidUntil: null,
     rosterState: "available",
     members: [
       {
@@ -70,7 +71,7 @@ describe("storeRaiderIoLoggedEncounters", () => {
     const ids = (table: string) =>
       writes
         .filter(({ statement }) =>
-          new RegExp(`^\\s*(INSERT INTO|DELETE FROM) ${table}\\b`).test(
+          new RegExp(`^\\s*(INSERT INTO|UPDATE|DELETE FROM) ${table}\\b`).test(
             statement
           )
         )

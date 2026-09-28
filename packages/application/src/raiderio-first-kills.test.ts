@@ -86,6 +86,7 @@ function encounter(
     guild: killGuild,
     deathCount: 2,
     vantusCount: 16,
+    shareRaidUntil: null,
     roster
   };
 }
@@ -104,6 +105,7 @@ function storedRead(
     itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
     deathCount: 2,
     vantusCount: 16,
+    shareRaidUntil: null,
     rosterState: "available",
     members: [bravo, alfa],
     readAt: "2026-09-01T00:00:00.000Z",
@@ -287,44 +289,63 @@ describe("collectRaiderIoFirstKills", () => {
     expect(most).toBe(4);
   });
 
-  it("never reads a visible roster again", async () => {
-    const raiderio = gateway();
-
-    const result = await collect([midnightFalls], raiderio, {
-      storedEncounters: async () => ({
-        encounters: [storedRead({ readAt: "2025-09-28T12:00:00.000Z" })],
-        unavailable: []
-      })
-    });
-
-    expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
-    expect(result.kills[0]).toMatchObject({ encounterState: "read" });
-  });
-
   it.each([
     [
       "a hidden roster read 8 days ago",
       "private",
+      null,
       "2026-09-20T11:00:00.000Z",
       1
     ],
     [
       "a hidden roster read 6 days ago",
       "private",
+      null,
       "2026-09-22T12:00:00.000Z",
       0
     ],
     [
-      "a visible roster read a year ago",
+      "a visible roster past the guild's shareRaidUntil",
       "available",
+      "2026-09-27T00:00:00.000Z",
+      "2026-09-01T00:00:00.000Z",
+      1
+    ],
+    [
+      "a visible roster inside the guild's shareRaidUntil, read a year ago",
+      "available",
+      "2026-10-20T00:00:00.000Z",
       "2025-09-28T12:00:00.000Z",
+      0
+    ],
+    [
+      "a visible roster with no shareRaidUntil read 31 days ago",
+      "available",
+      null,
+      "2026-08-28T11:00:00.000Z",
+      1
+    ],
+    [
+      "a visible roster with no shareRaidUntil read 29 days ago",
+      "available",
+      null,
+      "2026-08-30T12:00:00.000Z",
+      0
+    ],
+    [
+      "a visible roster already read again since its shareRaidUntil passed",
+      "available",
+      "2026-09-10T00:00:00.000Z",
+      "2026-09-15T00:00:00.000Z",
       0
     ]
   ] as const)(
-    "reads a hidden roster again after a week, and a visible one never: %s",
-    async (_name, rosterState, readAt, reads) => {
-      // Break caught (#734 review): a guild can open its roster after the
-      // kill, and a roster stored as hidden then stayed hidden for good.
+    "reads a stored roster again only when it is due: %s",
+    async (_name, rosterState, shareRaidUntil, readAt, reads) => {
+      // Breaks caught (#734 review): a guild can open its roster after the
+      // kill, and a roster stored as hidden then stayed hidden for good; and a
+      // guild can hide one after it, and a roster stored as visible was then
+      // shown for good.
       const raiderio = gateway();
 
       const result = await collect([midnightFalls], raiderio, {
@@ -332,6 +353,7 @@ describe("collectRaiderIoFirstKills", () => {
           encounters: [
             storedRead({
               rosterState,
+              shareRaidUntil,
               members: rosterState === "private" ? [] : [bravo, alfa],
               readAt
             })
@@ -345,6 +367,150 @@ describe("collectRaiderIoFirstKills", () => {
       expect(result.encounters.get(700_001)?.rosterState).toBe(
         reads === 1 ? "available" : rosterState
       );
+    }
+  );
+
+  it.each([
+    [
+      "the guild hid its compositions",
+      async () =>
+        encounter("midnight-falls", { state: "unavailable", reason: "private" })
+    ],
+    [
+      "Raider.IO answers 403",
+      async () => ({ kind: "limitation" as const, code: "private" as const })
+    ]
+  ])(
+    "turns a visible roster private when a re-read finds it hidden: %s",
+    async (_name, answer) => {
+      const saved: RaiderIoLoggedEncounterAnswers[] = [];
+      const visible = storedRead({
+        shareRaidUntil: "2026-09-27T00:00:00.000Z",
+        readAt: "2026-09-01T00:00:00.000Z"
+      });
+      const raiderio = gateway({ getLoggedEncounter: vi.fn(answer) });
+
+      const result = await collect([midnightFalls], raiderio, {
+        published: [
+          {
+            raidSlug: "tier-mn-1",
+            bossSlug: "midnight-falls",
+            killedAt: visible.defeatedAt,
+            guild: killGuild,
+            loggedEncounterId: 700_001,
+            encounterState: "read",
+            encounterLimitationCode: null,
+            historicWorldRank: null,
+            historicRankCheckedAt: null
+          }
+        ],
+        storedEncounters: async () => ({
+          encounters: [visible],
+          unavailable: []
+        }),
+        saveAnswers: async (answers) => void saved.push(answers)
+      });
+
+      const { readAt, ...kept } = visible;
+      void readAt;
+      const hidden = {
+        ...kept,
+        shareRaidUntil: null,
+        rosterState: "private" as const,
+        members: []
+      };
+      expect(saved).toEqual([{ encounters: [hidden], unavailable: [] }]);
+      expect(result.encounters.get(700_001)).toEqual(hidden);
+      // The kill already accepted stays accepted.
+      expect(result.limitation).toBeNull();
+      expect(result.kills[0]).toMatchObject({
+        encounterState: "read",
+        killedAt: visible.defeatedAt
+      });
+    }
+  );
+
+  it("keeps the kill as first read when a re-read refreshes the roster", async () => {
+    const saved: RaiderIoLoggedEncounterAnswers[] = [];
+    const visible = storedRead({ readAt: "2026-08-01T00:00:00.000Z" });
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async () => ({
+        ...encounter("midnight-falls", {
+          state: "available",
+          members: [alfa]
+        }),
+        defeatedAt: "2026-07-20T18:00:00.000Z",
+        deathCount: 9,
+        shareRaidUntil: "2026-12-01T00:00:00.000Z"
+      }))
+    });
+
+    await collect([midnightFalls], raiderio, {
+      storedEncounters: async () => ({
+        encounters: [visible],
+        unavailable: []
+      }),
+      saveAnswers: async (answers) => void saved.push(answers)
+    });
+
+    const { readAt, ...kept } = visible;
+    void readAt;
+    expect(saved).toEqual([
+      {
+        encounters: [
+          {
+            ...kept,
+            shareRaidUntil: "2026-12-01T00:00:00.000Z",
+            members: [alfa]
+          }
+        ],
+        unavailable: []
+      }
+    ]);
+  });
+
+  it.each([
+    [
+      "not_found",
+      async () => ({ kind: "limitation" as const, code: "not_found" as const })
+    ],
+    ["schema_drift", async () => encounter("chimaerus-the-undreamt-god")],
+    [
+      "rate_limited",
+      async () => ({
+        kind: "limitation" as const,
+        code: "rate_limited" as const
+      })
+    ],
+    [
+      "a thrown read",
+      async (): Promise<LoggedEncounter> => {
+        throw new Error("raiderio_down");
+      }
+    ]
+  ])(
+    "never loses a visible roster to a re-read that fails: %s",
+    async (_name, answer) => {
+      const saved: RaiderIoLoggedEncounterAnswers[] = [];
+      const visible = storedRead({ readAt: "2026-08-01T00:00:00.000Z" });
+      const raiderio = gateway({ getLoggedEncounter: vi.fn(answer) });
+
+      const result = await collect([midnightFalls], raiderio, {
+        storedEncounters: async () => ({
+          encounters: [visible],
+          unavailable: []
+        }),
+        saveAnswers: async (answers) => void saved.push(answers)
+      });
+
+      const { readAt, ...kept } = visible;
+      void readAt;
+      expect(result.encounters.get(700_001)).toEqual(kept);
+      // Saved, if at all, unchanged: only its `read_at` moves.
+      for (const answers of saved) {
+        expect(answers).toEqual({ encounters: [kept], unavailable: [] });
+      }
+      expect(result.kills[0]).toMatchObject({ encounterState: "read" });
     }
   );
 
@@ -639,6 +805,35 @@ describe("collectRaiderIoFirstKills", () => {
         (item) =>
           item.encounterState === "unavailable" &&
           item.encounterLimitationCode === "unavailable"
+      )
+    ).toBe(true);
+  });
+
+  it("stops sending reads once one is rate limited, and abandons the queue", async () => {
+    // Break caught (#734 review): a 429 limited the phase but every queued
+    // read was still sent into it.
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async () => ({
+        kind: "limitation" as const,
+        code: "rate_limited" as const
+      }))
+    });
+
+    const result = await collect(
+      Array.from({ length: 6 }, (_, index) =>
+        kill(`boss-${String(index + 1)}`, index + 1)
+      ),
+      raiderio
+    );
+
+    // The four already in flight when the first 429 came back, and no more.
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(4);
+    expect(result.limitation).toEqual({ code: "rate_limited" });
+    expect(
+      result.kills.every(
+        (item) =>
+          item.encounterState === "unavailable" &&
+          item.encounterLimitationCode === "rate_limited"
       )
     ).toBe(true);
   });

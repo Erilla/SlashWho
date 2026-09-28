@@ -539,9 +539,10 @@ export interface RaiderIoLoggedEncounterMemberInput {
 
 /**
  * Raider.IO's parsed combat log of one Mythic kill. Shared: stored once for
- * every character and run that names it. A visible roster is kept as first
- * read; a private one may be replaced by a later read. Never its uploaders,
- * never the response.
+ * every character and run that names it. The kill is kept as first read; a
+ * later read may change only the roster and the guild's privacy, so a guild
+ * that hides its roster after the kill hides it here too. Never its
+ * uploaders, never the response.
  */
 export interface RaiderIoLoggedEncounterInput {
   loggedEncounterId: number;
@@ -555,6 +556,11 @@ export interface RaiderIoLoggedEncounterInput {
   itemLevel: { average: number; min: number; max: number };
   deathCount: number;
   vantusCount: number;
+  /**
+   * Until when the guild shares its raids, as Raider.IO last said, or null
+   * where it named no end. A visible roster is read again once it has passed.
+   */
+  shareRaidUntil: string | null;
   rosterState: "available" | "private";
   /** Empty when the roster is private. */
   members: readonly RaiderIoLoggedEncounterMemberInput[];
@@ -1170,8 +1176,9 @@ export interface EvidenceRepository {
   /**
    * Stores what a run learned about logged encounters. Outside any snapshot
    * transaction on purpose: a reader reaches an encounter only through a
-   * published run's first kills. A visible roster is never overwritten, and
-   * a permanent refusal never overwrites a read.
+   * published run's first kills. A read kill keeps its kill fields as first
+   * read and takes only a later read's roster and privacy, and a permanent
+   * refusal never overwrites a read.
    */
   saveRaiderIoLoggedEncounters?(
     answers: RaiderIoLoggedEncounterAnswers,

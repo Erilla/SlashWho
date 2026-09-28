@@ -199,7 +199,17 @@ const loggedEncounterResponseSchema = z.object({
       })
       .nullable()
       .optional(),
-    guildPrivacy: z.object({ raidComps: z.boolean() }).nullable().optional(),
+    guildPrivacy: z
+      .object({
+        raidComps: z.boolean(),
+        // Until when the guild shares its raids; a roster read as visible is
+        // read again once it has passed, in case the guild has since hidden
+        // it. Read leniently: an unreadable end is no end, never a refusal of
+        // the kill.
+        shareRaidUntil: z.string().nullable().optional()
+      })
+      .nullable()
+      .optional(),
     roster: z
       .array(
         z.object({
@@ -232,6 +242,12 @@ const lowerCase = (value: string) => value.toLocaleLowerCase("en-US");
 const memberRealm = (value: string) =>
   lowerCase(value).normalize("NFD").replace(/\p{M}/gu, "");
 
+function instantOrNull(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? new Date(at).toISOString() : null;
+}
+
 function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
   const { killDetails } = loggedEncounterResponseSchema.parse(value);
   // A first kill's log is a successful Mythic pull. Anything else is not the
@@ -262,6 +278,7 @@ function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
       : null,
     deathCount: killDetails.log.deaths.count,
     vantusCount: killDetails.log.vantus.count,
+    shareRaidUntil: instantOrNull(killDetails.guildPrivacy?.shareRaidUntil),
     roster: hidden
       ? { state: "unavailable", reason: "private" }
       : {

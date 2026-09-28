@@ -6,11 +6,13 @@
 -- in the same transaction as the run's other evidence. The uploaders
 -- (`log.sources`) and the raw response are never stored.
 --
--- A row is one of two answers. A read carries the kill: a visible roster is
--- kept as first read, and a private one may be replaced by a later read. An
--- unavailable row is a permanent refusal (a deleted log, a 403, or a log of
--- another kill) with only its code, so later runs do not ask again until it
--- is due a re-read. `read_at` dates either answer.
+-- A row is one of two answers. A read carries the kill, kept as first read;
+-- a later read changes only the roster and `share_raid_until`, so a roster a
+-- guild hides after the kill is hidden here too. An unavailable row is a
+-- permanent refusal (a deleted log, a 403, or a log of another kill) with only
+-- its code, so later runs do not ask again until it is due a re-read.
+-- `read_at` dates either answer; `share_raid_until` is Raider.IO's
+-- `guildPrivacy.shareRaidUntil`, after which a visible roster is read again.
 CREATE TABLE "raiderio_logged_encounters" (
 	"logged_encounter_id" bigint PRIMARY KEY NOT NULL,
 	"unavailable_code" text,
@@ -28,8 +30,9 @@ CREATE TABLE "raiderio_logged_encounters" (
 	"death_count" integer,
 	"vantus_count" integer,
 	"roster_state" text,
+	"share_raid_until" timestamp with time zone,
 	"read_at" timestamp with time zone NOT NULL,
-	CONSTRAINT "raiderio_logged_encounters_answer_check" CHECK (("unavailable_code" IS NULL AND "raid_slug" IS NOT NULL AND "boss_slug" IS NOT NULL AND "pulled_at" IS NOT NULL AND "defeated_at" IS NOT NULL AND "duration_ms" IS NOT NULL AND "item_level_average" IS NOT NULL AND "item_level_min" IS NOT NULL AND "item_level_max" IS NOT NULL AND "death_count" IS NOT NULL AND "vantus_count" IS NOT NULL AND "roster_state" IS NOT NULL) OR ("unavailable_code" IN ('not_found', 'private', 'schema_drift') AND "raid_slug" IS NULL AND "boss_slug" IS NULL AND "pulled_at" IS NULL AND "defeated_at" IS NULL AND "duration_ms" IS NULL AND "guild_name" IS NULL AND "item_level_average" IS NULL AND "item_level_min" IS NULL AND "item_level_max" IS NULL AND "death_count" IS NULL AND "vantus_count" IS NULL AND "roster_state" IS NULL)),
+	CONSTRAINT "raiderio_logged_encounters_answer_check" CHECK (("unavailable_code" IS NULL AND "raid_slug" IS NOT NULL AND "boss_slug" IS NOT NULL AND "pulled_at" IS NOT NULL AND "defeated_at" IS NOT NULL AND "duration_ms" IS NOT NULL AND "item_level_average" IS NOT NULL AND "item_level_min" IS NOT NULL AND "item_level_max" IS NOT NULL AND "death_count" IS NOT NULL AND "vantus_count" IS NOT NULL AND "roster_state" IS NOT NULL) OR ("unavailable_code" IN ('not_found', 'private', 'schema_drift') AND "raid_slug" IS NULL AND "boss_slug" IS NULL AND "pulled_at" IS NULL AND "defeated_at" IS NULL AND "duration_ms" IS NULL AND "guild_name" IS NULL AND "item_level_average" IS NULL AND "item_level_min" IS NULL AND "item_level_max" IS NULL AND "death_count" IS NULL AND "vantus_count" IS NULL AND "roster_state" IS NULL AND "share_raid_until" IS NULL)),
 	CONSTRAINT "raiderio_logged_encounters_roster_state_check" CHECK ("roster_state" IS NULL OR "roster_state" IN ('available', 'private')),
 	CONSTRAINT "raiderio_logged_encounters_guild_identity_check" CHECK (("guild_name" IS NULL AND "guild_realm" IS NULL AND "guild_region" IS NULL) OR ("guild_name" IS NOT NULL AND "guild_realm" IS NOT NULL AND "guild_region" IS NOT NULL)),
 	CONSTRAINT "raiderio_logged_encounters_counts_check" CHECK ("duration_ms" >= 0 AND "death_count" >= 0 AND "vantus_count" >= 0)

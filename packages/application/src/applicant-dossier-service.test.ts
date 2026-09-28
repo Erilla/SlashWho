@@ -1071,6 +1071,7 @@ describe("applicant dossier service", () => {
             itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
             deathCount: 2,
             vantusCount: 16,
+            shareRaidUntil: null,
             rosterState: "private",
             members: [],
             roleCounts: { tank: 0, healer: 0, dps: 0 },

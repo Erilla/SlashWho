@@ -139,6 +139,11 @@ export type LoggedEncounter = Readonly<{
   guild: Readonly<{ name: string; realm: string; region: string }> | null;
   deathCount: number;
   vantusCount: number;
+  /**
+   * `guildPrivacy.shareRaidUntil`: until when the guild shares its raids, or
+   * null when Raider.IO names no end.
+   */
+  shareRaidUntil: string | null;
   roster:
     | Readonly<{
         state: "available";

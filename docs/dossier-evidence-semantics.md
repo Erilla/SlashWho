@@ -44,18 +44,26 @@ that guild gets none.
 
 What is kept of a logged encounter is fixed: the kill's pull and defeat times,
 duration and item levels, the raid and boss, the guild, whether the roster is
-visible, deaths and Vantus runes, and each raider's Raider.IO id, name, realm,
+visible and until when the guild shares its raids (`shareRaidUntil`), deaths
+and Vantus runes, and each raider's Raider.IO id, name, realm,
 region, class, specialisation, role and item level. The uploaders
 (`log.sources`, which can hold a BattleTag or Discord handle) and the raw
 response are never kept. A logged encounter is stored once and shared; each
-run publishes its first kills with the rest of its snapshot. A visible roster
-is never read again: the kill and who was in it do not change. A roster the
-guild hid is read again once a week old, since a guild can open it later. A
+run publishes its first kills with the rest of its snapshot. The kill is kept
+as first read; only the roster and the guild's privacy can change. A visible
+roster is read again once the guild's `shareRaidUntil` has passed, or after 30
+days where Raider.IO named no end, since a guild can hide its compositions
+later: a re-read that finds it hidden (or a 403) makes it private and deletes
+its raiders, and the dossier then shows "Roster unavailable" because the
+guild hid it. A deleted log, a log of another kill or a failed read never
+takes a visible roster away. A roster the guild hid is read again once a week
+old, since a guild can open it later. A
 permanent refusal (a deleted log, a 403, or a log of another kill) is stored
 too, so it is not asked about again for 30 days, and the kill counts as having
 no logged encounter meanwhile. A kill accepted while its roster was hidden was
 never presence-checked; once a re-read shows the roster, it is checked like
-any newly read kill.
+any newly read kill. A kill already accepted stays accepted when its roster
+becomes hidden.
 
 A raider removed from SlashWho (`suppressed_characters`) is left off every
 roster a dossier shows, while the player and role counts stay Raider.IO's. The
@@ -72,7 +80,8 @@ States stay distinct:
 - A kill with no guild (a pug) shows "—", as elsewhere.
 
 A failed or capped logged-encounter read makes the run partial, so it never
-removes a stored kill; a run that could not read the kill list at all carries
+removes a stored kill. A read that throws or is rate limited stops the phase:
+no further read is sent that run; a run that could not read the kill list at all carries
 every stored Raider.IO first kill forward unchanged. No shortfall of any code
 — a capped backlog (`request_cap`), a rate limit (`rate_limited`) or a failed
 read (`unavailable`) — schedules a whole-run retry of its own: a retry would

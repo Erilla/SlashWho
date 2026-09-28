@@ -48,6 +48,7 @@ type EncounterRow = {
   death_count: number | null;
   vantus_count: number | null;
   roster_state: "available" | "private" | null;
+  share_raid_until: Date | null;
   read_at: Date;
 };
 
@@ -147,7 +148,8 @@ async function selectEncounterRows(
     `SELECT logged_encounter_id, unavailable_code, raid_slug, boss_slug,
             pulled_at, defeated_at, duration_ms, guild_name, guild_realm,
             guild_region, item_level_average, item_level_min, item_level_max,
-            death_count, vantus_count, roster_state, read_at
+            death_count, vantus_count, roster_state, share_raid_until,
+            read_at
        FROM raiderio_logged_encounters
       WHERE logged_encounter_id = ANY($1::bigint[])
       ORDER BY logged_encounter_id`,
@@ -213,6 +215,7 @@ function mapEncounter(
     },
     deathCount: required(row.death_count),
     vantusCount: required(row.vantus_count),
+    shareRaidUntil: row.share_raid_until?.toISOString() ?? null,
     rosterState: required(row.roster_state),
     members: members.map((member) => ({
       raiderIoCharacterId: Number(member.raiderio_character_id),
@@ -329,11 +332,12 @@ export async function loadPublishedRaiderIoFirstKills(
 }
 
 /**
- * Stores what one run learned, in one transaction. A visible roster is kept
- * as first read: the kill and who was in it never change. A private roster
- * or a permanent refusal is replaced by a later read. A permanent refusal
- * replaces only another refusal, never a read: a later failure does not
- * unread a kill.
+ * Stores what one run learned, in one transaction. A read kill is kept as
+ * first read; a later read of it changes only its roster and the guild's
+ * privacy, so a roster the guild has since hidden turns private and its
+ * raiders are deleted, and one it has opened is filled. A permanent refusal
+ * replaces a stored refusal and anything a read replaces, but never a read: a
+ * later failure does not unread a kill.
  */
 export async function storeRaiderIoLoggedEncounters(
   pool: Pool,
@@ -373,53 +377,73 @@ export async function storeRaiderIoLoggedEncounters(
         );
         continue;
       }
-      const written = await client.query(
-        `INSERT INTO raiderio_logged_encounters (
-           logged_encounter_id, unavailable_code, raid_slug, boss_slug,
-           pulled_at, defeated_at, duration_ms, guild_name, guild_realm,
-           guild_region, item_level_average, item_level_min, item_level_max,
-           death_count, vantus_count, roster_state, read_at
-         ) VALUES ($1::bigint, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                   $12, $13, $14, $15, $16)
-         ON CONFLICT (logged_encounter_id) DO UPDATE SET
-           unavailable_code = NULL,
-           raid_slug = EXCLUDED.raid_slug,
-           boss_slug = EXCLUDED.boss_slug,
-           pulled_at = EXCLUDED.pulled_at,
-           defeated_at = EXCLUDED.defeated_at,
-           duration_ms = EXCLUDED.duration_ms,
-           guild_name = EXCLUDED.guild_name,
-           guild_realm = EXCLUDED.guild_realm,
-           guild_region = EXCLUDED.guild_region,
-           item_level_average = EXCLUDED.item_level_average,
-           item_level_min = EXCLUDED.item_level_min,
-           item_level_max = EXCLUDED.item_level_max,
-           death_count = EXCLUDED.death_count,
-           vantus_count = EXCLUDED.vantus_count,
-           roster_state = EXCLUDED.roster_state,
-           read_at = EXCLUDED.read_at
-         WHERE raiderio_logged_encounters.roster_state IS DISTINCT FROM 'available'`,
+      // A kill already read keeps its kill fields; only what the guild may
+      // change since, its roster and how long it shares it, is written.
+      const refreshed = await client.query(
+        `UPDATE raiderio_logged_encounters
+            SET roster_state = $2,
+                share_raid_until = $3,
+                read_at = $4
+          WHERE logged_encounter_id = $1::bigint
+            AND unavailable_code IS NULL`,
         [
           encounter.loggedEncounterId,
-          encounter.raidSlug,
-          encounter.bossSlug,
-          encounter.pulledAt,
-          encounter.defeatedAt,
-          encounter.durationMs,
-          encounter.guild?.name ?? null,
-          encounter.guild?.realm ?? null,
-          encounter.guild?.region ?? null,
-          encounter.itemLevel.average,
-          encounter.itemLevel.min,
-          encounter.itemLevel.max,
-          encounter.deathCount,
-          encounter.vantusCount,
           encounter.rosterState,
+          encounter.shareRaidUntil,
           readAt
         ]
       );
-      // A visible roster already held: nothing was written, nothing changes.
-      if (written.rowCount !== 1) continue;
+      if (refreshed.rowCount !== 1) {
+        const written = await client.query(
+          `INSERT INTO raiderio_logged_encounters (
+             logged_encounter_id, unavailable_code, raid_slug, boss_slug,
+             pulled_at, defeated_at, duration_ms, guild_name, guild_realm,
+             guild_region, item_level_average, item_level_min, item_level_max,
+             death_count, vantus_count, roster_state, share_raid_until, read_at
+           ) VALUES ($1::bigint, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                     $11, $12, $13, $14, $15, $16, $17)
+           ON CONFLICT (logged_encounter_id) DO UPDATE SET
+             unavailable_code = NULL,
+             raid_slug = EXCLUDED.raid_slug,
+             boss_slug = EXCLUDED.boss_slug,
+             pulled_at = EXCLUDED.pulled_at,
+             defeated_at = EXCLUDED.defeated_at,
+             duration_ms = EXCLUDED.duration_ms,
+             guild_name = EXCLUDED.guild_name,
+             guild_realm = EXCLUDED.guild_realm,
+             guild_region = EXCLUDED.guild_region,
+             item_level_average = EXCLUDED.item_level_average,
+             item_level_min = EXCLUDED.item_level_min,
+             item_level_max = EXCLUDED.item_level_max,
+             death_count = EXCLUDED.death_count,
+             vantus_count = EXCLUDED.vantus_count,
+             roster_state = EXCLUDED.roster_state,
+             share_raid_until = EXCLUDED.share_raid_until,
+             read_at = EXCLUDED.read_at
+           WHERE raiderio_logged_encounters.unavailable_code IS NOT NULL`,
+          [
+            encounter.loggedEncounterId,
+            encounter.raidSlug,
+            encounter.bossSlug,
+            encounter.pulledAt,
+            encounter.defeatedAt,
+            encounter.durationMs,
+            encounter.guild?.name ?? null,
+            encounter.guild?.realm ?? null,
+            encounter.guild?.region ?? null,
+            encounter.itemLevel.average,
+            encounter.itemLevel.min,
+            encounter.itemLevel.max,
+            encounter.deathCount,
+            encounter.vantusCount,
+            encounter.rosterState,
+            encounter.shareRaidUntil,
+            readAt
+          ]
+        );
+        // Another run's read landed between the two statements; it stands.
+        if (written.rowCount !== 1) continue;
+      }
       await client.query(
         `DELETE FROM raiderio_logged_encounter_members
           WHERE logged_encounter_id = $1::bigint`,

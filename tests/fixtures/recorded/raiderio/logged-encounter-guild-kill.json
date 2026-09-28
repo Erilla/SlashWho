@@ -22,7 +22,10 @@
         "realm": { "slug": "twisting-nether" },
         "region": { "slug": "eu" }
       },
-      "guildPrivacy": { "raidComps": true },
+      "guildPrivacy": {
+        "raidComps": true,
+        "shareRaidUntil": "2020-01-04T00:00:00.000Z"
+      },
       "roster": [
         {
           "character": {
@@ -96,7 +99,6 @@
     "killDetails.guild.realm.name",
     "killDetails.guildPrivacy.raidPercents",
     "killDetails.guildPrivacy.raidPulls",
-    "killDetails.guildPrivacy.shareRaidUntil",
     "killDetails.guildPrivacy.wereRaidCompsRestricted",
     "killDetails.guildPrivacy.wereRaidPercentsRestricted",
     "killDetails.guildPrivacy.wereRaidPullsRestricted",

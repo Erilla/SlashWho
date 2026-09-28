@@ -5657,6 +5657,7 @@ describe("applicant evidence job handler", () => {
       guild: killGuild,
       deathCount: 2,
       vantusCount: 16,
+      shareRaidUntil: null,
       roster: {
         state: "available" as const,
         members: [
@@ -5938,6 +5939,7 @@ describe("applicant evidence job handler", () => {
             itemLevel: encounter.itemLevel,
             deathCount: 2,
             vantusCount: 16,
+            shareRaidUntil: null,
             rosterState: "available",
             members: encounter.roster.members,
             readAt: "2026-09-01T00:00:00.000Z"

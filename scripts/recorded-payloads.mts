@@ -375,6 +375,10 @@ export const policies: Readonly<Record<Endpoint, EndpointPolicy>> = {
       { path: "killDetails.guild.region.slug", leaf: { kind: "slug" } },
       { path: "killDetails.guildPrivacy.raidComps", leaf: { kind: "boolean" } },
       {
+        path: "killDetails.guildPrivacy.shareRaidUntil",
+        leaf: { kind: "iso-timestamp" }
+      },
+      {
         path: "killDetails.roster[].character.id",
         leaf: { kind: "opaque-id" }
       },

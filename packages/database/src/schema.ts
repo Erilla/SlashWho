@@ -1443,12 +1443,13 @@ export const raiderIoLoggedEncounters = pgTable(
     deathCount: integer("death_count"),
     vantusCount: integer("vantus_count"),
     rosterState: text("roster_state"),
+    shareRaidUntil: timestamp("share_raid_until", { withTimezone: true }),
     readAt: timestamp("read_at", { withTimezone: true }).notNull()
   },
   (table) => [
     check(
       "raiderio_logged_encounters_answer_check",
-      sql`(${table.unavailableCode} IS NULL AND ${table.raidSlug} IS NOT NULL AND ${table.bossSlug} IS NOT NULL AND ${table.pulledAt} IS NOT NULL AND ${table.defeatedAt} IS NOT NULL AND ${table.durationMs} IS NOT NULL AND ${table.itemLevelAverage} IS NOT NULL AND ${table.itemLevelMin} IS NOT NULL AND ${table.itemLevelMax} IS NOT NULL AND ${table.deathCount} IS NOT NULL AND ${table.vantusCount} IS NOT NULL AND ${table.rosterState} IS NOT NULL) OR (${table.unavailableCode} IN ('not_found', 'private', 'schema_drift') AND ${table.raidSlug} IS NULL AND ${table.bossSlug} IS NULL AND ${table.pulledAt} IS NULL AND ${table.defeatedAt} IS NULL AND ${table.durationMs} IS NULL AND ${table.guildName} IS NULL AND ${table.itemLevelAverage} IS NULL AND ${table.itemLevelMin} IS NULL AND ${table.itemLevelMax} IS NULL AND ${table.deathCount} IS NULL AND ${table.vantusCount} IS NULL AND ${table.rosterState} IS NULL)`
+      sql`(${table.unavailableCode} IS NULL AND ${table.raidSlug} IS NOT NULL AND ${table.bossSlug} IS NOT NULL AND ${table.pulledAt} IS NOT NULL AND ${table.defeatedAt} IS NOT NULL AND ${table.durationMs} IS NOT NULL AND ${table.itemLevelAverage} IS NOT NULL AND ${table.itemLevelMin} IS NOT NULL AND ${table.itemLevelMax} IS NOT NULL AND ${table.deathCount} IS NOT NULL AND ${table.vantusCount} IS NOT NULL AND ${table.rosterState} IS NOT NULL) OR (${table.unavailableCode} IN ('not_found', 'private', 'schema_drift') AND ${table.raidSlug} IS NULL AND ${table.bossSlug} IS NULL AND ${table.pulledAt} IS NULL AND ${table.defeatedAt} IS NULL AND ${table.durationMs} IS NULL AND ${table.guildName} IS NULL AND ${table.itemLevelAverage} IS NULL AND ${table.itemLevelMin} IS NULL AND ${table.itemLevelMax} IS NULL AND ${table.deathCount} IS NULL AND ${table.vantusCount} IS NULL AND ${table.rosterState} IS NULL AND ${table.shareRaidUntil} IS NULL)`
     ),
     check(
       "raiderio_logged_encounters_roster_state_check",

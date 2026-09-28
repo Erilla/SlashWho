@@ -60,7 +60,8 @@ Both endpoints are internal website endpoints. We already call
      item-level average, minimum and maximum.
    - `boss.slug`, `raid.slug` and `raid.difficulty`.
    - `guild`: name, realm slug and region slug, or `null` for a pug.
-   - `guildPrivacy.raidComps`.
+   - `guildPrivacy.raidComps` and `guildPrivacy.shareRaidUntil` (an ISO
+     instant, or none).
    - `log.deaths.count` and `log.vantus.count`.
    - For each roster entry: `character.id`, `name`, `realm.slug`,
      `region.slug`, `class.name`, `spec.name` and `spec.role`
@@ -93,17 +94,31 @@ Both endpoints are internal website endpoints. We already call
 
 - **When it runs.** A new `raiderio_logged_encounters` phase follows
   `raiderio_rankings` and uses the same bounds: at most 50 encounter reads per
-  run (`request_cap` beyond that), 4 at a time, and a thrown error abandons
-  the queue and marks the phase `limited`.
+  run (`request_cap` beyond that), 4 at a time, and a thrown error or a
+  `rate_limited` answer abandons the queue and marks the phase `limited`: no
+  further read is sent once Raider.IO has said to stop.
 - **What is read again.** Before reading, the phase looks up every id in
   `raiderio_logged_encounters` (see storage):
-  - a kill stored with a **visible roster** is never read again. The kill and
-    who was in it do not change. A guild that hides its compositions later
-    does not withdraw a roster already read;
+  - a kill stored with a **visible roster** is read again once the guild's
+    stored `shareRaidUntil` has passed, or, where Raider.IO named none, once
+    its `read_at` is more than 30 days old, because a guild can hide its
+    compositions after the kill. (A re-read made after `shareRaidUntil` that
+    still finds the roster visible, and so stores the same past end, waits
+    the ordinary 30 days rather than costing a read every run.) A re-read
+    that finds the roster hidden (`raidComps` false, a missing or empty
+    roster, or a 403 `private`) turns the stored row private and deletes its
+    raiders in the same transaction; one that finds it still visible
+    refreshes the roster. `not_found`, `schema_drift` and transient failures
+    never downgrade a visible roster: a refusal only moves `read_at` on;
   - a kill stored with a **private roster** is read again once its `read_at`
     is more than 7 days old, because a guild can open its roster after the
     kill. A later read that shows the roster replaces the stored one; a later
     refusal only moves `read_at` on, and never unreads the kill;
+
+  Whatever a re-read finds, the kill itself (its times, duration, item
+  levels, guild, deaths and Vantus runes) stays as first read; only the
+  roster and the guild's privacy change. A kill already accepted stays
+  accepted when its roster becomes hidden.
   - a **permanent answer** (`not_found`, a 403 `private`, or `schema_drift`,
     which includes a log of another boss) is stored as an unavailable row
     with its code and `read_at`, and asked again only once it is more than
@@ -123,7 +138,10 @@ Both endpoints are internal website endpoints. We already call
   would spend Warcraft Logs points to read Raider.IO. The backlog (at rollout,
   every stored character's back catalogue is unread) drains through ordinary
   runs, 50 at a time, and meanwhile the unread kills show "not read yet".
-  `rate_limited` and `unavailable` keep their ordinary retry.
+  The same holds for `rate_limited` and `unavailable`: no shortfall of this
+  phase, whatever its code, schedules a whole-run retry. The run is partial,
+  so nothing stored is dropped, and the character's next ordinary run reads
+  again.
 - **No worker-wide limiter.** The per-run bounds stand: 50 encounter reads,
   50 rank requests and at most one character read. A 429 limits the phase.
   If the rollout makes many runs partial at once, they drain as above.
@@ -182,15 +200,18 @@ columns.
   answers:
   - **read**: raid slug, boss slug, `pulled_at`, `defeated_at` and
     `duration_ms`; guild name, realm and region, all nullable; item-level
-    average, minimum and maximum; `death_count` and `vantus_count`; and
-    `roster_state` (`available | private`);
+    average, minimum and maximum; `death_count` and `vantus_count`;
+    `roster_state` (`available | private`); and `share_raid_until`, the
+    guild's `shareRaidUntil`, nullable;
   - **unavailable**: only `unavailable_code`
     (`not_found | private | schema_drift`), every kill column null.
 
   Both carry `read_at`. A check constraint enforces one shape or the other.
-  Storage enforces the re-read rules: an `available` row is never
-  overwritten, a `private` or unavailable row may be replaced by a later
-  read, and an unavailable answer never overwrites a read.
+  Storage enforces the re-read rules: a later read of a read row changes
+  only `roster_state`, `share_raid_until`, `read_at` and the roster rows
+  (deleted when the roster turns private), never the kill columns; an
+  unavailable row may be replaced by a later read; and an unavailable answer
+  never overwrites a read.
 
   It is shared across characters and runs. It is written outside the snapshot
   transaction, but no reader can reach it except through a published run's
@@ -360,8 +381,10 @@ the recorded fixtures already are; the repository is public.
 - **Catalogue.** Every Raider.IO slug pair places a boss, Grong included, and
   the match rule matches either Grong.
 - **Application.** The phase's cap and concurrency, the re-read rules (a
-  visible roster never, a private one after 7 days, a permanent answer after
-  30), a deleted log asked about once across two runs, stored answers never
+  visible roster once its `shareRaidUntil` has passed or after 30 days
+  without one, a private one after 7 days, a permanent answer after 30), a
+  visible roster re-read as hidden turning private, a 429 abandoning the
+  queue, a deleted log asked about once across two runs, stored answers never
   filling the cap, the presence check by character id, a limited phase making
   the run partial, a capped run scheduling no retry, and the rank rule: a
   guild's first kill ranked and a later kill with it unranked, pinned with a
@@ -402,5 +425,3 @@ the removal rule.
   Raider.IO URL.
 - A worker-wide Raider.IO rate limiter. The per-run bounds stand, and a 429
   limits the phase.
-- Re-reading a visible roster. A roster already read stays as read, even if
-  the guild hides its compositions later.

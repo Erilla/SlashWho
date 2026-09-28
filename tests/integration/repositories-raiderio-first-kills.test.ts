@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { dossierRaiderIoFirstKill } from "../../packages/application/src/raiderio-first-kill-evidence";
 import type {
   CharacterRaiderIoFirstKillInput,
   EvidenceRunCost,
@@ -52,6 +53,7 @@ const encounter: RaiderIoLoggedEncounterInput = {
   itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
   deathCount: 2,
   vantusCount: 16,
+  shareRaidUntil: null,
   rosterState: "available",
   members: [alfa, bravo]
 };
@@ -130,23 +132,123 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
     });
   }
 
-  it("keeps a visible roster as first read, however often it is read", async () => {
+  it("keeps the kill as first read, and takes only a later read's roster and privacy", async () => {
     await save(
       { encounters: [encounter], unavailable: [] },
       "2026-09-28T12:00:00.000Z"
     );
     await save(
       {
-        encounters: [{ ...encounter, deathCount: 99, members: [] }],
+        encounters: [
+          {
+            ...encounter,
+            deathCount: 99,
+            defeatedAt: "2026-07-20T18:00:00.000Z",
+            shareRaidUntil: "2026-12-01T00:00:00.000Z",
+            members: [bravo]
+          }
+        ],
         unavailable: []
       },
-      "2026-09-29T12:00:00.000Z"
+      "2026-10-29T12:00:00.000Z"
     );
 
     expect(await stored([700_001, 1])).toEqual({
-      encounters: [{ ...encounter, readAt: "2026-09-28T12:00:00.000Z" }],
+      encounters: [
+        {
+          ...encounter,
+          shareRaidUntil: "2026-12-01T00:00:00.000Z",
+          members: [bravo],
+          readAt: "2026-10-29T12:00:00.000Z"
+        }
+      ],
       unavailable: []
     });
+  });
+
+  it("turns a visible roster private when a re-read finds it hidden, and the dossier shows it private", async () => {
+    // Break caught (#734 review): a visible roster was never read again and
+    // never changed, so a guild that hid its compositions after the kill
+    // stayed named on every dossier that shared it.
+    await save(
+      {
+        encounters: [
+          { ...encounter, shareRaidUntil: "2026-09-27T00:00:00.000Z" }
+        ],
+        unavailable: []
+      },
+      "2026-09-01T12:00:00.000Z"
+    );
+    await publishFirstKill();
+    await save(
+      {
+        encounters: [
+          {
+            ...encounter,
+            shareRaidUntil: null,
+            rosterState: "private",
+            members: []
+          }
+        ],
+        unavailable: []
+      },
+      "2026-09-28T12:00:00.000Z"
+    );
+
+    expect(await stored([700_001])).toEqual({
+      encounters: [
+        {
+          ...encounter,
+          shareRaidUntil: null,
+          rosterState: "private",
+          members: [],
+          readAt: "2026-09-28T12:00:00.000Z"
+        }
+      ],
+      unavailable: []
+    });
+    const rows = await pool.query(
+      "SELECT count(*)::int AS count FROM raiderio_logged_encounter_members"
+    );
+    expect(rows.rows[0]).toEqual({ count: 0 });
+
+    const completed = await repositories.evidence.getCompleted(rootKey);
+    const kill = completed?.raiderIoFirstKills?.[0];
+    expect(kill).toMatchObject({
+      encounterState: "read",
+      encounter: {
+        rosterState: "private",
+        members: [],
+        roleCounts: { tank: 0, healer: 0, dps: 0 }
+      }
+    });
+    expect(dossierRaiderIoFirstKill(kill!, rootKey).encounter).toMatchObject({
+      state: "read",
+      encounter: { roster: { state: "private" } }
+    });
+  });
+
+  it("keeps a visible roster through a re-read Raider.IO refuses as not found", async () => {
+    await save(
+      { encounters: [encounter], unavailable: [] },
+      "2026-08-01T12:00:00.000Z"
+    );
+    await save(
+      {
+        encounters: [],
+        unavailable: [{ loggedEncounterId: 700_001, code: "not_found" }]
+      },
+      "2026-09-28T12:00:00.000Z"
+    );
+
+    expect(await stored([700_001])).toEqual({
+      encounters: [{ ...encounter, readAt: "2026-08-01T12:00:00.000Z" }],
+      unavailable: []
+    });
+    const rows = await pool.query(
+      "SELECT count(*)::int AS count FROM raiderio_logged_encounter_members"
+    );
+    expect(rows.rows[0]).toEqual({ count: 2 });
   });
 
   it("replaces a hidden roster with a later read, dated by that read", async () => {

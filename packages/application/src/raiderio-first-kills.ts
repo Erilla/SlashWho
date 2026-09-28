@@ -38,10 +38,16 @@ export const MAX_RAIDER_IO_FIRST_KILL_RANK_REQUESTS_PER_RUN = 50;
 const dayMs = 24 * 60 * 60 * 1_000;
 /**
  * A roster read as hidden is read again after a week: a guild can open its
- * compositions after the kill. A visible roster is never read again, because
- * the kill and who was in it do not change.
+ * compositions after the kill.
  */
 export const RAIDER_IO_PRIVATE_ROSTER_REREAD_MS = 7 * dayMs;
+/**
+ * A roster read as visible is read again once the guild's `shareRaidUntil`
+ * has passed, or, where Raider.IO named no end, after 30 days: a guild can
+ * hide its compositions after the kill, and a hidden roster must stop being
+ * shown. The kill itself is never read again.
+ */
+export const RAIDER_IO_VISIBLE_ROSTER_REREAD_MS = 30 * dayMs;
 /**
  * A permanent refusal is asked again after 30 days, in case the log was
  * restored or re-uploaded. Until then it costs nothing and fills no cap.
@@ -88,6 +94,7 @@ function encounterInput(
     itemLevel: { ...encounter.itemLevel },
     deathCount: encounter.deathCount,
     vantusCount: encounter.vantusCount,
+    shareRaidUntil: encounter.shareRaidUntil,
     rosterState:
       encounter.roster.state === "available" ? "available" : "private",
     members:
@@ -95,6 +102,42 @@ function encounterInput(
         ? encounter.roster.members.map((member) => ({ ...member }))
         : []
   };
+}
+
+/**
+ * A re-read of a kill already stored: the kill stays as first read, and only
+ * what the guild can change since, its roster and how long it shares it, is
+ * taken from the new answer.
+ */
+function refreshed(
+  kept: RaiderIoLoggedEncounterInput,
+  read: RaiderIoLoggedEncounterInput
+): RaiderIoLoggedEncounterInput {
+  return {
+    ...kept,
+    shareRaidUntil: read.shareRaidUntil,
+    rosterState: read.rosterState,
+    members: read.members
+  };
+}
+
+/**
+ * Whether a stored visible roster is due a re-read. Once `shareRaidUntil` has
+ * passed it is read once more; a read after that end that still finds the
+ * roster visible (Raider.IO naming the same past end) waits the ordinary 30
+ * days, so a stale end does not cost a read every run.
+ */
+function visibleRosterDue(
+  encounter: StoredRaiderIoLoggedEncounter,
+  at: number
+): boolean {
+  const readAt = Date.parse(encounter.readAt);
+  if (encounter.shareRaidUntil !== null) {
+    const until = Date.parse(encounter.shareRaidUntil);
+    if (at <= until) return false;
+    if (readAt <= until) return true;
+  }
+  return at - readAt > RAIDER_IO_VISIBLE_ROSTER_REREAD_MS;
 }
 
 function withoutReadAt(
@@ -109,11 +152,13 @@ function withoutReadAt(
  * Reads the logged encounter of every Raider.IO first kill that has one
  * (#732), and says which kills are the character's.
  *
- * What is stored decides what is read. A visible roster is never read again;
- * a hidden one is read again once a week old; a permanent refusal is asked
- * again once 30 days old. First reads come before re-reads, and all of them
- * share one bound, as `raiderio_rankings` does: 50 a run, four at a time, and
- * a read that throws abandons the rest. A kill counts as the character's only
+ * What is stored decides what is read. A visible roster is read again once
+ * the guild's `shareRaidUntil` has passed, or once 30 days old where there is
+ * none, and turns private if the guild has since hidden it; a hidden one is
+ * read again once a week old; a permanent refusal is asked again once 30 days
+ * old. First reads come before re-reads, and all of them share one bound, as
+ * `raiderio_rankings` does: 50 a run, four at a time, and a read that throws
+ * or is rate limited abandons the rest. A kill counts as the character's only
  * when the roster holds the character's own Raider.IO id; where the roster is
  * hidden, Raider.IO's own attribution of the kill stands in for it.
  */
@@ -161,8 +206,9 @@ export async function collectRaiderIoFirstKills(
     encounters.set(encounter.loggedEncounterId, kept);
     storedRead.set(encounter.loggedEncounterId, kept);
     if (
-      encounter.rosterState === "private" &&
-      at - Date.parse(encounter.readAt) > RAIDER_IO_PRIVATE_ROSTER_REREAD_MS
+      encounter.rosterState === "private"
+        ? at - Date.parse(encounter.readAt) > RAIDER_IO_PRIVATE_ROSTER_REREAD_MS
+        : visibleRosterDue(encounter, at)
     ) {
       due.add(encounter.loggedEncounterId);
     }
@@ -206,15 +252,28 @@ export async function collectRaiderIoFirstKills(
   const limiter = createConcurrencyLimiter(
     RAIDER_IO_LOGGED_ENCOUNTER_CONCURRENCY
   );
-  let abandoned = false;
+  // Why the rest of the queue was abandoned, once a read throws or is rate
+  // limited; every read not yet sent is missed for the same reason.
+  let abandoned: "unavailable" | "rate_limited" | null = null;
   const readNow: RaiderIoLoggedEncounterInput[] = [];
   const unavailableNow: RaiderIoLoggedEncounterUnavailableInput[] = [];
   const refuse = (id: number, code: RaiderIoLoggedEncounterUnavailableCode) => {
     const kept = storedRead.get(id);
     if (kept) {
-      // A read is never unread. Saved again unchanged, the hidden roster's
-      // `read_at` moves on and it is not asked about again for a week.
-      readNow.push(kept);
+      // A read is never unread. A 403 hides its roster, as a guild hiding its
+      // compositions does. Any other refusal changes nothing; saved again
+      // unchanged, the row's `read_at` moves on and it is not asked about
+      // again until due.
+      readNow.push(
+        code === "private"
+          ? {
+              ...kept,
+              shareRaidUntil: null,
+              rosterState: "private",
+              members: []
+            }
+          : kept
+      );
       return;
     }
     answered.set(id, code);
@@ -224,7 +283,7 @@ export async function collectRaiderIoFirstKills(
     toRead.map((id) =>
       limiter.run(async () => {
         if (abandoned) {
-          miss(id, "unavailable");
+          miss(id, abandoned);
           return;
         }
         const kill = killById.get(id)!;
@@ -240,6 +299,9 @@ export async function collectRaiderIoFirstKills(
               refuse(id, result.code);
               return;
             }
+            // A 429 says to stop asking: the rest of the queue is abandoned,
+            // as after a read that throws.
+            if (result.code === "rate_limited") abandoned ??= "rate_limited";
             miss(id, result.code);
             fallShort({
               code: result.code,
@@ -257,10 +319,12 @@ export async function collectRaiderIoFirstKills(
             refuse(id, "schema_drift");
             return;
           }
-          readNow.push(encounterInput(id, result));
+          const read = encounterInput(id, result);
+          const kept = storedRead.get(id);
+          readNow.push(kept ? refreshed(kept, read) : read);
         } catch (error) {
           if (input.signal.aborted) throw error;
-          abandoned = true;
+          abandoned ??= "unavailable";
           miss(id, "unavailable");
           fallShort({ code: "unavailable" });
         }

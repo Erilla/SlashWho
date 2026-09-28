@@ -238,8 +238,9 @@ function mergeFirstKill(
   previous: CharacterRaiderIoFirstKillInput,
   incoming: CharacterRaiderIoFirstKillInput
 ): CharacterRaiderIoFirstKillInput {
-  // A logged encounter never changes, so one already read is never lost to a
-  // later read that failed, nor to Raider.IO later dropping the link to it.
+  // A logged kill never changes (only its roster may), so one already read is
+  // never lost to a later read that failed, nor to Raider.IO later dropping
+  // the link to it.
   const keepRead =
     previous.encounterState === "read" &&
     incoming.encounterState !== "read" &&

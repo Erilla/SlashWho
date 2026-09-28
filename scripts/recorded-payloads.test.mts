@@ -439,7 +439,11 @@ describe("Raider.IO kill logs", () => {
         realm: { slug: "twisting-nether", name: "Twisting Nether" },
         region: { slug: "eu" }
       },
-      guildPrivacy: { raidComps: true, raidPulls: true },
+      guildPrivacy: {
+        raidComps: true,
+        raidPulls: true,
+        shareRaidUntil: "2026-10-20T00:00:00.000Z"
+      },
       roster: [
         {
           character: {
@@ -478,7 +482,10 @@ describe("Raider.IO kill logs", () => {
           realm: { slug: "twisting-nether" },
           region: { slug: "eu" }
         },
-        guildPrivacy: { raidComps: true },
+        guildPrivacy: {
+          raidComps: true,
+          shareRaidUntil: "2020-01-04T00:00:00.000Z"
+        },
         roster: [
           {
             character: {
