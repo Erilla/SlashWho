@@ -17,7 +17,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   collectRaiderIoFirstKills,
   MAX_RAIDER_IO_LOGGED_ENCOUNTER_READS_PER_RUN,
-  rankRaiderIoFirstKills
+  rankRaiderIoFirstKills,
+  rebuildSettledFirstKills
 } from "./raiderio-first-kills";
 
 // Synthetic identities throughout: this repository is public.
@@ -202,7 +203,8 @@ describe("collectRaiderIoFirstKills", () => {
         encounterState: "read",
         encounterLimitationCode: null,
         historicWorldRank: null,
-        historicRankCheckedAt: null
+        historicRankCheckedAt: null,
+        presenceChecked: true
       }
     ]);
     expect(saved).toEqual([
@@ -694,7 +696,8 @@ describe("collectRaiderIoFirstKills", () => {
       encounterState: "read",
       encounterLimitationCode: null,
       historicWorldRank: null,
-      historicRankCheckedAt: null
+      historicRankCheckedAt: null,
+      presenceChecked: true
     };
     const raiderio = gateway();
 
@@ -711,6 +714,7 @@ describe("collectRaiderIoFirstKills", () => {
     expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
     expect(raiderio.getCharacter).not.toHaveBeenCalled();
     expect(result.kills).toHaveLength(1);
+    expect(result.kills[0]).toMatchObject({ presenceChecked: true });
   });
 
   it("checks presence once a hidden roster it accepted a kill through opens", async () => {
@@ -918,6 +922,223 @@ describe("collectRaiderIoFirstKills", () => {
       encounterLimitationCode: "unavailable"
     });
     expect(result.limitation).toEqual({ code: "unavailable" });
+  });
+
+  it("presence regression: a roster opened by a partial run is still checked next run", async () => {
+    // Break caught (#734 follow-up review): `established` was inferred from
+    // "published read, roster visible before this run". A partial run that
+    // opened the roster stored it visible and carried the unchecked kill
+    // forward, so the next run never checked it.
+    const carried: CharacterRaiderIoFirstKillInput = {
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      killedAt: "2026-07-20T17:25:57.301Z",
+      guild: killGuild,
+      loggedEncounterId: 700_001,
+      encounterState: "read",
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: null,
+      presenceChecked: false
+    };
+    const raiderio = gateway();
+
+    const result = await collect([midnightFalls], raiderio, {
+      published: [carried],
+      // The previous run already stored the opened roster, without Alfa.
+      storedEncounters: async () => ({
+        encounters: [storedRead({ members: [bravo] })],
+        unavailable: []
+      })
+    });
+
+    expect(raiderio.getCharacter).toHaveBeenCalledTimes(1);
+    expect(result.kills).toEqual([]);
+  });
+
+  it("publishes a checked kill with the flag, and a hidden-roster one without", async () => {
+    const visible = await collect([midnightFalls]);
+    const hidden = await collect(
+      [midnightFalls],
+      gateway({
+        getLoggedEncounter: vi.fn(async () =>
+          encounter("midnight-falls", {
+            state: "unavailable",
+            reason: "private"
+          })
+        )
+      })
+    );
+
+    expect(visible.kills[0]).toMatchObject({ presenceChecked: true });
+    expect(hidden.kills[0]).toMatchObject({
+      encounterState: "read",
+      presenceChecked: false
+    });
+  });
+
+  it("keeps an established kill's flag true when its due re-read now finds the roster hidden", async () => {
+    // Fix round 1: spec §4 says a read kill is published `presenceChecked`
+    // true "when its roster was visible and held the character's id in this
+    // run's check, or when the flag was already true" — an already-true flag
+    // must survive a re-read that turns the roster private, not fall back to
+    // false just because this run's roster is not `available`.
+    const published: CharacterRaiderIoFirstKillInput = {
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      killedAt: "2026-07-20T17:25:57.301Z",
+      guild: killGuild,
+      loggedEncounterId: 700_001,
+      encounterState: "read",
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: null,
+      presenceChecked: true
+    };
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async () =>
+        encounter("midnight-falls", { state: "unavailable", reason: "private" })
+      )
+    });
+
+    const result = await collect([midnightFalls], raiderio, {
+      published: [published],
+      storedEncounters: async () => ({
+        encounters: [
+          storedRead({
+            shareRaidUntil: null,
+            readAt: "2026-08-20T00:00:00.000Z"
+          })
+        ],
+        unavailable: []
+      })
+    });
+
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(1);
+    expect(raiderio.getCharacter).not.toHaveBeenCalled();
+    expect(result.kills[0]).toMatchObject({
+      encounterState: "read",
+      presenceChecked: true
+    });
+  });
+
+  it("no id: accepts the kill unchecked, without a shortfall, when the character read has no id", async () => {
+    // Break caught (#734 follow-up review): a profile Raider.IO gives no id,
+    // such as a tournament character, held every run partial for good.
+    const raiderio = gateway({
+      getCharacter: vi.fn(async () => ({
+        key,
+        displayName: "Alfa",
+        className: "Demon Hunter",
+        level: 90,
+        guild: null,
+        ownerId: null,
+        profileGuess: null,
+        declaredMain: null
+        // No raiderIoCharacterId: Raider.IO gives this profile no id.
+      }))
+    });
+
+    const result = await collect([midnightFalls], raiderio);
+
+    expect(result.limitation).toBeNull();
+    expect(result.kills).toEqual([
+      expect.objectContaining({
+        encounterState: "read",
+        presenceChecked: false
+      })
+    ]);
+    expect(raiderio.getCharacter).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues due re-reads with raids outside the settled set first, then by oldest read_at", async () => {
+    const settledA = { ...kill("a", 1), raidSlug: "nerubar-palace" };
+    const settledB = { ...kill("b", 2), raidSlug: "nerubar-palace" };
+    const pinnedCurrent = kill("c", 3);
+    // Current content that rides along on a response without being in the
+    // pinned tier's own raid list -- released into the last tier, or added
+    // later. Not in the settled set, so it is priority too (#742 follow-up).
+    const unlisted = { ...kill("d", 4), raidSlug: "unlisted-raid" };
+    const due = (
+      id: number,
+      bossSlug: string,
+      raidSlug: string,
+      readAt: string
+    ) => storedRead({ loggedEncounterId: id, bossSlug, raidSlug, readAt });
+    const order: number[] = [];
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async (raidSlug: string, id: number) => {
+        order.push(id);
+        return {
+          ...encounter(["a", "b", "c", "d"][id - 1]!),
+          raidSlug
+        };
+      })
+    });
+
+    await collect([settledA, settledB, pinnedCurrent, unlisted], raiderio, {
+      settledRaidSlugs: new Set(["nerubar-palace"]),
+      storedEncounters: async () => ({
+        encounters: [
+          due(1, "a", "nerubar-palace", "2026-08-10T00:00:00.000Z"),
+          due(2, "b", "nerubar-palace", "2026-08-01T00:00:00.000Z"),
+          due(3, "c", "tier-mn-1", "2026-08-20T00:00:00.000Z"),
+          due(4, "d", "unlisted-raid", "2026-08-15T00:00:00.000Z")
+        ],
+        unavailable: []
+      })
+    });
+
+    // Concurrency 4 starts all four at once, in queue order: not-settled
+    // raids first (oldest read_at within that group), then the settled
+    // raid's re-reads, oldest read_at first.
+    expect(order).toEqual([4, 3, 2, 1]);
+  });
+});
+
+describe("rebuildSettledFirstKills", () => {
+  it("rebuilds every stored first kill in a raid the run did not ask about", () => {
+    const stored = (
+      raidSlug: string,
+      bossSlug: string,
+      loggedEncounterId: number | null
+    ): CharacterRaiderIoFirstKillInput => ({
+      raidSlug,
+      bossSlug,
+      killedAt: "2024-10-01T20:00:00.000Z",
+      guild: killGuild,
+      loggedEncounterId,
+      encounterState: loggedEncounterId === null ? "unavailable" : "read",
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: null
+    });
+
+    expect(
+      rebuildSettledFirstKills(
+        [
+          stored("nerubar-palace", "queen-ansurek", 700_002),
+          stored("nerubar-palace", "ulgrax", null),
+          stored("tier-mn-1", "midnight-falls", 700_001)
+        ],
+        ["tier-mn-1"]
+      )
+    ).toEqual([
+      {
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek",
+        firstDefeated: "2024-10-01T20:00:00.000Z",
+        guild: killGuild,
+        loggedEncounterId: 700_002
+      },
+      {
+        raidSlug: "nerubar-palace",
+        bossSlug: "ulgrax",
+        firstDefeated: "2024-10-01T20:00:00.000Z",
+        guild: killGuild,
+        loggedEncounterId: null
+      }
+    ]);
   });
 });
 

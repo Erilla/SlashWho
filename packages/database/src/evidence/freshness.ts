@@ -26,6 +26,13 @@ export const CURRENT_COLLECTION_VERSIONS: Readonly<
   tier_bests: 1
 };
 
+/**
+ * The collection version of `character_raiderio_tier_reads`. Bump it when a
+ * fix changes what a settled tier's Raider.IO first kills collect: every
+ * settled tier is then asked once more, and nothing else is re-collected.
+ */
+export const CURRENT_RAIDER_IO_TIER_READ_VERSION = 1;
+
 export function isEvidenceFresh(
   completedAt: Date,
   retryAfterAt: Date | null,

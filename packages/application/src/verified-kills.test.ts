@@ -4,12 +4,13 @@ import {
   raiderIoHistoricTierOrdinals,
   raiderIoHistoricTiers
 } from "@slashwho/raiderio";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   historicTierOrdinalsFrom,
   raiderIoVerifiedKills,
   searchableKills,
+  settledTierOrdinals,
   storedKillReportCodes
 } from "./verified-kills";
 
@@ -94,7 +95,10 @@ describe("raiderIoVerifiedKills", () => {
         }
       },
       key,
-      { storedKills: [] }
+      {
+        storedKills: [],
+        markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+      }
     );
 
     expect(asked).toEqual([[...raiderIoHistoricTierOrdinals]]);
@@ -113,7 +117,11 @@ describe("raiderIoVerifiedKills", () => {
         }
       },
       key,
-      { storedKills: [], killScanFloor: "2021-07-15T00:00:00.000Z" }
+      {
+        storedKills: [],
+        killScanFloor: "2021-07-15T00:00:00.000Z",
+        markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+      }
     );
 
     expect(asked).toEqual([[27, 28, 29, 30, 31, 32, 33, 34, 35]]);
@@ -131,7 +139,11 @@ describe("raiderIoVerifiedKills", () => {
         }
       },
       key,
-      { storedKills: [], killScanFloor: "2026-09-20T00:00:00.000Z" }
+      {
+        storedKills: [],
+        killScanFloor: "2026-09-20T00:00:00.000Z",
+        markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+      }
     );
 
     expect(asked).toEqual([[35]]);
@@ -147,7 +159,11 @@ describe("raiderIoVerifiedKills", () => {
         }
       },
       key,
-      { storedKills: [], killScanFloor: "not a date" }
+      {
+        storedKills: [],
+        killScanFloor: "not a date",
+        markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+      }
     );
 
     expect(asked).toEqual([[...raiderIoHistoricTierOrdinals]]);
@@ -165,7 +181,10 @@ describe("raiderIoVerifiedKills", () => {
           })
         },
         key,
-        { storedKills: [] }
+        {
+          storedKills: [],
+          markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+        }
       )
     ).resolves.toEqual({ kills: [], limitation: "private" });
   });
@@ -179,7 +198,10 @@ describe("raiderIoVerifiedKills", () => {
           }
         },
         key,
-        { storedKills: [] }
+        {
+          storedKills: [],
+          markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+        }
       )
     ).resolves.toEqual({ kills: [], limitation: "unavailable" });
   });
@@ -197,7 +219,11 @@ describe("raiderIoVerifiedKills", () => {
           }
         },
         key,
-        { storedKills: [], signal: controller.signal }
+        {
+          storedKills: [],
+          signal: controller.signal,
+          markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+        }
       )
     ).rejects.toBe(reason);
   });
@@ -218,13 +244,54 @@ describe("raiderIoVerifiedKills", () => {
         })
       },
       key,
-      { storedKills: [], killScanFloor: "2026-09-20T00:00:00.000Z" }
+      {
+        storedKills: [],
+        killScanFloor: "2026-09-20T00:00:00.000Z",
+        markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals)
+      }
     );
 
     // No guild, so never a place to search -- and still a first kill.
     expect(result.kills).toEqual([]);
     expect(result.firstKills).toEqual([midnightFalls]);
     expect(result.askedRaidSlugs).toEqual(["tier-mn-1"]);
+  });
+
+  it("keeps a back-catalogue tier out of kills and guilds, and in askedRaidSlugs", async () => {
+    // Break caught (#734 follow-up review): a settled tier's guilds reaching a
+    // tier search would spend Warcraft Logs points on attendance nobody needs.
+    const settledKill: HistoricMythicKill = {
+      raidSlug: "nerubar-palace",
+      bossSlug: "queen-ansurek",
+      firstDefeated: "2024-10-01T20:00:00.000Z",
+      guild: { name: "Fixture Guild Bravo", realm: "draenor", region: "eu" },
+      loggedEncounterId: 700_002
+    };
+    const getHistoricMythicKills = vi.fn(async () => ({
+      kind: "evidence" as const,
+      kills: [settledKill]
+    }));
+
+    const result = await raiderIoVerifiedKills(
+      { getHistoricMythicKills },
+      { region: "eu", realm: "draenor", name: "alfa" },
+      {
+        storedKills: [],
+        // Above every pinned raid's close, so every tier but the last settles.
+        killScanFloor: "2026-09-01T00:00:00.000Z",
+        markedTierOrdinals: new Set()
+      }
+    );
+
+    expect(result.firstKills).toEqual([settledKill]);
+    expect(result.askedRaidSlugs).toContain("nerubar-palace");
+    expect(result.kills).toEqual([]);
+    expect(result.guilds).toEqual([]);
+    expect(result.backCatalogueTierOrdinals).toContain(32);
+    // Every settled tier's raid, never the last pinned tier's: "tier-mn-1"
+    // rides along on every response, so it is never in the settled set.
+    expect(result.settledRaidSlugs).toContain("nerubar-palace");
+    expect(result.settledRaidSlugs).not.toContain("tier-mn-1");
   });
 });
 
@@ -245,6 +312,7 @@ describe("historicTierOrdinalsFrom", () => {
     expect(
       historicTierOrdinalsFrom(
         "2021-01-01T00:00:00.000Z",
+        new Set([1, 2, 3, 4]),
         tiers,
         (slug) => ends.get(slug) ?? null
       )
@@ -256,6 +324,7 @@ describe("historicTierOrdinalsFrom", () => {
     expect(
       historicTierOrdinalsFrom(
         "2020-01-01T00:00:00.000Z",
+        new Set([1, 2, 3, 4]),
         [
           { ordinal: 1, raidSlugs: ["closed"] },
           { ordinal: 2, raidSlugs: ["closed"] }
@@ -263,6 +332,34 @@ describe("historicTierOrdinalsFrom", () => {
         () => "2020-01-01T00:00:00.000Z"
       )
     ).toEqual([1, 2]);
+  });
+
+  it("keeps an unmarked settled tier, and leaves out a marked one", () => {
+    const tiers = [
+      { ordinal: 1, raidSlugs: ["closed"] },
+      { ordinal: 2, raidSlugs: ["closed-too"] },
+      { ordinal: 3, raidSlugs: ["current"] }
+    ];
+    const ends = (slug: string) =>
+      slug === "current" ? null : "2020-01-01T00:00:00.000Z";
+
+    expect(
+      historicTierOrdinalsFrom(
+        "2021-01-01T00:00:00.000Z",
+        new Set([2]),
+        tiers,
+        ends
+      )
+    ).toEqual([1, 3]);
+    expect(
+      settledTierOrdinals("2021-01-01T00:00:00.000Z", tiers, ends)
+    ).toEqual([1, 2]);
+  });
+
+  it("keeps every tier without a floor, marked or not", () => {
+    expect(historicTierOrdinalsFrom(undefined, new Set([19, 20])).length).toBe(
+      raiderIoHistoricTiers.length
+    );
   });
 
   it("names every pinned raid slug in the catalogue", () => {

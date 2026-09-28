@@ -1518,7 +1518,8 @@ export const characterRaiderIoFirstKills = pgTable(
     historicWorldRank: integer("historic_world_rank"),
     historicRankCheckedAt: timestamp("historic_rank_checked_at", {
       withTimezone: true
-    })
+    }),
+    presenceChecked: boolean("presence_checked").default(false).notNull()
   },
   (table) => [
     primaryKey({
@@ -1578,6 +1579,34 @@ export const characterTerminalTiers = pgTable(
         table.normalizedName,
         table.raidId,
         table.domain
+      ]
+    })
+  ]
+);
+
+/**
+ * Raider.IO tiers each character has read after they settled. A tier whose
+ * raids all closed before the kill-scan floor is asked again only once its
+ * mark falls below the current version or expires.
+ */
+export const characterRaiderIoTierReads = pgTable(
+  "character_raiderio_tier_reads",
+  {
+    region: text("region").notNull(),
+    realmSlug: text("realm_slug").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    tierOrdinal: integer("tier_ordinal").notNull(),
+    collectionVersion: integer("collection_version").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_raiderio_tier_reads_pkey",
+      columns: [
+        table.region,
+        table.realmSlug,
+        table.normalizedName,
+        table.tierOrdinal
       ]
     })
   ]

@@ -255,7 +255,9 @@ function mergeFirstKill(
           killedAt: previous.killedAt,
           loggedEncounterId: previous.loggedEncounterId,
           encounterState: "read" as const,
-          encounterLimitationCode: null
+          encounterLimitationCode: null,
+          // The read that is kept was checked (or not) as it was read.
+          presenceChecked: previous.presenceChecked === true
         }
       : {}),
     historicWorldRank: rank.historicWorldRank,

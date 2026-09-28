@@ -37,6 +37,7 @@ export async function resetRepositoryTables(pool: Pool): Promise<void> {
     -- Keyed by character rather than by run, so nothing above cascades to
     -- it and a mark left by one test would be read by the next.
     character_terminal_tiers,
+    character_raiderio_tier_reads,
     character_historic_aliases,
     dossier_character_exclusions,
     dossier_searches,

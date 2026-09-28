@@ -354,10 +354,12 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
           encounterState: "unavailable",
           historicRankCheckedAt: null
         }),
+        presenceChecked: false,
         encounter: null
       },
       {
         ...firstKill(),
+        presenceChecked: false,
         encounter: {
           ...encounter,
           readAt: "2026-09-28T12:00:00.000Z",
@@ -648,5 +650,113 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
         DROP FUNCTION IF EXISTS reject_raiderio_first_kill();
       `);
     }
+  });
+
+  it("round-trips presence_checked, and reads a missing flag as false", async () => {
+    const runId = await reserve("2026-09-28T12:00:00.000Z");
+    await repositories.evidence.publish(runId, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      raiderIoFirstKills: {
+        kills: [
+          firstKill({ presenceChecked: true }),
+          // A staged collection written before the deploy carries no flag.
+          firstKill({ bossSlug: "belo-ren", loggedEncounterId: 700_002 })
+        ],
+        askedRaidSlugs: ["tier-mn-1"],
+        limitationCode: null
+      },
+      completedAt: new Date("2026-09-28T12:05:00.000Z")
+    });
+
+    const stored =
+      await repositories.evidence.storedRaiderIoFirstKills!(rootKey);
+    expect(stored.map((kill) => [kill.bossSlug, kill.presenceChecked])).toEqual(
+      [
+        ["belo-ren", false],
+        ["midnight-falls", true]
+      ]
+    );
+  });
+
+  it("marks tier reads, gated on version and read_at, and never lowers the version", async () => {
+    const reads = repositories.evidence;
+    await reads.markRaiderIoTierReads!(
+      rootKey,
+      [22, 23],
+      new Date("2026-06-01T00:00:00.000Z")
+    );
+    await reads.markRaiderIoTierReads!(
+      rootKey,
+      [24],
+      new Date("2026-09-01T00:00:00.000Z")
+    );
+
+    expect(
+      await reads.raiderIoTierReads!(
+        rootKey,
+        new Date("2026-05-01T00:00:00.000Z")
+      )
+    ).toEqual([22, 23, 24]);
+    // Expired: older than `since`.
+    expect(
+      await reads.raiderIoTierReads!(
+        rootKey,
+        new Date("2026-08-01T00:00:00.000Z")
+      )
+    ).toEqual([24]);
+
+    // An older worker's mark must not lower the version.
+    await pool.query(
+      `UPDATE character_raiderio_tier_reads SET collection_version = 99
+        WHERE tier_ordinal = 22`
+    );
+    await reads.markRaiderIoTierReads!(
+      rootKey,
+      [22],
+      new Date("2026-09-02T00:00:00.000Z")
+    );
+    const row = await pool.query<{ collection_version: number; read_at: Date }>(
+      `SELECT collection_version, read_at FROM character_raiderio_tier_reads
+        WHERE tier_ordinal = 22`
+    );
+    expect(row.rows[0]!.collection_version).toBe(99);
+    // An older worker's mark must not refresh read_at either: a version-99
+    // row's read_at stays at its own, later mark, not the one this
+    // older-release write just made.
+    expect(row.rows[0]!.read_at.toISOString()).toBe("2026-06-01T00:00:00.000Z");
+
+    // A mark below the current version is not read back.
+    await pool.query(
+      `UPDATE character_raiderio_tier_reads SET collection_version = 0
+        WHERE tier_ordinal = 23`
+    );
+    expect(
+      await reads.raiderIoTierReads!(
+        rootKey,
+        new Date("2026-05-01T00:00:00.000Z")
+      )
+    ).toEqual([22, 24]);
+  });
+
+  it("clears tier reads with a rebuild's terminal marks", async () => {
+    await repositories.evidence.markRaiderIoTierReads!(
+      rootKey,
+      [22],
+      new Date("2026-09-01T00:00:00.000Z")
+    );
+
+    await repositories.evidence.clearTerminalTiers(rootKey);
+
+    expect(
+      await repositories.evidence.raiderIoTierReads!(
+        rootKey,
+        new Date("2026-01-01T00:00:00.000Z")
+      )
+    ).toEqual([]);
   });
 });

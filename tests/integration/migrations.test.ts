@@ -60,6 +60,7 @@ describe("database migrations", () => {
       "character_mythic_kills",
       "character_mythic_wipes",
       "character_raiderio_first_kills",
+      "character_raiderio_tier_reads",
       "character_terminal_tiers",
       "character_tier_best_parses",
       "characters",
@@ -184,7 +185,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-35).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-36).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
@@ -220,7 +221,8 @@ describe("database migrations", () => {
       { idx: 62, tag: "0063_evidence_run_root" },
       { idx: 63, tag: "0064_history_actor_requests" },
       { idx: 64, tag: "0065_guild_report_requests" },
-      { idx: 65, tag: "0066_raiderio_logged_kills" }
+      { idx: 65, tag: "0066_raiderio_logged_kills" },
+      { idx: 66, tag: "0067_raiderio_tier_reads" }
     ]);
   });
 

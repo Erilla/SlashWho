@@ -67,8 +67,10 @@ import { queueWaitMs } from "./queue-wait";
 import {
   collectRaiderIoFirstKills,
   rankRaiderIoFirstKills,
+  rebuildSettledFirstKills,
   type RaiderIoFirstKillLimitation
 } from "./raiderio-first-kills";
+import { raiderIoTierReadSince } from "./raiderio-tier-reads";
 import { bindThrottleScope } from "./throttle-attribution";
 import {
   fromStagedCollection,
@@ -328,6 +330,17 @@ export type ApplicantEvidenceStore = {
   saveRaiderIoLoggedEncounters?(
     answers: RaiderIoLoggedEncounterAnswers,
     readAt: Date
+  ): Promise<void>;
+  /** Settled Raider.IO tiers read at the current version since `since`. */
+  raiderIoTierReads?(
+    key: CharacterKey,
+    since: Date
+  ): Promise<readonly number[]>;
+  /** Marks settled Raider.IO tiers read, after a clean, complete publish. */
+  markRaiderIoTierReads?(
+    key: CharacterKey,
+    ordinals: readonly number[],
+    at: Date
   ): Promise<void>;
 };
 
@@ -1680,6 +1693,18 @@ export function createApplicantEvidenceJobHandler(
         const historicKills = targeted
           ? undefined
           : options.raiderio?.getHistoricMythicKills;
+        // Settled Raider.IO tiers already read (#732 follow-up). A failure to
+        // read them costs a few Raider.IO requests, never a kill.
+        const markedTierOrdinals = new Set(
+          historicKills
+            ? await (
+                evidence.raiderIoTierReads?.(
+                  run.key,
+                  raiderIoTierReadSince(run.key, now())
+                ) ?? Promise.resolve([])
+              ).catch(() => [])
+            : []
+        );
         const verified =
           historicKills && (requestCap > 1 || tierCaps !== null)
             ? await scope.time("raiderIoHistoricKills", () =>
@@ -1689,6 +1714,7 @@ export function createApplicantEvidenceJobHandler(
                   {
                     storedKills: storedEvidence.kills,
                     ...(killScanFloor ? { killScanFloor } : {}),
+                    markedTierOrdinals,
                     signal: activeContext.signal,
                     onPhysicalRequest: () =>
                       scope.increment("raiderIoHistoricRequests")
@@ -2279,6 +2305,9 @@ export function createApplicantEvidenceJobHandler(
         // look up, and storage carries every stored first kill forward.
         let raiderIoFirstKills: RaiderIoFirstKillsPublication | undefined;
         let raiderIoShortfall: RaiderIoFirstKillLimitation | null = null;
+        // True only when the phase ran and returned: the one case that may
+        // vouch for a settled tier.
+        let raiderIoPhaseRan = false;
         const raiderIoLogs = options.raiderio;
         const getLoggedEncounter = raiderIoLogs?.getLoggedEncounter;
         if (
@@ -2287,22 +2316,44 @@ export function createApplicantEvidenceJobHandler(
           getLoggedEncounter &&
           verified?.firstKills
         ) {
-          const firstKills = verified.firstKills;
-          const logged = firstKills.some(
-            (kill) => kill.loggedEncounterId != null
-          );
+          const askedRaidSlugs = verified.askedRaidSlugs ?? [];
+          // Loaded before the ledger decides active or skipped: a settled
+          // tier's kills are rebuilt from it, and they may be the only logged
+          // kills this run has.
+          let published: readonly CharacterRaiderIoFirstKillInput[] | null;
+          try {
+            published =
+              (await evidence.storedRaiderIoFirstKills?.(run.key)) ?? [];
+          } catch (error) {
+            if (activeContext.signal.aborted) throw error;
+            published = null;
+          }
+          // Every stored kill in a raid this run did not ask about, due or
+          // not and logged or not: rebuilding only some while their raids
+          // join askedRaidSlugs would delete the rest on a complete publish.
+          const rebuilt =
+            published === null
+              ? []
+              : rebuildSettledFirstKills(published, askedRaidSlugs);
+          const firstKills = [...verified.firstKills, ...rebuilt];
+          // A load that failed is recorded as run and limited, never skipped.
+          const logged =
+            published === null ||
+            firstKills.some((kill) => kill.loggedEncounterId != null);
           await phaseLedger?.transition(
             "raiderio_logged_encounters",
             logged ? "active" : "skipped"
           );
           try {
-            const published =
-              (await evidence.storedRaiderIoFirstKills?.(run.key)) ?? [];
+            if (published === null)
+              throw new Error("stored_first_kills_unread");
+            const storedFirstKills = published;
             const collected = await scope.time("raiderIoLoggedEncounters", () =>
               collectRaiderIoFirstKills({
                 key: run.key,
                 kills: firstKills,
-                published,
+                published: storedFirstKills,
+                settledRaidSlugs: new Set(verified.settledRaidSlugs ?? []),
                 storedEncounters: async (ids) =>
                   (await evidence.raiderIoLoggedEncounters?.(ids)) ?? {
                     encounters: [],
@@ -2331,7 +2382,7 @@ export function createApplicantEvidenceJobHandler(
               kills: collected.kills,
               encounters: collected.encounters,
               warcraftLogsKills: [...publishedKills, ...storedEvidence.kills],
-              published,
+              published: storedFirstKills,
               raiderio: raiderIoLogs,
               signal: activeContext.signal,
               now,
@@ -2341,9 +2392,15 @@ export function createApplicantEvidenceJobHandler(
             raiderIoShortfall = collected.limitation;
             raiderIoFirstKills = {
               kills: ranked,
-              askedRaidSlugs: verified.askedRaidSlugs ?? [],
+              askedRaidSlugs: [
+                ...new Set([
+                  ...askedRaidSlugs,
+                  ...rebuilt.map((kill) => kill.raidSlug)
+                ])
+              ].sort(),
               limitationCode: collected.limitation?.code ?? null
             };
+            raiderIoPhaseRan = true;
           } catch (error) {
             if (activeContext.signal.aborted) throw error;
             // Nothing read here can be trusted to be whole: publish no first
@@ -2503,6 +2560,22 @@ export function createApplicantEvidenceJobHandler(
         // found, not the tier's stored ones, so it cannot vouch for the tier
         // in any domain; the marks already stored stand as they are.
         if (targeted) return;
+
+        // A settled Raider.IO tier is marked read only once a complete publish
+        // holds everything its kill list named: a partial one carries stale
+        // rows forward, and a short phase left logged kills unanswered. A
+        // lost mark only asks the tier again.
+        const backCatalogue = verified?.backCatalogueTierOrdinals ?? [];
+        if (
+          !incomplete &&
+          raiderIoPhaseRan &&
+          raiderIoShortfall === null &&
+          backCatalogue.length > 0
+        ) {
+          await evidence
+            .markRaiderIoTierReads?.(run.key, backCatalogue, now())
+            .catch(() => undefined);
+        }
 
         // Marked only after publication succeeded. A mark that outlived a
         // failed publish would stop the tier being collected while nothing
