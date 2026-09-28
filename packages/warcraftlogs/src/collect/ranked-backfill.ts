@@ -3,6 +3,7 @@ import type { CharacterKey } from "@slashwho/domain";
 import { isLimitation, validCharacterKey, record } from "../decode/primitives";
 import {
   decodedRankedKill,
+  rankedCharacterName,
   historicEncounterIds,
   historicReportRefs,
   historicZoneIds
@@ -102,6 +103,13 @@ export async function getRankedKillReports(
     };
   }
   const acceptedFights = new Set(progress.acceptedFightKeys ?? []);
+  // The names the character was ranked under in the reports accepted here.
+  const rankedNames = new Map<
+    string,
+    Readonly<{ name: string; realm: string }>
+  >();
+  const names = () =>
+    rankedNames.size > 0 ? { rankedNames: [...rankedNames.values()] } : {};
   const hydratedFights = new Set(acceptedFights);
   const limited = (
     query: WarcraftLogsQueryType,
@@ -109,6 +117,7 @@ export async function getRankedKillReports(
   ): WarcraftLogsRankedBackfillResult => ({
     kind: "evidence",
     kills: [...kills.values()],
+    ...names(),
     cursor: { ...progress, acceptedFightKeys: [...acceptedFights] },
     limitation: noteLimitation(query, limitation)
   });
@@ -262,7 +271,19 @@ export async function getRankedKillReports(
           const report = record(
             record(record(detail.value)?.data)?.reportData
           )?.report;
-          if (decoded.length > 0) acceptedFights.add(fightKey);
+          if (decoded.length > 0) {
+            acceptedFights.add(fightKey);
+            const ranked = rankedCharacterName(
+              detail.value,
+              progress.characterId!
+            );
+            if (ranked) {
+              rankedNames.set(
+                `${ranked.realm}\0${ranked.name.normalize("NFC").toLocaleLowerCase("en-US")}`,
+                ranked
+              );
+            }
+          }
           if (
             decoded.length > 0 ||
             report === null ||
@@ -289,5 +310,5 @@ export async function getRankedKillReports(
       reportIndex: 0
     };
   }
-  return { kind: "evidence", kills: [...kills.values()] };
+  return { kind: "evidence", kills: [...kills.values()], ...names() };
 }

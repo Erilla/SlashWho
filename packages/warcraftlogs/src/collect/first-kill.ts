@@ -289,9 +289,17 @@ async function searchTierIfRaided(
   const raided =
     search.raidedTier === true ||
     (rankedBackfill?.kind === "evidence" && rankedBackfill.kills.length > 0);
-  if (raided || rankedBackfill === undefined) {
-    return searchTierAttendance(run, search);
-  }
+  // The names the ranked walk proved join the ones the caller knew.
+  const rankedNames =
+    rankedBackfill?.kind === "evidence"
+      ? (rankedBackfill.rankedNames ?? [])
+      : [];
+  const walk = () =>
+    searchTierAttendance(run, {
+      ...search,
+      formerNames: [...(search.formerNames ?? []), ...rankedNames]
+    });
+  if (raided || rankedBackfill === undefined) return walk();
   const limitation =
     rankedBackfill.kind === "evidence"
       ? rankedBackfill.limitation
@@ -300,5 +308,5 @@ async function searchTierIfRaided(
   if (CONTINUED_RANKED_WALK_LIMITATIONS.has(limitation.code)) {
     return nothingWalked("deferred");
   }
-  return searchTierAttendance(run, search);
+  return walk();
 }

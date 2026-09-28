@@ -228,6 +228,13 @@ export type WarcraftLogsTierSearch = Readonly<{
    * a character nothing places there has no night to find (#733).
    */
   raidedTier?: boolean;
+  /**
+   * Other names, with realm, the character raided under: explicit former
+   * names, and those the tier's ranked walk proved by canonical id.
+   * Attendance lists a player by the name of the night, so without them a
+   * night from before a rename is ruled out unread (#733).
+   */
+  formerNames?: readonly Readonly<{ name: string; realm: string }>[];
 }>;
 
 /**
@@ -277,6 +284,12 @@ export type WarcraftLogsRankedBackfillResult =
   | Readonly<{
       kind: "evidence";
       kills: readonly WarcraftLogsFirstKillEvidence[];
+      /**
+       * The names, with realm, the character was ranked under in the reports
+       * this call accepted, each proved by canonical id. A renamed character
+       * raided under a former one (#733).
+       */
+      rankedNames?: readonly Readonly<{ name: string; realm: string }>[];
       cursor?: WarcraftLogsRankedBackfillCursor;
       limitation?: WarcraftLogsLimitation;
     }>

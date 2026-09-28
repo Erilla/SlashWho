@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { rankedCharacterName } from "./decode/ranked-backfill";
 import { createPlannedWarcraftLogsClient as createWarcraftLogsClient } from "./planned-client.test-support";
 
 const key = { region: "eu", realm: "silvermoon", name: "ryun" } as const;
@@ -1277,6 +1278,11 @@ describe("ranked Mythic backfill", () => {
         rankedCap?: number;
         raidedTier?: boolean;
         zoneRankings?: unknown;
+        /** The name attendance lists the unranked night under. */
+        unrankedListedAs?: string;
+        formerNames?: readonly { name: string; realm: string }[];
+        /** Reshapes the `unranked` report attendance hydrates. */
+        unrankedReport?: (value: ReturnType<typeof report>) => void;
       }>
     ) => {
       const asked: string[] = [];
@@ -1322,7 +1328,9 @@ describe("ranked Mythic backfill", () => {
                         {
                           code: "unranked",
                           startTime: Date.UTC(2018, 0, 8),
-                          players: [{ name: "Ryun" }]
+                          players: [
+                            { name: options.unrankedListedAs ?? "Ryun" }
+                          ]
                         }
                       ],
                       has_more_pages: false
@@ -1331,7 +1339,16 @@ describe("ranked Mythic backfill", () => {
                 }
               }
             });
-          if (query.includes("ReportByCode")) hydrated.push(variables.code!);
+          if (query.includes("ReportByCode")) {
+            hydrated.push(variables.code!);
+            // `ranked` holds the ranked walk's fight; `unranked` another.
+            const value = report(
+              variables.code!,
+              variables.code === "ranked" ? 10 : 12
+            );
+            if (variables.code === "unranked") options.unrankedReport?.(value);
+            return Response.json(value);
+          }
           return Response.json(report("ranked", 10));
         },
         clientId: "id",
@@ -1350,7 +1367,8 @@ describe("ranked Mythic backfill", () => {
           to: "2018-07-17T00:00:00.000Z",
           guilds: [{ name: "Guild", realm: "silvermoon", region: "eu" }],
           requestCap: 10,
-          ...(options.raidedTier ? { raidedTier: true } : {})
+          ...(options.raidedTier ? { raidedTier: true } : {}),
+          ...(options.formerNames ? { formerNames: options.formerNames } : {})
         }
       });
       return { result, asked, hydrated };
@@ -1383,6 +1401,111 @@ describe("ranked Mythic backfill", () => {
       expect(asked).toContain("GuildAttendance");
     });
 
+    // The ranked fixture's character is ranked as Erilla of Neptulon and
+    // collected as ryun of Silvermoon: renamed, as on #733's live case.
+    it("recognises a night listed under the name the ranked walk proved", async () => {
+      const { result, hydrated } = await search({
+        rankedKills: 1,
+        unrankedListedAs: "Erilla"
+      });
+
+      expect(hydrated).toEqual(["ranked", "unranked"]);
+      expect(result).toMatchObject({
+        kills: expect.arrayContaining([
+          expect.objectContaining({
+            fightUrl: "https://www.warcraftlogs.com/reports/unranked#fight=12"
+          })
+        ]),
+        tierSearch: { recoveredKills: 1 }
+      });
+    });
+
+    it("recognises a night listed under an explicit former name", async () => {
+      // Stored evidence places the character in the tier, so the ranked walk
+      // need find nothing for the walk to run.
+      const { result, hydrated } = await search({
+        rankedKills: 0,
+        raidedTier: true,
+        unrankedListedAs: "Erilla",
+        formerNames: [{ name: "erilla", realm: "neptulon" }]
+      });
+
+      // The ranked walk found nothing here, so both nights are read. Each
+      // report names the character only as Erilla of Neptulon, and each kill
+      // is recovered under that name.
+      expect(hydrated).toEqual(["ranked", "unranked"]);
+      expect(result).toMatchObject({ tierSearch: { recoveredKills: 2 } });
+    });
+
+    it("credits no kill to a former name on another realm", async () => {
+      // The night lists "Erilla", but the report's Erilla is of Kazzak: a
+      // namesake, not the character's former self on Neptulon.
+      const { result, hydrated } = await search({
+        rankedKills: 0,
+        raidedTier: true,
+        unrankedListedAs: "Erilla",
+        formerNames: [{ name: "erilla", realm: "neptulon" }],
+        unrankedReport: (value) => {
+          value.data.reportData.report.masterData.actors = [
+            { id: 7, name: "Erilla", server: "Kazzak", type: "Player" }
+          ];
+        }
+      });
+
+      expect(hydrated).toContain("unranked");
+      expect(result).toMatchObject({
+        kills: expect.not.arrayContaining([
+          expect.objectContaining({
+            fightUrl: "https://www.warcraftlogs.com/reports/unranked#fight=12"
+          })
+        ])
+      });
+    });
+
+    it("credits only the current name in a report that holds both names", async () => {
+      // One character is one actor. A report naming both the current and a
+      // former name as separate actors proves the former one is somebody
+      // else, so only the current name's fights are the character's.
+      const { result } = await search({
+        rankedKills: 0,
+        raidedTier: true,
+        unrankedListedAs: "Ryun",
+        formerNames: [{ name: "erilla", realm: "neptulon" }],
+        unrankedReport: (value) => {
+          const entry = value.data.reportData.report;
+          entry.masterData.actors = [
+            { id: 7, name: "Erilla", server: "Neptulon", type: "Player" },
+            { id: 8, name: "Ryun", server: "Silvermoon", type: "Player" }
+          ];
+          const fight = entry.fights[0]!;
+          entry.fights = [
+            { ...fight, id: 12, friendlyPlayers: [8] },
+            { ...fight, id: 13, friendlyPlayers: [7], endTime: 13_000 }
+          ];
+        }
+      });
+
+      const fights = (
+        result as { kills: readonly { fightUrl: string }[] }
+      ).kills.map((kill) => kill.fightUrl);
+      expect(fights).toContain(
+        "https://www.warcraftlogs.com/reports/unranked#fight=12"
+      );
+      expect(fights).not.toContain(
+        "https://www.warcraftlogs.com/reports/unranked#fight=13"
+      );
+    });
+
+    it("still rules out a night listing only somebody else", async () => {
+      const { hydrated } = await search({
+        rankedKills: 1,
+        unrankedListedAs: "Stranger"
+      });
+
+      // `ranked` lists the current name; `unranked` only somebody else.
+      expect(hydrated).toEqual(["ranked"]);
+    });
+
     it("defers attendance while a capped ranked walk has found nothing yet", async () => {
       // Zones, zone rankings and the encounter ranking spend the cap, so the
       // walk stops before it can read the ranked report.
@@ -1409,5 +1532,56 @@ describe("ranked Mythic backfill", () => {
       expect(asked).toContain("GuildAttendance");
       expect(result).toMatchObject({ tierSearch: { guildsSearched: 1 } });
     });
+  });
+});
+
+describe("the name a character was ranked under", () => {
+  const rankedReport = (
+    rankedCharacters: readonly {
+      canonicalID: number;
+      name: string;
+      server: { slug: string };
+    }[]
+  ) => ({ data: { reportData: { report: { rankedCharacters } } } });
+
+  it("is the one ranked character whose canonical id is the character's", () => {
+    // Break caught in review of #736: taking the first ranked character still
+    // passed every other test, and would have credited a guildmate's name.
+    expect(
+      rankedCharacterName(
+        rankedReport([
+          { canonicalID: 111, name: "Guildmate", server: { slug: "kazzak" } },
+          {
+            canonicalID: 40989140,
+            name: "Erilla",
+            server: { slug: "neptulon" }
+          },
+          { canonicalID: 222, name: "Other", server: { slug: "draenor" } }
+        ]),
+        40989140
+      )
+    ).toEqual({ name: "Erilla", realm: "neptulon" });
+  });
+
+  it("is unknown when no ranked character, or more than one, has that id", () => {
+    const guildmate = {
+      canonicalID: 111,
+      name: "Guildmate",
+      server: { slug: "kazzak" }
+    };
+    expect(rankedCharacterName(rankedReport([guildmate]), 40989140)).toBeNull();
+    expect(
+      rankedCharacterName(
+        rankedReport([
+          { ...guildmate, canonicalID: 40989140 },
+          {
+            canonicalID: 40989140,
+            name: "Erilla",
+            server: { slug: "neptulon" }
+          }
+        ]),
+        40989140
+      )
+    ).toBeNull();
   });
 });
