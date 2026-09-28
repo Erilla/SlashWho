@@ -567,10 +567,14 @@ through the ranked fight instead:
   The kills credited do not depend on which boss the walk reached first.
 - **What it credits** once proved is what a proved report always credits:
   every kill of the zone's ranked encounters that the actor was in.
-- **Stopping:** once three reports that rank nobody have credited nothing, and
-  the walk has accepted no kill, it reads no more reports. The count runs
-  across the whole walk, partitions included, and restarts when a capped walk
-  resumes.
+- **Stopping:** once three reports that rank nobody have credited nothing, it
+  reads no more reports, unless the walk has accepted a kill or read a report
+  that ranks anyone: a tier that has shown one `rankedCharacters` is read
+  whole. The count runs across the whole walk, partitions included, and
+  restarts when a capped walk resumes. The stop is meant for a tier wholly
+  from before `rankedCharacters`, as Tomb is: every one of its 48 reports
+  answered `null`. A tier whose first three reports rank nobody, and whose
+  later ones name the character, would lose those later kills.
 
 Measured live on 2026-09-28 (one character in Tomb, serial requests): all
 73 ranked fights held exactly one player with the character's former name

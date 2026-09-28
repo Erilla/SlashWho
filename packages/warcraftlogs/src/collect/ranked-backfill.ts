@@ -124,9 +124,11 @@ export async function getRankedKillReports(
   // Reads of reports that rank nobody and credited nothing. A tier whose logs
   // predate `rankedCharacters` and hold no known name can prove none of its
   // reports: Tomb of Sargeras read 48 for nothing, about 100 points a press.
-  // So once a few have shown that, and the walk has accepted no kill, its
-  // remaining reports go unread (#742).
+  // So once a few have shown that, while the walk has accepted no kill and
+  // read no report that ranks anyone, its remaining reports go unread
+  // (#742). A tier that has shown one `rankedCharacters` is read whole.
   let unprovableReads = 0;
+  let rankingReports = false;
   const limited = (
     query: WarcraftLogsQueryType,
     limitation: WarcraftLogsLimitation
@@ -305,7 +307,11 @@ export async function getRankedKillReports(
             }
             continue;
           }
-          if (unprovableReads >= UNPROVABLE_READS && acceptedFights.size === 0)
+          if (
+            unprovableReads >= UNPROVABLE_READS &&
+            !rankingReports &&
+            acceptedFights.size === 0
+          )
             continue;
           const detail = await request(
             "report_hydration",
@@ -350,6 +356,7 @@ export async function getRankedKillReports(
           const readFights = entry?.fights;
           const ranksNobody = entry?.rankedCharacters === null;
           if (ranksNobody && decoded.length === 0) unprovableReads += 1;
+          if (Array.isArray(entry?.rankedCharacters)) rankingReports = true;
           readReports.set(ref.code, {
             fights: new Set(
               (Array.isArray(readFights) ? readFights : []).flatMap(

@@ -1846,6 +1846,8 @@ describe("proving a report that ranks nobody by the ranking (#742)", () => {
         players?: readonly Player[];
         /** Names the character by canonical id, as Antorus's reports do. */
         ranked?: boolean;
+        /** Ranks somebody else only. */
+        ranksOther?: boolean;
         /** The spec the log gives the first player on Kin'garoth. */
         kingarothSpec?: string;
       }>[];
@@ -1968,7 +1970,16 @@ describe("proving a report that ranks nobody by the ranking (#742)", () => {
                         server: { slug: "neptulon", name: "Neptulon" }
                       }
                     ]
-                  : null,
+                  : night.ranksOther
+                    ? [
+                        {
+                          id: 1,
+                          canonicalID: 1,
+                          name: "Someone",
+                          server: { slug: "neptulon", name: "Neptulon" }
+                        }
+                      ]
+                    : null,
                 masterData: { actors },
                 fights: [
                   fight(10, 2092, "Argus the Unmaker"),
@@ -2099,5 +2110,22 @@ describe("proving a report that ranks nobody by the ranking (#742)", () => {
 
     expect(reads).toEqual(["antorus", "one", "two", "three", "four"]);
     expect(kills).toEqual(both("antorus"));
+  });
+
+  it("keeps reading a tier that has shown a report ranking anyone", async () => {
+    // Its logs are not all from before `rankedCharacters`, so a later report
+    // may still prove the character by canonical id.
+    const stranger = [{ name: "Someone", server: "Neptulon", spec: "Holy" }];
+    const codes = ["other", "one", "two", "three", "four"];
+    const { reads, kills } = await walk({
+      reports: codes.map((code) => ({
+        code,
+        players: stranger,
+        ranksOther: code === "other"
+      }))
+    });
+
+    expect(reads).toEqual(codes);
+    expect(kills).toEqual([]);
   });
 });
