@@ -193,7 +193,10 @@ expire.
 - **What it doesn't do.** The link still shows its other end on its
   observer's own page, as a stale snapshot shows its members on its root's page
   today. That page's members are its group plus the far ends of its own
-  expired links, labelled by those links.
+  expired links, labelled by those links. A far end is a full member of that
+  page, the same as a stale snapshot's member is today: its evidence is
+  collected, and it counts under `DOSSIER_CHARACTER_CEILING`. It appears on no
+  other member's page.
 - **When it's applied.** The worker's maintenance cleanup recomputes, under the
   same advisory lock, every group that holds a link which crossed the limit
   since its last pass. Expiry needs no publication to take effect.
@@ -270,7 +273,9 @@ Active runs stay one per starting character, which is today's unique index on
 
 - **Members:** the group's members, plus the far ends of the opened
   character's own expired links (see [Link expiry](#link-expiry)). They are
-  ranked and capped by `DOSSIER_CHARACTER_CEILING` as today.
+  all researched alike, with evidence collected and every one counted under
+  `DOSSIER_CHARACTER_CEILING`, and ranked and capped as today. The page and
+  the ceiling therefore always count the same characters.
 - **URL and root:** the URL stays the opened character's, and the response's
   `root` is the opened character.
 - **Labels:** the opened character's row is labelled `input`. Every other
