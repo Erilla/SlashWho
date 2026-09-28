@@ -404,10 +404,10 @@ discovered, as dossiers do today. Nothing discovers a member automatically.
 The worker starts maintaining the new tables in best-effort transactions. No
 page, route, response or publication outcome changes.
 
-**Migration `0067`** (after #734's `0066`. The parallel spec on
-`fix/raiderio-logged-kills-back-catalogue` also plans `0067`. Whichever lands
-second renumbers the SQL file, the journal index, a strictly greater `when`,
-and the migrations test's slice):
+**Migration `0068`** (after #743's `0067_raiderio_tier_reads`, journal `idx` 67, a `when`
+strictly greater than `1792011600018`; recheck `origin/main` before merging and
+renumber the SQL file, the journal index, `when` and the migrations test's slice
+if another migration took the number):
 
 1. **Create six tables:**
    - `character_connections`;
