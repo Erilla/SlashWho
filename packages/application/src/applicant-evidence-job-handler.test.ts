@@ -6284,7 +6284,12 @@ describe("applicant evidence job handler", () => {
                   }
                 })
               )
-            })
+            }),
+          (
+            published: ReturnType<
+              typeof settledStore
+            >["published"][number]["result"]
+          ) => published
         ],
         [
           "the kill list fails",
@@ -6295,7 +6300,17 @@ describe("applicant evidence job handler", () => {
                 kind: "limitation" as const,
                 code: "unavailable" as const
               }))
-            })
+            }),
+          (
+            published: ReturnType<
+              typeof settledStore
+            >["published"][number]["result"]
+          ) => {
+            // Spec §7: the kill list failing carries every stored first kill
+            // forward, unmodified -- so a complete publish must not name a
+            // `raiderIoFirstKills` publication at all.
+            expect(published).not.toHaveProperty("raiderIoFirstKills");
+          }
         ],
         [
           "the stored first kills cannot be read",
@@ -6305,7 +6320,12 @@ describe("applicant evidence job handler", () => {
             };
             return evidence;
           },
-          () => raiderIo()
+          () => raiderIo(),
+          (
+            published: ReturnType<
+              typeof settledStore
+            >["published"][number]["result"]
+          ) => published
         ],
         [
           "the phase never runs",
@@ -6313,25 +6333,73 @@ describe("applicant evidence job handler", () => {
           () => {
             const raiderio = raiderIo();
             return { ...raiderio, getLoggedEncounter: undefined } as never;
-          }
+          },
+          (
+            published: ReturnType<
+              typeof settledStore
+            >["published"][number]["result"]
+          ) => published
         ]
       ] as const)(
         "marks nothing when %s",
-        async (_name, prepare, gatewayFor) => {
+        async (_name, prepare, gatewayFor, assertExtra) => {
           const evidence = prepare(settledStore());
           const raiderio = gatewayFor();
 
           await loggedHandler(evidence, raiderio).execute(run.id);
 
           expect(evidence.marks).toEqual([]);
-          expect(evidence.published[0]!.result).not.toHaveProperty(
-            "retryAfterAt"
-          );
+          const published = evidence.published[0]!.result;
+          expect(published).not.toHaveProperty("retryAfterAt");
+          assertExtra(published);
         }
       );
 
-      it("marks nothing on a targeted run", async () => {
-        // A tier search never runs the phase, so it cannot vouch for a tier.
+      it("asks the same settled tiers again after a capped run, because no mark was written", async () => {
+        // Spec §7: a capped phase must leave every settled tier due for the
+        // next run, exactly as if nothing had been asked. `settledStore`'s
+        // fake does not itself gate reads on writes, so this feeds `marks`
+        // back through `raiderIoTierReads` to prove the second run truly
+        // sees nothing marked.
+        const evidence = settledStore();
+        evidence.raiderIoTierReads = async () => evidence.marks.flat();
+        const raiderio = raiderIo({
+          getHistoricMythicKills: vi.fn(async () => ({
+            kind: "evidence" as const,
+            kills: Array.from({ length: 51 }, (_, index) => ({
+              ...midnightFalls,
+              bossSlug: `boss-${String(index + 1)}`,
+              loggedEncounterId: index + 1
+            }))
+          })),
+          getLoggedEncounter: vi.fn(async (_raidSlug: string, id: number) => ({
+            ...encounter,
+            bossSlug: `boss-${String(id)}`,
+            roster: {
+              state: "unavailable" as const,
+              reason: "private" as const
+            }
+          }))
+        });
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+        expect(evidence.marks).toEqual([]);
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        expect(evidence.marks).toEqual([]);
+        expect(raiderio.getHistoricMythicKills).toHaveBeenLastCalledWith(
+          key,
+          expect.objectContaining({
+            tierOrdinals: raiderIoHistoricTierOrdinals
+          })
+        );
+      });
+
+      it("marks nothing on a targeted run, which never asks the kill list, so it has no back catalogue to mark", async () => {
+        // A targeted run never asks the kill list, so it has no back
+        // catalogue to mark: `verified` is never built, and the guard this
+        // pins is `if (targeted) return`.
         const eternalPalace = supportedRaidCatalogue().find(
           (raid) => raid.raidName === "The Eternal Palace"
         )!;
