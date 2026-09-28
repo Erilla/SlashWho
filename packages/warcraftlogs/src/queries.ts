@@ -237,8 +237,11 @@ export const historicEncounterRankingsQuery = (metric: "dps" | "hps") => `
   }
 `;
 
+// Every Mythic kill in the report, not only the ranked fight that led to
+// it: a raid night holds several ranked bosses, and one read of it costs the
+// same 2.1 points as one read per fight (measured 2026-09-28, #712).
 export const historicRankedReportQuery = `
-  query HistoricRankedReport($code: String!, $fightId: Int!) {
+  query HistoricRankedReport($code: String!) {
     reportData {
       report(code: $code) {
         code startTime
@@ -247,7 +250,7 @@ export const historicRankedReportQuery = `
         zone { id name encounters { id journalID } }
         rankedCharacters { id canonicalID name server { slug name } }
         masterData { actors(type: "Player") { id name server type } }
-        fights(fightIDs: [$fightId]) {
+        fights(difficulty: 5, killType: Kills) {
           id encounterID name startTime endTime kill difficulty friendlyPlayers friendlySpecs
           gameZone { id name }
         }
