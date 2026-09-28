@@ -10,11 +10,13 @@ export {
 export type { CharacterGuild, CharacterKey, Region } from "./character-key";
 export { formatCharacterDisplayName } from "./display-name";
 export { isRosterShown } from "./logged-encounter";
+export { matchesRaiderIoKill, STORED_KILL_MATCH_MS } from "./kill-matching";
 export {
   currentContentEligibility,
   currentContentEligibilityByRaidId,
   lookupRaidByName,
   lookupRaidCurrentContentWindow,
+  lookupRaidEncounterByRaiderIoSlugs,
   lookupRaidForEvidence,
   lookupRaiderIoBoss,
   raidContentWindowOpenedBetween,
