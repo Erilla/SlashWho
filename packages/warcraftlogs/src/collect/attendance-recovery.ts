@@ -4,6 +4,7 @@ import {
   uncoveredVerifiedKills
 } from "../attendance-coverage";
 import { guildReportsPage } from "../decode/attendance";
+import { decodedUnderRankedName } from "../decode/ranked-backfill";
 import { decodedHydratedReport } from "../decode/reports";
 import { guildReportsQuery, reportByCodeQuery } from "../queries";
 import type {
@@ -23,7 +24,22 @@ async function hydrateReport(
   );
   run.historyRequests += 1;
   if (report.kind !== "success") return report;
-  return decodedHydratedReport(report.value, run.key);
+  const decoded = decodedHydratedReport(report.value, run.key);
+  // Nothing under the current name may be a night from before a rename:
+  // the report's ranking names the character as they were then (#733). A
+  // stored kill re-read that decoded to nothing here would otherwise read as
+  // a kill the run stopped finding, and a complete publish would drop it.
+  if (
+    decoded.kind === "evidence" &&
+    decoded.kills.length === 0 &&
+    decoded.wipes.length === 0
+  ) {
+    return (
+      decodedUnderRankedName(report.value, run.key, run.options.characterId) ??
+      decoded
+    );
+  }
+  return decoded;
 }
 
 /**

@@ -2,13 +2,15 @@ import {
   currentContentEligibilityByRaidId,
   lookupRaidByName,
   lookupRaidForEvidence,
+  isValidCharacterKey,
   type CharacterKey
 } from "@slashwho/domain";
 
 import { MYTHIC_DIFFICULTY } from "../queries";
 import type {
   WarcraftLogsFirstKillEvidence,
-  WarcraftLogsLimitation
+  WarcraftLogsLimitation,
+  WarcraftLogsReportResult
 } from "../types";
 import {
   nonEmptyString,
@@ -201,6 +203,34 @@ export function rankedCharacterName(
   const name = nonEmptyString(matches[0]?.name);
   const realm = nonEmptyString(record(matches[0]?.server)?.slug);
   return name && realm ? { name, realm } : null;
+}
+
+/**
+ * A hydrated report decoded under the name the character was ranked under
+ * in it, when that name is not the key's: a renamed character raided under
+ * a former name, which the key cannot match (#733). Null when the report
+ * ranks nobody by that canonical id, or ranks them under the key's own name.
+ */
+export function decodedUnderRankedName(
+  value: unknown,
+  key: CharacterKey,
+  characterId: number | undefined
+): WarcraftLogsReportResult | null {
+  if (characterId === undefined) return null;
+  const ranked = rankedCharacterName(value, characterId);
+  if (!ranked) return null;
+  const identity = {
+    region: key.region,
+    realm: ranked.realm.toLocaleLowerCase("en-US"),
+    name: ranked.name.normalize("NFC").toLocaleLowerCase("en-US")
+  };
+  if (
+    !isValidCharacterKey(identity) ||
+    (identity.name === key.name && identity.realm === key.realm)
+  ) {
+    return null;
+  }
+  return decodedHydratedReport(value, identity);
 }
 
 export function decodedRankedKill(
