@@ -494,6 +494,40 @@ than the ordinary run's budget allowed. It gallops through a guild's attendance 
 the window, then walks it page by page, so an old tier behind years of newer
 reports costs a few requests a guild instead of one for every page in between.
 
+Since #733 the ranked walk goes first, and the attendance walk depends on it:
+
+- **Guilds are walked** only for a character something places in the tier: a
+  kill the ranked walk found, or stored kills or wipes there.
+- **Nothing places them there, and the ranked walk finished:** no guild is
+  walked. The search is recorded `complete`, with no requests and no guilds,
+  so the runs that continue the press do not ask again.
+- **The ranked walk stopped with a limitation a later run continues**
+  (`request_cap`, `rate_limited`, `unavailable`) **and has found nothing
+  yet:** the walk is recorded `deferred`, so the continuation decides again.
+  It is recorded rather than left null because a continuation reads the
+  tier's newest outcome, and a null would let it take an earlier press's
+  `complete` for this one's.
+- **The ranked walk failed for good** (`schema_drift`, `private`,
+  `not_found`): it says nothing either way, and the guilds are walked as
+  before. A deferral there would never be continued. The set of continued
+  codes is pinned against `retryDelayMsFor` by a test.
+- **Reports the ranked walk read are still hydrated.** It loads only its one
+  ranked fight, so the rest of the report, its wipes and any unranked kills,
+  is attendance's to find.
+
+Before #733, a press searched every connected character's guilds whether or
+not they raided the tier. From 25 to 28 September 2026 that was 406 attendance
+pages, about 10,000 points, and not one report hydrated: 13 of the 14
+characters searched started raiding years after the 2017–2019 tiers they were
+searched for.
+
+The cost of the gate is a character whose kills in a tier are all unranked, and
+of whom nothing else is stored there: no guild is searched for them.
+
+Attendance matches players by name, so it also cannot see nights from before
+a character was renamed. The ranked walk works by character id, so it still
+finds those kills.
+
 One press searches every dossier character (#494), one run after another, and
 alts share guilds. A guild's walk across a window that finished is kept by the
 worker for 30 minutes and replayed for the next character, which judges each
@@ -510,10 +544,17 @@ searched no tier:
 - `tier_search_raid_id` is the Journal raid id the dossier asked for. It is
   present even when the search did not run, because the catalogue had no
   window for the raid.
-- `tier_search_outcome` is `complete` (every guild walked across the whole
-  window), `request_cap` (the search's own cap ran out) or `incomplete` (some
-  guild's attendance or report could not be read). None of them limits the
-  run: a search only ever adds evidence. Null means it never ran.
+- `tier_search_outcome` is one of:
+  - `complete`: every guild walked across the whole window, or, since #733,
+    none needed walking, with 0 requests and 0 guilds;
+  - `request_cap`: the search's own cap ran out;
+  - `incomplete`: some guild's attendance or report could not be read;
+  - `deferred` (since #733): nothing places the character in the tier yet,
+    and the ranked walk that decides it continues in a later run.
+
+  None of them limits the run: a search only ever adds evidence. Null means
+  it never ran.
+
 - `tier_search_requests`, `tier_search_guilds` and
   `tier_search_reports_hydrated` are what it spent and walked.
 - `tier_search_recovered_kills` and `tier_search_recovered_wipes` are what it

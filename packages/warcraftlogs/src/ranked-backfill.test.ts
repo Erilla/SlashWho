@@ -1226,4 +1226,188 @@ describe("ranked Mythic backfill", () => {
       ]);
     });
   });
+
+  describe("walking a tier's attendance only for a character who raided it (#733)", () => {
+    // Break caught (#733): a dossier's tier search walked every connected
+    // character's guild attendance back to 2017-2019 tiers, 406 pages in four
+    // days, and hydrated nothing -- 13 of the 14 characters started raiding
+    // years later. The ranked walk says, for a few requests, whether the
+    // character raided the tier at all.
+    const antorus = {
+      data: {
+        worldData: {
+          zones: [
+            {
+              id: 17,
+              name: "Antorus, The Burning Throne",
+              partitions: [{ id: 1 }]
+            }
+          ]
+        }
+      }
+    };
+    const ranked = (kills: number) => ({
+      data: {
+        characterData: {
+          character: {
+            id: 40989140,
+            damage: {
+              rankings:
+                kills > 0 ? [{ encounterID: 2092, totalKills: kills }] : []
+            },
+            healing: { rankings: [] }
+          }
+        }
+      }
+    });
+    const encounterRankings = {
+      data: {
+        characterData: {
+          character: {
+            encounterRankings: {
+              ranks: [{ report: { code: "ranked", fightID: 10 }, spec: "Holy" }]
+            }
+          }
+        }
+      }
+    };
+    const search = async (
+      options: Readonly<{
+        rankedKills: number;
+        rankedCap?: number;
+        raidedTier?: boolean;
+        zoneRankings?: unknown;
+      }>
+    ) => {
+      const asked: string[] = [];
+      const hydrated: string[] = [];
+      const client = createWarcraftLogsClient({
+        fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(
+            typeof input === "string" || input instanceof URL
+              ? input
+              : input.url
+          );
+          if (url.pathname === "/oauth/token")
+            return Response.json({ access_token: "token", expires_in: 3600 });
+          const { query, variables } = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: { code?: string };
+          };
+          asked.push(query.match(/query (\w+)/)?.[1] ?? "");
+          if (query.includes("HistoricRaidZones"))
+            return Response.json(antorus);
+          if (query.includes("HistoricZoneRankings"))
+            return Response.json(
+              options.zoneRankings ?? ranked(options.rankedKills)
+            );
+          if (query.includes("HistoricEncounterRankings"))
+            return Response.json(encounterRankings);
+          if (query.includes("CharacterGuilds"))
+            return Response.json({
+              data: { characterData: { character: { guilds: [] } } }
+            });
+          if (query.includes("GuildAttendance"))
+            return Response.json({
+              data: {
+                guildData: {
+                  guild: {
+                    attendance: {
+                      data: [
+                        {
+                          code: "ranked",
+                          startTime: Date.UTC(2018, 0, 1),
+                          players: [{ name: "Ryun" }]
+                        },
+                        {
+                          code: "unranked",
+                          startTime: Date.UTC(2018, 0, 8),
+                          players: [{ name: "Ryun" }]
+                        }
+                      ],
+                      has_more_pages: false
+                    }
+                  }
+                }
+              }
+            });
+          if (query.includes("ReportByCode")) hydrated.push(variables.code!);
+          return Response.json(report("ranked", 10));
+        },
+        clientId: "id",
+        clientSecret: "secret"
+      });
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 0,
+        targetedOnly: true,
+        parseRequestCap: 1,
+        rankedBackfill: {
+          journalRaidId: "946",
+          requestCap: options.rankedCap ?? 10
+        },
+        tierSearch: {
+          from: "2017-11-28T00:00:00.000Z",
+          to: "2018-07-17T00:00:00.000Z",
+          guilds: [{ name: "Guild", realm: "silvermoon", region: "eu" }],
+          requestCap: 10,
+          ...(options.raidedTier ? { raidedTier: true } : {})
+        }
+      });
+      return { result, asked, hydrated };
+    };
+
+    it("walks no attendance for a character the finished ranked walk never found", async () => {
+      const { result, asked } = await search({ rankedKills: 0 });
+
+      expect(asked).not.toContain("GuildAttendance");
+      expect(asked).not.toContain("CharacterGuilds");
+      // Settled, so a continuation does not ask again.
+      expect(result).toMatchObject({
+        tierSearch: { outcome: "complete", requests: 0, guildsSearched: 0 }
+      });
+    });
+
+    it("walks attendance once the ranked walk finds a kill", async () => {
+      const { result, asked, hydrated } = await search({ rankedKills: 1 });
+
+      expect(asked).toContain("GuildAttendance");
+      // The ranked walk read only its one fight of `ranked`, so the whole
+      // report is still read for its wipes and unranked kills.
+      expect(hydrated).toEqual(["ranked", "unranked"]);
+      expect(result).toMatchObject({ tierSearch: { guildsSearched: 1 } });
+    });
+
+    it("walks attendance when stored evidence already places the character in the tier", async () => {
+      const { asked } = await search({ rankedKills: 0, raidedTier: true });
+
+      expect(asked).toContain("GuildAttendance");
+    });
+
+    it("defers attendance while a capped ranked walk has found nothing yet", async () => {
+      // Zones, zone rankings and the encounter ranking spend the cap, so the
+      // walk stops before it can read the ranked report.
+      const { result, asked } = await search({ rankedKills: 1, rankedCap: 3 });
+
+      expect(asked).not.toContain("GuildAttendance");
+      // Recorded as deferred, not left empty: the newest outcome is what a
+      // continuation reads, and an empty one would let it read an earlier
+      // press's `complete` as this one's.
+      expect(result).toMatchObject({
+        tierSearch: { outcome: "deferred", requests: 0 }
+      });
+    });
+
+    it("walks attendance as before when the ranked walk fails for good", async () => {
+      // Break caught in review of #735: `schema_drift` gets no retry, so a
+      // deferral would never be continued, and the tier's attendance would
+      // never be walked again.
+      const { result, asked } = await search({
+        rankedKills: 0,
+        zoneRankings: { data: { characterData: { character: null } } }
+      });
+
+      expect(asked).toContain("GuildAttendance");
+      expect(result).toMatchObject({ tierSearch: { guildsSearched: 1 } });
+    });
+  });
 });

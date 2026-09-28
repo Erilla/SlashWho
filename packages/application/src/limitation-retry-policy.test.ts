@@ -1,4 +1,7 @@
-import type { WarcraftLogsLimitationCode } from "@slashwho/warcraftlogs";
+import {
+  CONTINUED_RANKED_WALK_LIMITATIONS,
+  type WarcraftLogsLimitationCode
+} from "@slashwho/warcraftlogs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -48,6 +51,36 @@ describe("retryDelayMsFor", () => {
     // stalled 7 of 10 characters for a day the moment #346 stopped the parse
     // budget overwriting it.
     expect(delayFor("parse_identity_unmatched")).toBe(delays.transientRetryMs);
+  });
+});
+
+describe("the tier ranked walk's continued limitations", () => {
+  // Every discovery-side code, named once, so a new one fails to compile
+  // here until it is placed.
+  const discoveryCodes = {
+    not_found: true,
+    private: true,
+    rate_limited: true,
+    points_budget_low: true,
+    request_cap: true,
+    unavailable: true,
+    schema_drift: true
+  } satisfies Record<
+    Exclude<WarcraftLogsLimitationCode, `parse_${string}`>,
+    true
+  >;
+
+  it("are exactly the codes a later run is scheduled to continue", () => {
+    // A tier search defers its attendance walk on these, trusting the
+    // continuation to decide it (#733). A deferral on a code with no retry
+    // would never be continued, and the tier's attendance never walked.
+    for (const code of Object.keys(
+      discoveryCodes
+    ) as (keyof typeof discoveryCodes)[]) {
+      expect([code, CONTINUED_RANKED_WALK_LIMITATIONS.has(code)], code).toEqual(
+        [code, delayFor(code) !== null]
+      );
+    }
   });
 });
 

@@ -6,7 +6,11 @@ import { characterLookup } from "../queries";
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsLimitation,
+  WarcraftLogsLimitationCode,
+  WarcraftLogsRankedBackfillResult,
   WarcraftLogsReportResult,
+  WarcraftLogsTierSearch,
+  WarcraftLogsTierSearchOutcome,
   WarcraftLogsWipeEvidence
 } from "../types";
 import {
@@ -28,7 +32,7 @@ import { searchTierAttendance } from "./tier-search";
 /**
  * One character's kill evidence and parses. Discovery comes first -- the
  * character's history, stored reports it did not re-find, guild attendance,
- * an explicit tier search, the ranked walk -- then parse work spends its own
+ * the ranked walk, an explicit tier search -- then parse work spends its own
  * budget on what discovery found.
  */
 export async function collectFirstKillReports(
@@ -86,10 +90,9 @@ export async function collectFirstKillReports(
   if (scan.kind !== "history_scan") return scan;
   await rereadStoredReports(run, scan);
   const recovery = await recoverFromAttendance(run, scan);
-  const tierSearchOutcome =
-    options.tierSearch === undefined
-      ? undefined
-      : await searchTierAttendance(run, options.tierSearch);
+  // The ranked walk goes first: what it finds is what says whether the
+  // character raided the tier at all, and so whether its guilds' attendance
+  // is worth walking (#733).
   const rankedBackfill = options.rankedBackfill
     ? await getRankedKillReports(ctx, key, {
         ...options.rankedBackfill,
@@ -106,6 +109,10 @@ export async function collectFirstKillReports(
   } else if (rankedBackfill) {
     scan.limitation ??= rankedBackfill;
   }
+  const tierSearchOutcome =
+    options.tierSearch === undefined
+      ? undefined
+      : await searchTierIfRaided(run, options.tierSearch, rankedBackfill);
 
   const ledger = createParseLedger(options.onLimitation);
   const tierBests = await collectTierBests(run, ledger);
@@ -234,4 +241,64 @@ export async function collectFirstKillReports(
         parse.parseLimitation ?? {
           ...evidenceResult({ kills: [], wipes: [] })
         });
+}
+
+/**
+ * The ranked-walk limitations a later run continues: the capped walk, and
+ * the transient failures. `retryDelayMsFor` reschedules these, and the
+ * continuation resumes the saved cursor. Any other limitation ends the walk
+ * for good. Pinned against that policy by a test in `packages/application`.
+ */
+export const CONTINUED_RANKED_WALK_LIMITATIONS: ReadonlySet<WarcraftLogsLimitationCode> =
+  new Set(["request_cap", "rate_limited", "unavailable"]);
+
+const nothingWalked = (
+  outcome: "complete" | "deferred"
+): WarcraftLogsTierSearchOutcome => ({
+  outcome,
+  requests: 0,
+  guildsSearched: 0,
+  reportsHydrated: 0,
+  recoveredKills: 0,
+  recoveredWipes: 0
+});
+
+/**
+ * A tier's guild attendance is every report its guilds logged across the
+ * tier, walked back from today, and it can only match the character by the
+ * name they raided under. Walked for every connected character of a dossier,
+ * most of whom started raiding years after the tier, it read 406 pages in
+ * four days and hydrated none (#733). So it is walked only for a character
+ * something already places in the tier: a kill the ranked walk found, or
+ * stored evidence there.
+ *
+ * When nothing places them there, the ranked walk decides:
+ *
+ * - **finished:** that settles it, and the tier is reported searched;
+ * - **stopped, and continued later:** the walk is `deferred` to the run that
+ *   continues it, recorded as such so that run does not read an earlier
+ *   press's outcome as this one's;
+ * - **failed for good:** it says nothing either way, and attendance is walked
+ *   as before. So is a call with no ranked walk.
+ */
+async function searchTierIfRaided(
+  run: CollectionRun,
+  search: WarcraftLogsTierSearch,
+  rankedBackfill: WarcraftLogsRankedBackfillResult | undefined
+): Promise<WarcraftLogsTierSearchOutcome> {
+  const raided =
+    search.raidedTier === true ||
+    (rankedBackfill?.kind === "evidence" && rankedBackfill.kills.length > 0);
+  if (raided || rankedBackfill === undefined) {
+    return searchTierAttendance(run, search);
+  }
+  const limitation =
+    rankedBackfill.kind === "evidence"
+      ? rankedBackfill.limitation
+      : rankedBackfill;
+  if (limitation === undefined) return nothingWalked("complete");
+  if (CONTINUED_RANKED_WALK_LIMITATIONS.has(limitation.code)) {
+    return nothingWalked("deferred");
+  }
+  return searchTierAttendance(run, search);
 }
