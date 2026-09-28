@@ -1,5 +1,6 @@
 import {
   raiderIoRaidContentWindowEnd,
+  STORED_KILL_MATCH_MS,
   supportedRegions,
   type CharacterKey
 } from "@slashwho/domain";
@@ -9,16 +10,6 @@ import {
   type RaiderIoGateway
 } from "@slashwho/raiderio";
 import type { WarcraftLogsVerifiedKill } from "@slashwho/warcraftlogs";
-
-/**
- * How far a stored Warcraft Logs kill may sit from Raider.IO's first-defeated
- * time and still account for it. Wider than the minutes the two usually
- * differ by, because Raider.IO can be a whole hour off: it dates Ryun's Queen
- * Azshara 19:34Z against the log's 20:34Z (1 of 36 matched pairs, measured
- * 2026-09-23). Still inside one raid night, where the stored kill means that
- * night's log was already found.
- */
-const STORED_KILL_MATCH_MS = 2 * 60 * 60 * 1_000;
 
 export type VerifiedKillsResult = Readonly<{
   kills: readonly WarcraftLogsVerifiedKill[];
@@ -33,12 +24,20 @@ export type VerifiedKillsResult = Readonly<{
    * otherwise retry forever.
    */
   limitation?: string;
+  /**
+   * Every first kill Raider.IO answered with, before any is filtered as a
+   * search hint (#732). Absent when Raider.IO could not answer.
+   */
+  firstKills?: readonly HistoricMythicKill[];
+  /** The raids the asked tiers answer for, and any a kill came back from. */
+  askedRaidSlugs?: readonly string[];
 }>;
 
 /**
  * The Mythic kills Raider.IO attributes to the character that stored
- * Warcraft Logs evidence does not already hold, as places to search. Never
- * evidence: a kill counts only once a hydrated log attributes it. What is
+ * Warcraft Logs evidence does not already hold, as places to search. A plain
+ * kill is never evidence: it counts only once a hydrated log attributes it,
+ * or once Raider.IO's own logged encounter of it is read (#732). What is
  * already stored is kept by `storedKillReportCodes`, never by this: a
  * Raider.IO failure must not decide what stored evidence survives.
  */
@@ -52,10 +51,11 @@ export async function raiderIoVerifiedKills(
     onPhysicalRequest?: () => void;
   }>
 ): Promise<VerifiedKillsResult> {
+  const tierOrdinals = historicTierOrdinalsFrom(options.killScanFloor);
   let result: Awaited<ReturnType<RaiderIoGateway["getHistoricMythicKills"]>>;
   try {
     result = await raiderio.getHistoricMythicKills(key, {
-      tierOrdinals: historicTierOrdinalsFrom(options.killScanFloor),
+      tierOrdinals,
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.onPhysicalRequest
         ? { onPhysicalRequest: options.onPhysicalRequest }
@@ -70,7 +70,16 @@ export async function raiderIoVerifiedKills(
   }
   return {
     kills: searchableKills(result.kills, options),
-    guilds: raiderIoGuilds(result.kills)
+    guilds: raiderIoGuilds(result.kills),
+    firstKills: result.kills,
+    askedRaidSlugs: [
+      ...new Set([
+        ...raiderIoHistoricTiers
+          .filter((tier) => tierOrdinals.includes(tier.ordinal))
+          .flatMap((tier) => tier.raidSlugs),
+        ...result.kills.map((kill) => kill.raidSlug)
+      ])
+    ].sort()
   };
 }
 

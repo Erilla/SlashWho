@@ -6,6 +6,7 @@ import {
   createDossierRequestSchema,
   createSearchResponseSchema,
   collectionMonitorResponseSchema,
+  dossierFirstKillSchema,
   historyPageSchema,
   historicalSnapshotSchema,
   jobStatusResponseSchema,
@@ -689,4 +690,54 @@ it("defines a strict operator collection monitor without internal run fields", (
       ]
     })
   ).toThrow();
+});
+
+it("carries a first kill's roster, or the reason there is none, and never a Raider.IO id", () => {
+  const firstKill = {
+    killedAt: "2026-07-20T17:25:57.301Z",
+    guild: {
+      name: "Fixture Guild Alfa",
+      region: "eu",
+      realm: "twisting-nether"
+    },
+    historicWorldRank: null,
+    reportUrl: null,
+    reports: [],
+    characters: [applicantCharacter],
+    parses: []
+  };
+  const member = {
+    name: "Alfa",
+    realm: "draenor",
+    region: "eu",
+    className: "Demon Hunter",
+    specName: "Havoc",
+    role: "dps",
+    itemLevel: null,
+    isDossierCharacter: true
+  };
+  const roster = {
+    state: "available",
+    playerCount: 1,
+    roleCounts: { tank: 0, healer: 0, dps: 1 },
+    itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+    pulledAt: "2026-07-20T17:17:29.977Z",
+    durationMs: 507_324,
+    deathCount: 2,
+    vantusCount: 16,
+    members: [member]
+  };
+  const accepts = (value: unknown) =>
+    dossierFirstKillSchema.safeParse({ ...firstKill, roster: value }).success;
+
+  expect(dossierFirstKillSchema.safeParse(firstKill).success).toBe(true);
+  expect(accepts(roster)).toBe(true);
+  for (const reason of ["private", "no_logged_encounter", "not_read"]) {
+    expect(accepts({ state: "unavailable", reason })).toBe(true);
+  }
+  expect(accepts({ state: "unavailable", reason: "hidden" })).toBe(false);
+  expect(accepts({ ...roster, members: [] })).toBe(false);
+  expect(
+    accepts({ ...roster, members: [{ ...member, raiderIoCharacterId: 1 }] })
+  ).toBe(false);
 });

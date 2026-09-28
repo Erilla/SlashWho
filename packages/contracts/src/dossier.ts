@@ -76,6 +76,7 @@ export const collectionPhaseSchema = z
       "warcraft_logs_fight_parses",
       "warcraft_logs_ranking_identities",
       "raiderio_rankings",
+      "raiderio_logged_encounters",
       "blizzard_achievements",
       "publication"
     ]),
@@ -156,6 +157,61 @@ export const applicantDossierCharacterParsesSchema = z
   })
   .strict();
 
+/** One raider on a Raider.IO logged encounter's roster (#732). No Raider.IO id. */
+export const dossierRosterMemberSchema = z
+  .object({
+    name: z.string().min(1),
+    realm: z.string().min(1),
+    region: z.string().min(1),
+    className: z.string().min(1),
+    specName: z.string().min(1),
+    role: z.enum(["tank", "healer", "dps"]),
+    /** Null when Raider.IO did not say; never zero. */
+    itemLevel: z.number().nonnegative().nullable(),
+    isDossierCharacter: z.boolean()
+  })
+  .strict();
+
+/**
+ * Who was in the raid, from Raider.IO's logged encounter of the kill, or why
+ * that cannot be shown. Unavailable is its own state: never "not present".
+ * The counts are Raider.IO's, so they can exceed the raiders listed: a raider
+ * removed from SlashWho is counted and never named.
+ */
+export const dossierKillRosterSchema = z.discriminatedUnion("state", [
+  z
+    .object({
+      state: z.literal("available"),
+      playerCount: z.number().int().nonnegative(),
+      roleCounts: z
+        .object({
+          tank: z.number().int().nonnegative(),
+          healer: z.number().int().nonnegative(),
+          dps: z.number().int().nonnegative()
+        })
+        .strict(),
+      itemLevel: z
+        .object({
+          average: z.number().nonnegative(),
+          min: z.number().nonnegative(),
+          max: z.number().nonnegative()
+        })
+        .strict(),
+      pulledAt: z.iso.datetime(),
+      durationMs: z.number().int().nonnegative(),
+      deathCount: z.number().int().nonnegative(),
+      vantusCount: z.number().int().nonnegative(),
+      members: z.array(dossierRosterMemberSchema).min(1)
+    })
+    .strict(),
+  z
+    .object({
+      state: z.literal("unavailable"),
+      reason: z.enum(["private", "no_logged_encounter", "not_read"])
+    })
+    .strict()
+]);
+
 export const dossierFirstKillSchema = z
   .object({
     killedAt: z.iso.datetime(),
@@ -165,7 +221,9 @@ export const dossierFirstKillSchema = z
     reportUrls: z.array(z.url()).optional(),
     reports: z.array(dossierReportSchema).optional(),
     characters: z.array(characterKeySchema),
-    parses: z.array(applicantDossierCharacterParsesSchema)
+    parses: z.array(applicantDossierCharacterParsesSchema),
+    /** Absent when no Raider.IO first kill was matched to this kill. */
+    roster: dossierKillRosterSchema.optional()
   })
   .strict();
 
@@ -458,6 +516,7 @@ export type DossierSourceLabel = z.infer<typeof dossierSourceLabelSchema>;
 export type DossierEvidenceState = z.infer<typeof dossierEvidenceStateSchema>;
 export type DossierCharacter = z.infer<typeof dossierCharacterSchema>;
 export type DossierCuttingEdge = z.infer<typeof dossierCuttingEdgeSchema>;
+export type DossierKillRoster = z.infer<typeof dossierKillRosterSchema>;
 export type DossierLimitation = z.infer<typeof dossierLimitationSchema>;
 export type DossierLimitationCode = z.infer<typeof dossierLimitationCodeSchema>;
 export type DossierLimitationAffects = z.infer<

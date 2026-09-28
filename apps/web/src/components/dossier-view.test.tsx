@@ -278,9 +278,12 @@ describe("DossierPageClient", () => {
         "World rank: —"
       )[0]
     ).toBeVisible();
+    const sikranReportsLabel = within(
+      screen.getByText("Sikran").closest("article")!
+    ).getByText("Reports", { selector: "dt" });
     expect(
-      within(screen.getByText("Sikran").closest("article")!).getByText(
-        "Report: —"
+      within(sikranReportsLabel.parentElement!).getByText(
+        "No public logs found"
       )
     ).toBeVisible();
   });

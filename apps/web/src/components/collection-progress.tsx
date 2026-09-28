@@ -24,6 +24,7 @@ const stepLabel: Record<CollectionPhase["id"], string> = {
   warcraft_logs_fight_parses: "Reading per-fight parses",
   warcraft_logs_ranking_identities: "Matching ranking identities",
   raiderio_rankings: "Reading Raider.IO rankings",
+  raiderio_logged_encounters: "Reading Raider.IO kill logs",
   blizzard_achievements: "Reading Blizzard achievements",
   publication: "Publishing evidence"
 };
