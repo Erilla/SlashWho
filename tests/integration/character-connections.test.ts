@@ -1,3 +1,4 @@
+import type { CharacterKey } from "@slashwho/domain";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -44,6 +45,35 @@ describe("character connections: observation writes", () => {
       characters
     });
     return run.id;
+  }
+
+  /** Like `publishedRun`, but for an arbitrary root: a second observer. */
+  async function publishedRunFor(
+    root: CharacterKey,
+    characters: ReturnType<typeof observation>[]
+  ): Promise<string> {
+    const run = await repositories.runs.createOrReuse(root, "anonymous");
+    await repositories.runs.markRunning(run.id);
+    await repositories.snapshots.create({
+      runId: run.id,
+      rootKey: root,
+      state: "complete",
+      limitationCode: null,
+      refreshedAt: new Date(),
+      characters
+    });
+    return run.id;
+  }
+
+  async function characterId(key: CharacterKey): Promise<string> {
+    const result = await pool.query<{ id: string }>(
+      `SELECT id FROM characters
+       WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+      [key.region, key.realm, key.name]
+    );
+    const id = result.rows[0]?.id;
+    if (!id) throw new Error(`no character row for ${JSON.stringify(key)}`);
+    return id;
   }
 
   const connections = () => repositories.characterConnections!;
@@ -291,6 +321,328 @@ describe("character connections: observation writes", () => {
       ]
     });
     expect(await existingChecksum(pool)).toBe(before);
+  });
+
+  describe("retraction bounds", () => {
+    it("keeps a row an observed_at bound alone would not protect, because it is newer than the retracting run", async () => {
+      // R1's own started_at is pinned far in the past, so R1's write does not
+      // block R2 later. R1's row then carries an observed_at from write time
+      // (now), which sits at or after R2's started_at once that is pinned
+      // between the two. The discovery_run_id clause alone would not protect
+      // this row (R1 !== R2): only `observed_at < run_started_at` does.
+      const r1 = await publishedRun();
+      await pool.query(
+        `UPDATE discovery_runs SET started_at = now() - interval '2 hours' WHERE id = $1`,
+        [r1]
+      );
+      await connections().writeObservations({
+        runId: r1,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "added_only",
+            reason: "raiderio_limited",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          }
+        ]
+      });
+
+      const r2 = await publishedRun();
+      await pool.query(
+        `UPDATE discovery_runs SET started_at = now() - interval '1 hour' WHERE id = $1`,
+        [r2]
+      );
+      await connections().writeObservations({
+        runId: r2,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: []
+          }
+        ]
+      });
+
+      const rows = await pool.query(
+        `SELECT source, discovery_run_id FROM character_connections`
+      );
+      expect(rows.rows).toEqual([{ source: "claimed", discovery_run_id: r1 }]);
+    });
+
+    it("keeps a same-run row even with an artificially old observed_at, because a discovery_run_id bound alone would not protect it", async () => {
+      // The row's observed_at is forced far into the past, well before this
+      // run's own started_at, so the observed_at bound alone would delete
+      // it. Only `discovery_run_id <> $current_run` protects a row this same
+      // run continuation itself re-observed.
+      const runId = await publishedRun();
+      await connections().writeObservations({
+        runId,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "added_only",
+            reason: "raiderio_limited",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          }
+        ]
+      });
+      await pool.query(
+        `UPDATE character_connections SET observed_at = now() - interval '2 hours'`
+      );
+      await connections().writeObservations({
+        runId,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: []
+          }
+        ]
+      });
+      const rows = await pool.query(
+        `SELECT source, discovery_run_id FROM character_connections`
+      );
+      expect(rows.rows).toEqual([{ source: "claimed", discovery_run_id: runId }]);
+    });
+  });
+
+  it("a second observer's row for the same other character survives the first observer's replaced write", async () => {
+    const first = await publishedRun();
+    await connections().writeObservations({
+      runId: first,
+      observerKey: rootKey,
+      families: [
+        {
+          family: "raiderio",
+          decision: "replaced",
+          reason: "raiderio_complete",
+          sweepReservationId: null,
+          observed: [{ key: thirdKey, source: "claimed" }]
+        }
+      ]
+    });
+
+    const altRun = await publishedRunFor(altKey, [
+      observation(altKey, "Alt"),
+      observation(thirdKey, "Third", "claimed")
+    ]);
+    await connections().writeObservations({
+      runId: altRun,
+      observerKey: altKey,
+      families: [
+        {
+          family: "raiderio",
+          decision: "replaced",
+          reason: "raiderio_complete",
+          sweepReservationId: null,
+          observed: [{ key: thirdKey, source: "claimed" }]
+        }
+      ]
+    });
+
+    const second = await publishedRun([observation(rootKey, "Ryii")]);
+    await connections().writeObservations({
+      runId: second,
+      observerKey: rootKey,
+      families: [
+        {
+          family: "raiderio",
+          decision: "replaced",
+          reason: "raiderio_complete",
+          sweepReservationId: null,
+          observed: []
+        }
+      ]
+    });
+
+    const altId = await characterId(altKey);
+    const rows = await pool.query(
+      `SELECT observed_from_character_id FROM character_connections`
+    );
+    expect(rows.rows).toEqual([{ observed_from_character_id: altId }]);
+  });
+
+  describe("changedCharacterIds", () => {
+    it("contains both ends of a newly inserted link, both ends of a retracted link, and the observer", async () => {
+      const first = await publishedRun();
+      const observerId = await characterId(rootKey);
+      const altId = await characterId(altKey);
+      const thirdId = await characterId(thirdKey);
+
+      await connections().writeObservations({
+        runId: first,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          }
+        ]
+      });
+
+      const second = await publishedRun();
+      const result = await connections().writeObservations({
+        runId: second,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: [{ key: thirdKey, source: "claimed" }]
+          }
+        ]
+      });
+
+      expect([...result.changedCharacterIds].sort()).toEqual(
+        [observerId, altId, thirdId].sort()
+      );
+    });
+
+    it("is exactly the observer when the only family is blocked", async () => {
+      const older = await publishedRun();
+      const observerId = await characterId(rootKey);
+      await pool.query(
+        `UPDATE discovery_runs SET started_at = now() - interval '2 hours' WHERE id = $1`,
+        [older]
+      );
+      const newer = await publishedRun([observation(rootKey, "Ryii")]);
+      await connections().writeObservations({
+        runId: newer,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "fingerprint",
+            decision: "replaced",
+            reason: "matched",
+            sweepReservationId: null,
+            observed: []
+          }
+        ]
+      });
+
+      const result = await connections().writeObservations({
+        runId: older,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "fingerprint",
+            decision: "added_only",
+            reason: "capped",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "fingerprint" }]
+          }
+        ]
+      });
+
+      expect(result.changedCharacterIds).toEqual([observerId]);
+    });
+
+    it("adds no new ids beyond the observer when a repeat write only renews observed_at", async () => {
+      const runId = await publishedRun();
+      const observerId = await characterId(rootKey);
+      const altId = await characterId(altKey);
+      const write = {
+        runId,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio" as const,
+            decision: "added_only" as const,
+            reason: "raiderio_limited" as const,
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" as const }]
+          }
+        ]
+      };
+      const first = await connections().writeObservations(write);
+      expect([...first.changedCharacterIds].sort()).toEqual(
+        [observerId, altId].sort()
+      );
+      const second = await connections().writeObservations(write);
+      expect(second.changedCharacterIds).toEqual([observerId]);
+    });
+  });
+
+  describe("failure paths", () => {
+    it("rejects a missing run id and writes nothing", async () => {
+      await expect(
+        connections().writeObservations({
+          runId: "00000000-0000-0000-0000-000000000000",
+          observerKey: rootKey,
+          families: [
+            {
+              family: "raiderio",
+              decision: "added_only",
+              reason: "raiderio_limited",
+              sweepReservationId: null,
+              observed: [{ key: altKey, source: "claimed" }]
+            }
+          ]
+        })
+      ).rejects.toThrow("character_connections_run_missing");
+      expect(
+        (await pool.query(`SELECT 1 FROM character_connections`)).rowCount
+      ).toBe(0);
+    });
+
+    it("rejects a family/source mismatch and writes nothing", async () => {
+      const runId = await publishedRun();
+      await expect(
+        connections().writeObservations({
+          runId,
+          observerKey: rootKey,
+          families: [
+            {
+              family: "fingerprint",
+              decision: "added_only",
+              reason: "capped",
+              sweepReservationId: null,
+              observed: [{ key: altKey, source: "claimed" }]
+            }
+          ]
+        })
+      ).rejects.toThrow("character_connections_family_mismatch");
+      expect(
+        (await pool.query(`SELECT 1 FROM character_connections`)).rowCount
+      ).toBe(0);
+    });
+
+    it("rejects an observer key that isn't the run's root", async () => {
+      const runId = await publishedRun();
+      await expect(
+        connections().writeObservations({
+          runId,
+          observerKey: altKey,
+          families: [
+            {
+              family: "raiderio",
+              decision: "added_only",
+              reason: "raiderio_limited",
+              sweepReservationId: null,
+              observed: [{ key: thirdKey, source: "claimed" }]
+            }
+          ]
+        })
+      ).rejects.toThrow("character_connections_run_root_mismatch");
+      expect(
+        (await pool.query(`SELECT 1 FROM character_connections`)).rowCount
+      ).toBe(0);
+    });
   });
 });
 

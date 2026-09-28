@@ -2,7 +2,9 @@ import type { Pool, PoolClient } from "pg";
 import {
   canonicalCharacterId,
   familyOf,
-  type CharacterKey
+  type CharacterKey,
+  type ConnectionFamily,
+  type ObservationSource
 } from "@slashwho/domain";
 import type {
   CharacterConnectionRepository,
@@ -35,8 +37,25 @@ export async function lockGroups(client: PoolClient): Promise<void> {
 
 const LOCK_TIMEOUT = "5s";
 
-/** The Raider.IO sources a `raiderio`-family retraction may remove. */
-const RAIDERIO_SOURCES = ["claimed", "declared_main", "profile_guess"];
+/** Every source discovery can attribute a link to. */
+const ALL_OBSERVATION_SOURCES = [
+  "claimed",
+  "declared_main",
+  "profile_guess",
+  "fingerprint"
+] as const satisfies readonly ObservationSource[];
+
+/**
+ * The sources a `family`-family `replaced` retraction may remove, derived
+ * from `familyOf` so a new Raider.IO source can't be missed here.
+ */
+function sourcesForFamily(
+  family: ConnectionFamily
+): readonly ObservationSource[] {
+  return ALL_OBSERVATION_SOURCES.filter(
+    (source) => familyOf(source) === family
+  );
+}
 
 export function createCharacterConnectionRepositories(
   pool: Pool
@@ -48,14 +67,36 @@ export function createCharacterConnectionRepositories(
         await lockRebuildShared(client);
         await lockRoot(client, input.observerKey);
 
+        // `run_started_at` is resolved in SQL and carried as text from here
+        // on, never round-tripped through a JS `Date`: a `Date` only holds
+        // millisecond precision, but `discovery_runs.started_at` and
+        // `character_connections.observed_at` are both timestamptz
+        // (microsecond precision, matching the backfill), and the
+        // marker/ledger/retraction comparisons below need that full
+        // precision to order writes correctly.
         const run = await client.query<{
-          started_at: Date | null;
-          created_at: Date;
-        }>(`SELECT started_at, created_at FROM discovery_runs WHERE id = $1`, [
-          input.runId
-        ]);
-        const runStartedAt = run.rows[0]?.started_at ?? run.rows[0]?.created_at;
-        if (!runStartedAt) throw new Error("character_connections_run_missing");
+          run_started_at: string;
+          root_region: string;
+          root_realm_slug: string;
+          root_normalized_name: string;
+        }>(
+          `SELECT COALESCE(started_at, created_at)::text AS run_started_at,
+                  root_region, root_realm_slug, root_normalized_name
+             FROM discovery_runs WHERE id = $1`,
+          [input.runId]
+        );
+        const runRow = run.rows[0];
+        if (!runRow) throw new Error("character_connections_run_missing");
+        const runStartedAt = runRow.run_started_at;
+
+        const runRootId = canonicalCharacterId({
+          region: runRow.root_region as CharacterKey["region"],
+          realm: runRow.root_realm_slug,
+          name: runRow.root_normalized_name
+        });
+        if (runRootId !== canonicalCharacterId(input.observerKey)) {
+          throw new Error("character_connections_run_root_mismatch");
+        }
 
         const ids = await characterIds(client, [
           input.observerKey,
@@ -71,14 +112,18 @@ export function createCharacterConnectionRepositories(
         let unknownCharacters = 0;
 
         for (const family of input.families) {
-          const marker = await client.query<{ run_started_at: Date }>(
-            `SELECT run_started_at FROM character_connection_writes
-             WHERE observer_character_id = $1 AND family = $2`,
-            [observerId, family.family]
+          // An observer's markers and observed rows are only ever written
+          // under that observer's root lock (held above) or the exclusive
+          // rebuild lock, so no concurrent writer for this observer can be
+          // racing this comparison: the marker this reads is either
+          // committed and stable, or not our concern yet.
+          const marker = await client.query<{ blocked: boolean }>(
+            `SELECT run_started_at > $3::timestamptz AS blocked
+               FROM character_connection_writes
+              WHERE observer_character_id = $1 AND family = $2`,
+            [observerId, family.family, runStartedAt]
           );
-          const blockedByNewer =
-            marker.rows[0] !== undefined &&
-            marker.rows[0].run_started_at > runStartedAt;
+          const blockedByNewer = marker.rows[0]?.blocked === true;
           if (blockedByNewer) {
             await logWrite(
               client,
@@ -102,6 +147,14 @@ export function createCharacterConnectionRepositories(
             }
             if (otherId === observerId) continue;
 
+            // The winning `discovery_run_id` on a re-observed pair is
+            // whichever write carried the newest `observed_at`, so it may
+            // name an earlier run than the latest writer if that writer
+            // only renewed an already-newer row. Retraction below stays
+            // safe with this because it also requires
+            // `observed_at < run_started_at`: a row can only be retracted
+            // by a run whose start is after the row's own `observed_at`,
+            // whichever run's id is currently attached to it.
             const inserted = await client.query<{ created: boolean }>(
               `INSERT INTO character_connections
                  (character_low_id, character_high_id, kind, source,
@@ -127,10 +180,7 @@ export function createCharacterConnectionRepositories(
           }
 
           if (family.decision === "replaced") {
-            const sources =
-              family.family === "fingerprint"
-                ? ["fingerprint"]
-                : RAIDERIO_SOURCES;
+            const sources = sourcesForFamily(family.family);
             const removed = await client.query<{
               low: string;
               high: string;
@@ -140,7 +190,7 @@ export function createCharacterConnectionRepositories(
                  AND observed_from_character_id = $1
                  AND source = ANY($2::text[])
                  AND discovery_run_id <> $3
-                 AND observed_at < $4
+                 AND observed_at < $4::timestamptz
                RETURNING character_low_id AS low, character_high_id AS high`,
               [observerId, sources, input.runId, runStartedAt]
             );
@@ -153,7 +203,7 @@ export function createCharacterConnectionRepositories(
           await client.query(
             `INSERT INTO character_connection_writes
                (observer_character_id, family, run_id, run_started_at)
-             VALUES ($1, $2, $3, $4)
+             VALUES ($1, $2, $3, $4::timestamptz)
              ON CONFLICT (observer_character_id, family) DO UPDATE SET
                run_id = CASE
                  WHEN EXCLUDED.run_started_at >= character_connection_writes.run_started_at
@@ -202,13 +252,13 @@ async function logWrite(
   observerId: string,
   decision: string,
   reason: string,
-  runStartedAt: Date
+  runStartedAt: string
 ): Promise<void> {
   await client.query(
     `INSERT INTO character_connection_write_log
        (run_id, sweep_reservation_id, observer_character_id, family, decision,
         reason, run_started_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)`,
     [
       runId,
       family.sweepReservationId,
