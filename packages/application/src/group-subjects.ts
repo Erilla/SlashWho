@@ -22,9 +22,14 @@ export type GroupSubjects = Readonly<{
 
 /** A page's members: reach from `originId` within its group, never through a suppressed character. */
 export function pageMembers(originId: string, graph: GroupGraph): Set<string> {
-  const group = graph.groupOf.get(originId);
-  const members = new Set<string>([originId]);
   if (graph.suppressed.has(originId)) return new Set();
+  const group = graph.groupOf.get(originId);
+  // No group assignment means nothing to walk into: every link's ends would
+  // also read as ungrouped (`undefined === undefined`), so without this
+  // guard the filter below would never skip them and the walk would leak
+  // into unrelated, equally ungrouped characters.
+  if (group === undefined) return new Set([originId]);
+  const members = new Set<string>([originId]);
   const neighbours = new Map<string, string[]>();
   for (const link of graph.links) {
     if (
