@@ -1883,6 +1883,47 @@ describe("worker runtime", () => {
     );
   });
 
+  it("logs character_groups_write_failed and still resolves when only the recompute fails", async () => {
+    // Break caught: this branch had no coverage, so a swallowed error, a
+    // wrongly-shaped record, or a rethrow that broke the cleanup's own
+    // success could all have shipped unnoticed.
+    const recomputePass = vi.fn(async () => {
+      throw new RangeError("recompute_unavailable");
+    });
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass }
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(
+      logged.find((record) => record.event === "character_groups_recompute")
+    ).toBeUndefined();
+    expect(
+      logged.find((record) => record.event === "character_groups_write_failed")
+    ).toEqual({
+      event: "character_groups_write_failed",
+      errorName: "RangeError",
+      durationMs: expect.any(Number)
+    });
+  });
+
+  it("still rejects with the cleanup's own error when the recompute also fails", async () => {
+    // Break caught: a recompute failure could mask or replace the cleanup's
+    // own error, hiding the failure its retry actually needs to see.
+    const recomputePass = vi.fn(async () => {
+      throw new RangeError("recompute_unavailable");
+    });
+    const { run } = maintenanceHarness({
+      characterConnections: { recomputePass },
+      clearStaleCredentials: async () => {
+        throw new Error("database_unavailable");
+      }
+    });
+
+    await expect(run()).rejects.toThrow("database_unavailable");
+  });
+
   it("writes one timed record per fingerprint admission, however it ends", async () => {
     // Break caught (#507): a successful admission logged nothing, so the only
     // sign the cycle ran at all was a run blocked for fifteen minutes.
