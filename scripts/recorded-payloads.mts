@@ -19,7 +19,9 @@ export type Endpoint =
   | "blizzard.character-achievements"
   | "blizzard.playable-class-index"
   | "raiderio.character"
-  | "raiderio.view-characters";
+  | "raiderio.view-characters"
+  | "raiderio.raid-progress"
+  | "raiderio.logged-encounter";
 
 export type IdentityClass = "character" | "guild" | "owner" | "discord";
 
@@ -36,7 +38,15 @@ export type LeafKind =
   | { kind: "number" }
   | { kind: "boolean" }
   /** Replaced with a synthetic sequence; the real value is a fingerprint. */
-  | { kind: "timestamp" };
+  | { kind: "timestamp" }
+  /** An ISO-8601 instant, replaced like `timestamp` with a synthetic whole day. */
+  | { kind: "iso-timestamp" }
+  /**
+   * An upstream numeric id: a character's, or a logged encounter's. Replaced
+   * with a small per-session sequence, because the real id links a recording
+   * to the person it came from.
+   */
+  | { kind: "opaque-id" };
 
 export type PolicyEntry = Readonly<{ path: string; leaf: LeafKind }>;
 
@@ -77,6 +87,49 @@ export const playableClassNames = [
   "Warlock",
   "Warrior"
 ] as const;
+
+/** Retail specialisation names, as Raider.IO spells them on a roster. */
+export const specialisationNames = [
+  "Affliction",
+  "Arcane",
+  "Arms",
+  "Assassination",
+  "Augmentation",
+  "Balance",
+  "Beast Mastery",
+  "Blood",
+  "Brewmaster",
+  "Demonology",
+  "Destruction",
+  "Devastation",
+  "Devourer",
+  "Discipline",
+  "Elemental",
+  "Enhancement",
+  "Feral",
+  "Fire",
+  "Frost",
+  "Fury",
+  "Guardian",
+  "Havoc",
+  "Holy",
+  "Marksmanship",
+  "Mistweaver",
+  "Outlaw",
+  "Preservation",
+  "Protection",
+  "Restoration",
+  "Retribution",
+  "Shadow",
+  "Subtlety",
+  "Survival",
+  "Unholy",
+  "Vengeance",
+  "Windwalker"
+] as const;
+
+/** Synthetic ids count from 1; a real Raider.IO id is far larger. */
+export const maximumOpaqueId = 999;
 
 const phonetic = [
   "Alfa",
@@ -212,6 +265,7 @@ export const policies: Readonly<Record<Endpoint, EndpointPolicy>> = {
   "raiderio.character": {
     provider: "raiderio",
     success: [
+      { path: "characterDetails.character.id", leaf: { kind: "opaque-id" } },
       ...raiderIoCharacter("characterDetails.character"),
       {
         path: "characterDetails.isTournamentProfile",
@@ -255,6 +309,106 @@ export const policies: Readonly<Record<Endpoint, EndpointPolicy>> = {
     ],
     error: raiderIoError,
     maxItems: { "viewUserCharactersApi.characters": 10 }
+  },
+  "raiderio.raid-progress": {
+    provider: "raiderio",
+    success: [
+      {
+        path: "characterRaidProgress.raidProgress[].raid",
+        leaf: { kind: "slug" }
+      },
+      ...(
+        [
+          ["slug", { kind: "slug" }],
+          ["firstDefeated", { kind: "iso-timestamp" }],
+          ["loggedEncounterId", { kind: "opaque-id" }],
+          ["guild.name", { kind: "identity", identity: "guild" }],
+          ["guild.realm.slug", { kind: "slug" }],
+          ["guild.region.slug", { kind: "slug" }]
+        ] as const
+      ).map(([field, leaf]) => ({
+        path: `characterRaidProgress.raidProgress[].encountersDefeated.mythic[].${field}`,
+        leaf
+      }))
+    ],
+    error: raiderIoError,
+    maxItems: {
+      "characterRaidProgress.raidProgress": 10,
+      "characterRaidProgress.raidProgress[].encountersDefeated.mythic": 10
+    }
+  },
+  // Only what the logged-encounter parser reads. `log.sources` names the
+  // uploader's Raider.IO account, which can be a BattleTag or a Discord
+  // handle, so it is never on this list.
+  "raiderio.logged-encounter": {
+    provider: "raiderio",
+    success: [
+      { path: "killDetails.kill.pulledAt", leaf: { kind: "iso-timestamp" } },
+      { path: "killDetails.kill.defeatedAt", leaf: { kind: "iso-timestamp" } },
+      { path: "killDetails.kill.durationMs", leaf: { kind: "number" } },
+      { path: "killDetails.kill.isSuccess", leaf: { kind: "boolean" } },
+      {
+        path: "killDetails.kill.itemLevelEquippedAvg",
+        leaf: { kind: "number" }
+      },
+      {
+        path: "killDetails.kill.itemLevelEquippedMax",
+        leaf: { kind: "number" }
+      },
+      {
+        path: "killDetails.kill.itemLevelEquippedMin",
+        leaf: { kind: "number" }
+      },
+      { path: "killDetails.log.deaths.count", leaf: { kind: "number" } },
+      { path: "killDetails.log.vantus.count", leaf: { kind: "number" } },
+      { path: "killDetails.raid.slug", leaf: { kind: "slug" } },
+      {
+        path: "killDetails.raid.difficulty",
+        leaf: { kind: "enum", values: ["mythic", "heroic", "normal"] }
+      },
+      { path: "killDetails.boss.slug", leaf: { kind: "slug" } },
+      {
+        path: "killDetails.guild.name",
+        leaf: { kind: "identity", identity: "guild" }
+      },
+      { path: "killDetails.guild.realm.slug", leaf: { kind: "slug" } },
+      { path: "killDetails.guild.region.slug", leaf: { kind: "slug" } },
+      { path: "killDetails.guildPrivacy.raidComps", leaf: { kind: "boolean" } },
+      {
+        path: "killDetails.roster[].character.id",
+        leaf: { kind: "opaque-id" }
+      },
+      {
+        path: "killDetails.roster[].character.name",
+        leaf: { kind: "identity", identity: "character" }
+      },
+      {
+        path: "killDetails.roster[].character.class.name",
+        leaf: { kind: "enum", values: playableClassNames }
+      },
+      {
+        path: "killDetails.roster[].character.spec.name",
+        leaf: { kind: "enum", values: specialisationNames }
+      },
+      {
+        path: "killDetails.roster[].character.spec.role",
+        leaf: { kind: "enum", values: ["tank", "healer", "dps"] }
+      },
+      {
+        path: "killDetails.roster[].character.itemLevelEquipped",
+        leaf: { kind: "number" }
+      },
+      {
+        path: "killDetails.roster[].character.realm.slug",
+        leaf: { kind: "slug" }
+      },
+      {
+        path: "killDetails.roster[].character.region.slug",
+        leaf: { kind: "slug" }
+      }
+    ],
+    error: raiderIoError,
+    maxItems: { "killDetails.roster": 10 }
   },
   "blizzard.character-profile": {
     provider: "blizzard",
@@ -407,6 +561,20 @@ export class PlaceholderBook {
   readonly #assigned = new Map<string, string>();
   readonly #used = new Map<IdentityClass, number>();
   readonly #seen = new Set<string>();
+  readonly #ids = new Map<number, number>();
+
+  /** The same real id always maps to the same small synthetic one. */
+  opaqueId(value: number, path: string): number {
+    let assigned = this.#ids.get(value);
+    if (assigned === undefined) {
+      assigned = this.#ids.size + 1;
+      if (assigned > maximumOpaqueId) {
+        throw new RecordingRefused("placeholders_exhausted", path);
+      }
+      this.#ids.set(value, assigned);
+    }
+    return assigned;
+  }
 
   placeholder(identity: IdentityClass, value: string, path: string): string {
     const key = `${identity}:${value.toLocaleLowerCase("en-US")}`;
@@ -499,6 +667,17 @@ function recordLeaf(
         throw new RecordingRefused("unexpected_type", path);
       recorder.timestamps += 1;
       return syntheticTimestampBase + recorder.timestamps * dayMs;
+    case "iso-timestamp":
+      if (typeof value !== "string" || Number.isNaN(Date.parse(value)))
+        throw new RecordingRefused("unexpected_type", path);
+      recorder.timestamps += 1;
+      return new Date(
+        syntheticTimestampBase + recorder.timestamps * dayMs
+      ).toISOString();
+    case "opaque-id":
+      if (typeof value !== "number" || !Number.isSafeInteger(value))
+        throw new RecordingRefused("unexpected_type", path);
+      return recorder.book.opaqueId(value, path);
   }
 }
 
@@ -622,6 +801,23 @@ function verifyLeaf(leaf: LeafKind, value: unknown): string | null {
         (value - syntheticTimestampBase) % dayMs === 0
         ? null
         : "timestamp is not synthetic";
+    case "iso-timestamp": {
+      if (typeof value !== "string") return "timestamp is not synthetic";
+      const at = Date.parse(value);
+      return Number.isFinite(at) &&
+        new Date(at).toISOString() === value &&
+        at > syntheticTimestampBase &&
+        (at - syntheticTimestampBase) % dayMs === 0
+        ? null
+        : "timestamp is not synthetic";
+    }
+    case "opaque-id":
+      return typeof value === "number" &&
+        Number.isInteger(value) &&
+        value >= 1 &&
+        value <= maximumOpaqueId
+        ? null
+        : "id is not a synthetic sequence number";
   }
 }
 

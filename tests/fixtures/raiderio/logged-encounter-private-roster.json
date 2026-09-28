@@ -1,0 +1,26 @@
+{
+  "status": 200,
+  "body": {
+    "killDetails": {
+      "kill": {
+        "pulledAt": "2020-01-02T00:00:00.000Z",
+        "defeatedAt": "2020-01-03T00:00:00.000Z",
+        "durationMs": 507324,
+        "isSuccess": true,
+        "itemLevelEquippedAvg": 290.312,
+        "itemLevelEquippedMax": 293.062,
+        "itemLevelEquippedMin": 284.938
+      },
+      "log": { "deaths": { "count": 2 }, "vantus": { "count": 16 } },
+      "raid": { "slug": "tier-mn-1", "difficulty": "mythic" },
+      "boss": { "slug": "midnight-falls" },
+      "guild": {
+        "name": "Fixture Guild Alfa",
+        "realm": { "slug": "twisting-nether" },
+        "region": { "slug": "eu" }
+      },
+      "guildPrivacy": { "raidComps": false },
+      "roster": []
+    }
+  }
+}

@@ -55,6 +55,8 @@ allows:
 | `number`        | kept (levels, class ids, achievement ids, status codes)                      |
 | `boolean`       | kept                                                                         |
 | `timestamp`     | a synthetic whole-day sequence from 2020-01-01; the real value is never kept |
+| `iso-timestamp` | the same synthetic whole-day sequence, as an ISO-8601 string                 |
+| `opaque-id`     | a per-session sequence from `1`; one real id maps to one synthetic id        |
 
 Stripped or replaced for every provider:
 
@@ -71,11 +73,13 @@ Stripped or replaced for every provider:
 - **Achievement timestamps** are synthesised. Real achievement ids paired with
   real completion times are the fingerprint that links alts, so they identify
   a person.
-- **Everything the parsers don't read** is dropped: character and account ids,
-  gear, scores, biographies, links, `_links`, media, customisations other than
-  the two above.
+- **Everything the parsers don't read** is dropped: account ids, gear,
+  scores, biographies, links, `_links`, media, customisations other than the
+  two above, and a logged encounter's `log.sources`, which names the uploader's
+  Raider.IO account. Character and logged-encounter ids the parsers do read
+  are replaced with a small synthetic sequence.
 - **Long arrays are cut**: roster members to 10, achievements to 25, a
-  profile's characters to 10.
+  profile's characters to 10, a logged encounter's roster to 10.
 
 BattleTags, raw request URLs, credentials, tokens and free text are never
 recorded. No kind keeps them, and the verifier refuses any string that looks
@@ -223,8 +227,10 @@ which they don't dent.
 - No committed recording has an `ignored` baseline yet; each gains one when
   it is next re-recorded.
 - Raider.IO: no 403 `profile_is_private`, no guildless character, no
-  `discord_profile: null`, no 429 or 5xx, and `raid-progress` and the guild
-  rankings endpoints are not recorded endpoints yet.
+  `discord_profile: null`, no 429 or 5xx, and the guild rankings endpoints are
+  not recorded endpoints yet. The recorder and drift check do not yet fetch
+  `raid-progress` or logged encounters; their recordings were redacted by hand
+  into the recorder's exact form.
 - The Blizzard token endpoint is deliberately not recordable: its body is a
   credential.
 
@@ -237,3 +243,6 @@ which they don't dent.
 | `raiderio/character-declared-main.json`                                                                     | 2026-09-26 | An unclaimed character (`user: null`) declaring a main.                                                                                                                                  |
 | `raiderio/character-unknown-name.json`                                                                      | 2026-09-26 | A character that does not exist: 400.                                                                                                                                                    |
 | `raiderio/view-characters-unknown-owner.json`                                                               | 2026-09-26 | An owner that does not exist: 404 "Cannot find user".                                                                                                                                    |
+| `raiderio/raid-progress-logged-first-kill.json`                                                             | 2026-09-28 | A kill list with one logged first kill and one kill with no logged encounter, from the #732 live checks. Redacted by hand into the recorder's form.                                      |
+| `raiderio/logged-encounter-guild-kill.json`                                                                 | 2026-09-28 | A guild's Mythic kill with a visible roster, cut to five with the connected character first. Redacted by hand; `log.sources` dropped.                                                    |
+| `raiderio/logged-encounter-no-guild.json`                                                                   | 2026-09-28 | A guild-less kill (`guild` and `guildPrivacy` null). Redacted by hand; roster cut to three and numeric fields illustrative.                                                              |
