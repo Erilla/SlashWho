@@ -2,8 +2,11 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type { CharacterKey } from "./character-key";
 import {
   buildApplicantDossier,
+  type ApplicantDossier,
   type ApplicantDossierBoss,
   type DossierKillEvidence,
+  type DossierLoggedEncounter,
+  type DossierRaiderIoFirstKill,
   type DossierTierBestParse,
   type DossierWipeEvidence
 } from "./applicant-dossier";
@@ -1813,4 +1816,476 @@ it("reports one withheld-evidence limitation per character and reason", () => {
       }
     ]
   ]);
+});
+
+describe("Raider.IO-logged first kills (#732)", () => {
+  // Synthetic identities throughout: this repository is public.
+  const alfaKey: CharacterKey = {
+    region: "eu",
+    realm: "draenor",
+    name: "alfa"
+  };
+  const alfa = { key: alfaKey, displayName: "Alfa" };
+  const killGuild = {
+    name: "Fixture Guild Alfa",
+    region: "eu" as const,
+    realm: "twisting-nether"
+  };
+  const members = [
+    {
+      name: "Charlie",
+      realm: "twisting-nether",
+      region: "eu",
+      className: "Priest",
+      specName: "Holy",
+      role: "healer" as const,
+      itemLevel: 291.4
+    },
+    {
+      name: "Alfa",
+      realm: "draenor",
+      region: "eu",
+      className: "Demon Hunter",
+      specName: "Havoc",
+      role: "dps" as const,
+      itemLevel: null
+    },
+    {
+      name: "Bravo",
+      realm: "twisting-nether",
+      region: "eu",
+      className: "Warrior",
+      specName: "Protection",
+      role: "tank" as const,
+      itemLevel: 292.1
+    }
+  ];
+  const loggedEncounter: DossierLoggedEncounter = {
+    pulledAt: "2026-07-20T17:17:29.977Z",
+    defeatedAt: "2026-07-20T17:25:57.301Z",
+    durationMs: 507_324,
+    guild: killGuild,
+    itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+    deathCount: 2,
+    vantusCount: 16,
+    roster: {
+      state: "available",
+      roleCounts: { tank: 1, healer: 1, dps: 1 },
+      members
+    }
+  };
+  function raiderIoKill(
+    overrides: Partial<DossierRaiderIoFirstKill> = {}
+  ): DossierRaiderIoFirstKill {
+    return {
+      character: alfaKey,
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      killedAt: "2026-07-20T17:25:57.301Z",
+      guild: killGuild,
+      historicWorldRank: null,
+      encounter: { state: "read", encounter: loggedEncounter },
+      ...overrides
+    };
+  }
+  const damageParse = {
+    damage: { state: "available" as const, percentile: 88 },
+    healing: { state: "not_applicable" as const },
+    bossDamage: { state: "unavailable" as const }
+  };
+  function midnightFallsKill(
+    character: CharacterKey,
+    overrides: Partial<DossierKillEvidence> = {}
+  ): DossierKillEvidence {
+    return kill(character, {
+      raidId: "1308",
+      raidName: "March on Quel'Danas",
+      bossId: "2740",
+      bossName: "Midnight Falls",
+      journalBossId: "2740",
+      bossOrder: 2,
+      killedAt: "2026-07-20T18:25:00.000Z",
+      guild: killGuild,
+      historicWorldRank: null,
+      reportUrl: "https://www.warcraftlogs.com/reports/fixturealfa#fight=9",
+      performance: damageParse,
+      ...overrides
+    });
+  }
+  function boss(dossier: ApplicantDossier, bossName = "Midnight Falls") {
+    const found = dossier.raids
+      .flatMap((raid) => raid.bosses)
+      .find((item) => item.bossName === bossName);
+    if (!found) throw new Error("boss_not_found");
+    return found;
+  }
+  const availableRoster = {
+    state: "available",
+    playerCount: 3,
+    roleCounts: { tank: 1, healer: 1, dps: 1 },
+    itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+    pulledAt: "2026-07-20T17:17:29.977Z",
+    durationMs: 507_324,
+    deathCount: 2,
+    vantusCount: 16,
+    members: [
+      { ...members[2], isDossierCharacter: false },
+      { ...members[0], isDossierCharacter: false },
+      { ...members[1], isDossierCharacter: true }
+    ]
+  };
+
+  it("shows a logged kill with no public logs as a kill of its own, with its guild and roster", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [raiderIoKill()],
+      limitations: []
+    });
+
+    const midnightFalls = verifiedKill(boss(dossier));
+    expect(midnightFalls.firstKill).toEqual({
+      killedAt: "2026-07-20T17:25:57.301Z",
+      guild: killGuild,
+      historicWorldRank: null,
+      reportUrl: null,
+      reportUrls: [],
+      reports: [],
+      characters: [alfaKey],
+      parses: [],
+      roster: availableRoster
+    });
+    expect(midnightFalls.bestParses).toEqual([]);
+  });
+
+  it("counts every raider Raider.IO listed, shown or not", () => {
+    // A raider removed from SlashWho is left off the list before it gets
+    // here (#734 review), but the raid still had twenty players.
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [
+        raiderIoKill({
+          encounter: {
+            state: "read",
+            encounter: {
+              ...loggedEncounter,
+              roster: {
+                state: "available",
+                roleCounts: { tank: 2, healer: 4, dps: 14 },
+                members
+              }
+            }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(verifiedKill(boss(dossier)).firstKill.roster).toMatchObject({
+      state: "available",
+      playerCount: 20,
+      roleCounts: { tank: 2, healer: 4, dps: 14 },
+      members: availableRoster.members
+    });
+  });
+
+  it("shows a roster left with nobody to name as hidden, never as an empty table", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [
+        raiderIoKill({
+          encounter: {
+            state: "read",
+            encounter: {
+              ...loggedEncounter,
+              roster: {
+                state: "available",
+                roleCounts: { tank: 1, healer: 0, dps: 0 },
+                members: []
+              }
+            }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(verifiedKill(boss(dossier)).firstKill.roster).toEqual({
+      state: "unavailable",
+      reason: "private"
+    });
+  });
+
+  it("makes the boss a kill, not a boss with no logs", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      wipes: [],
+      completeWarcraftLogsCharacters: [alfaKey],
+      raiderIoFirstKills: [raiderIoKill()],
+      limitations: []
+    });
+
+    expect(boss(dossier).state).toBe("kill");
+    expect(boss(dossier, "Belo'ren, Child of Al'ar").state).toBe("no_logs");
+  });
+
+  it("lends a matching Warcraft Logs kill the roster and changes nothing else about it", () => {
+    const warcraftLogs = midnightFallsKill(alfaKey);
+    const without = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [warcraftLogs],
+      limitations: []
+    });
+    const withRoster = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [warcraftLogs],
+      raiderIoFirstKills: [raiderIoKill()],
+      limitations: []
+    });
+
+    const before = verifiedKill(boss(without));
+    const after = verifiedKill(boss(withRoster));
+    expect(after.firstKills).toHaveLength(1);
+    expect(after.firstKill).toEqual({
+      ...before.firstKill,
+      roster: availableRoster
+    });
+    expect(after.bestParses).toEqual(before.bestParses);
+  });
+
+  it("keeps a kill just outside the tolerance in the same-date event, dated by the earlier", () => {
+    // 2 h 1 min after Raider.IO's time: not the same kill, but the dossier's
+    // same-region, same-date grouping still shows one event for the night.
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [
+        midnightFallsKill(alfaKey, {
+          killedAt: "2026-07-20T19:26:58.000Z"
+        })
+      ],
+      raiderIoFirstKills: [raiderIoKill()],
+      limitations: []
+    });
+
+    const midnightFalls = verifiedKill(boss(dossier));
+    expect(midnightFalls.firstKills).toHaveLength(1);
+    expect(midnightFalls.firstKill).toMatchObject({
+      killedAt: "2026-07-20T17:25:57.301Z",
+      reportUrl: "https://www.warcraftlogs.com/reports/fixturealfa#fight=9",
+      roster: availableRoster
+    });
+    expect(midnightFalls.firstKill.parses).toEqual([
+      expect.objectContaining({ character: "Alfa" })
+    ]);
+  });
+
+  it("makes an earlier Raider.IO kill the boss's first kill", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [
+        midnightFallsKill(alfaKey, {
+          killedAt: "2026-07-27T20:00:00.000Z"
+        })
+      ],
+      raiderIoFirstKills: [raiderIoKill()],
+      limitations: []
+    });
+
+    const midnightFalls = verifiedKill(boss(dossier));
+    expect(midnightFalls.firstKills.map((item) => item.killedAt)).toEqual([
+      "2026-07-27T20:00:00.000Z",
+      "2026-07-20T17:25:57.301Z"
+    ]);
+    expect(midnightFalls.firstKill).toMatchObject({
+      killedAt: "2026-07-20T17:25:57.301Z",
+      reportUrl: null,
+      parses: []
+    });
+    // The Warcraft Logs kill's parses still reach the best-parse row.
+    expect(midnightFalls.bestParses).toEqual([
+      expect.objectContaining({ character: "Alfa" })
+    ]);
+  });
+
+  it("still shows another character's Warcraft Logs parses as the best", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter, alfa],
+      kills: [
+        midnightFallsKill(root, { killedAt: "2026-07-27T20:00:00.000Z" })
+      ],
+      raiderIoFirstKills: [raiderIoKill()],
+      limitations: []
+    });
+
+    const midnightFalls = verifiedKill(boss(dossier));
+    expect(midnightFalls.firstKill.parses).toEqual([]);
+    expect(midnightFalls.bestParses.map((parse) => parse.character)).toEqual([
+      "Ryii"
+    ]);
+  });
+
+  it("carries the rank collection gave the kill from its encounter guild", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [raiderIoKill({ historicWorldRank: 3 })],
+      limitations: []
+    });
+    expect(verifiedKill(boss(dossier)).firstKill.historicWorldRank).toBe(3);
+  });
+
+  it("shows a pug's kill with no guild", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [
+        raiderIoKill({
+          guild: null,
+          encounter: {
+            state: "read",
+            encounter: { ...loggedEncounter, guild: null }
+          }
+        })
+      ],
+      limitations: []
+    });
+    expect(verifiedKill(boss(dossier)).firstKill.guild).toBeNull();
+  });
+
+  it.each([
+    [
+      "hidden by the guild",
+      raiderIoKill({
+        encounter: {
+          state: "read",
+          encounter: { ...loggedEncounter, roster: { state: "private" } }
+        }
+      }),
+      "private"
+    ],
+    [
+      "not read yet",
+      raiderIoKill({ encounter: { state: "not_read" } }),
+      "not_read"
+    ]
+  ])("says why a roster is unavailable: %s", (_name, first, reason) => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [first],
+      limitations: []
+    });
+    expect(verifiedKill(boss(dossier)).firstKill.roster).toEqual({
+      state: "unavailable",
+      reason
+    });
+  });
+
+  it("names a matched kill Raider.IO holds no log of, and never counts an unlogged one as evidence", () => {
+    const unlogged = raiderIoKill({ encounter: { state: "none" } });
+    const matched = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [midnightFallsKill(alfaKey)],
+      raiderIoFirstKills: [unlogged],
+      limitations: []
+    });
+    expect(verifiedKill(boss(matched)).firstKill.roster).toEqual({
+      state: "unavailable",
+      reason: "no_logged_encounter"
+    });
+
+    const alone = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [unlogged],
+      limitations: []
+    });
+    expect(alone.raids).toEqual([]);
+  });
+
+  it("leaves a kill no Raider.IO kill matched with no roster at all", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [midnightFallsKill(alfaKey)],
+      limitations: []
+    });
+    expect(verifiedKill(boss(dossier)).firstKill).not.toHaveProperty("roster");
+  });
+
+  it("withholds an out-of-window Raider.IO kill under Raider.IO, and counts a kill both sources withheld once", () => {
+    // Break caught (#734 pre-flight): the withheld Raider.IO kill was
+    // labelled Warcraft Logs, and tallied a second time beside its own
+    // Warcraft Logs copy.
+    const late = raiderIoKill({
+      raidSlug: "nerubar-palace",
+      bossSlug: "queen-ansurek",
+      killedAt: "2025-06-01T20:00:00.000Z"
+    });
+    const withheld = (dossier: ApplicantDossier) =>
+      dossier.limitations.filter((limitation) =>
+        limitation.code.startsWith("current_content_")
+      );
+    const queenAnsurek = [
+      { raidName: "Nerub-ar Palace", bossName: "Queen Ansurek", kills: 1 }
+    ];
+
+    const alone = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [late],
+      limitations: []
+    });
+    expect(withheld(alone)).toEqual([
+      expect.objectContaining({
+        source: "raiderio",
+        character: alfaKey,
+        code: "current_content_evidence_withheld",
+        encounters: queenAnsurek
+      })
+    ]);
+
+    const both = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [
+        kill(alfaKey, {
+          raidId: "1273",
+          raidName: "Nerub-ar Palace",
+          bossId: "2602",
+          bossName: "Queen Ansurek",
+          journalBossId: "2602",
+          bossOrder: 8,
+          killedAt: "2025-06-01T20:30:00.000Z"
+        })
+      ],
+      raiderIoFirstKills: [late],
+      limitations: []
+    });
+    expect(withheld(both)).toEqual([
+      expect.objectContaining({
+        source: "warcraft_logs",
+        code: "current_content_evidence_withheld",
+        encounters: queenAnsurek
+      })
+    ]);
+  });
 });

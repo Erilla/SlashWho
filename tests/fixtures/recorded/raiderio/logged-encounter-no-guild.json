@@ -1,0 +1,98 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.logged-encounter",
+  "recordedOn": "2026-09-28",
+  "status": 200,
+  "body": {
+    "killDetails": {
+      "kill": {
+        "pulledAt": "2020-01-02T00:00:00.000Z",
+        "defeatedAt": "2020-01-03T00:00:00.000Z",
+        "durationMs": 312000,
+        "isSuccess": true,
+        "itemLevelEquippedAvg": 287.5,
+        "itemLevelEquippedMax": 290,
+        "itemLevelEquippedMin": 284
+      },
+      "log": { "deaths": { "count": 4 }, "vantus": { "count": 0 } },
+      "raid": { "slug": "tier-mn-1", "difficulty": "mythic" },
+      "boss": { "slug": "chimaerus-the-undreamt-god" },
+      "guild": null,
+      "guildPrivacy": null,
+      "roster": [
+        {
+          "character": {
+            "id": 1,
+            "name": "Alfa",
+            "class": { "name": "Hunter" },
+            "spec": { "name": "Marksmanship", "role": "dps" },
+            "itemLevelEquipped": 287.1,
+            "realm": { "slug": "draenor" },
+            "region": { "slug": "eu" }
+          }
+        },
+        {
+          "character": {
+            "id": 2,
+            "name": "Bravo",
+            "class": { "name": "Druid" },
+            "spec": { "name": "Restoration", "role": "healer" },
+            "itemLevelEquipped": 288,
+            "realm": { "slug": "silvermoon" },
+            "region": { "slug": "eu" }
+          }
+        },
+        {
+          "character": {
+            "id": 3,
+            "name": "Charlie",
+            "class": { "name": "Death Knight" },
+            "spec": { "name": "Blood", "role": "tank" },
+            "itemLevelEquipped": 289.2,
+            "realm": { "slug": "kazzak" },
+            "region": { "slug": "eu" }
+          }
+        }
+      ]
+    }
+  },
+  "ignored": [
+    "killDetails.boss.encounterId",
+    "killDetails.boss.iconUrl",
+    "killDetails.boss.name",
+    "killDetails.boss.ordinal",
+    "killDetails.boss.portraitUrl",
+    "killDetails.boss.wingId",
+    "killDetails.boss.wowEncounterId",
+    "killDetails.log.correlationId",
+    "killDetails.log.id",
+    "killDetails.log.sources",
+    "killDetails.log.vantus.spell",
+    "killDetails.loggedDetails",
+    "killDetails.raid.expansion_id",
+    "killDetails.raid.icon_url",
+    "killDetails.raid.id",
+    "killDetails.raid.name",
+    "killDetails.raid.short_name",
+    "killDetails.raid.type",
+    "killDetails.raid.wowInstanceId",
+    "killDetails.region",
+    "killDetails.roster[].character.artifactTraits",
+    "killDetails.roster[].character.class.id",
+    "killDetails.roster[].character.class.slug",
+    "killDetails.roster[].character.gender",
+    "killDetails.roster[].character.items",
+    "killDetails.roster[].character.race",
+    "killDetails.roster[].character.realm.name",
+    "killDetails.roster[].character.spec.class_id",
+    "killDetails.roster[].character.spec.id",
+    "killDetails.roster[].character.spec.is_melee",
+    "killDetails.roster[].character.spec.slug",
+    "killDetails.roster[].character.talentLoadout",
+    "killDetails.roster[].character.thumbnail",
+    "killDetails.roster[].vantus",
+    "killDetails.status",
+    "killDetails.ui",
+    "killDetails.videos"
+  ]
+}

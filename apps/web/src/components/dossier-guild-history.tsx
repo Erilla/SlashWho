@@ -6,6 +6,8 @@ import {
   raidTiers
 } from "@slashwho/domain";
 import {
+  type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   useEffect,
   useId,
@@ -17,7 +19,10 @@ import {
 
 import { formatUtcDate } from "../lib/date-format";
 import type { EvidenceFilter } from "../lib/character-visibility";
+import { raiderIoGuildUrl, warcraftLogsGuildUrl } from "../lib/dossier-path";
+import { moveMenuFocus } from "../lib/menu-navigation";
 import { DossierCharacterLabels } from "./dossier-character-name";
+import { UpstreamIcon } from "./upstream-icon-link";
 import {
   layoutGuildTimeline,
   tierBands,
@@ -108,6 +113,19 @@ type Tooltip = Readonly<{
   focused: boolean;
 }>;
 
+/** The menu a bar or ring opens: its guild's pages upstream. */
+type GuildMenu = Readonly<{
+  guild: GuildTimelineBar["guild"];
+  /** Which bar or ring opened it, so a second click there closes it. */
+  id: string;
+  /** Where it is drawn, against what is scrolled into view. */
+  x: number;
+  /** Just below what opened it. */
+  y: number;
+  /** What opened it, which takes focus back when the menu closes. */
+  trigger: SVGGElement;
+}>;
+
 export function DossierGuildHistory({
   guildHistory,
   characters,
@@ -122,6 +140,39 @@ export function DossierGuildHistory({
   const frameRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [tooltipBelow, setTooltipBelow] = useState(false);
+  const [menu, setMenuState] = useState<GuildMenu | null>(null);
+  // The open menu as of now, not as of the last render: closing it hands
+  // focus back to its bar in the same handler, and the bar's focus tooltip
+  // must already see it closed.
+  const openMenu = useRef<GuildMenu | null>(null);
+  const setMenu = (next: GuildMenu | null) => {
+    openMenu.current = next;
+    setMenuState(next);
+  };
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    // A press on what opened the menu is left to its click, which closes it.
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        (menuRef.current?.contains(target) ||
+          openMenu.current?.trigger.contains(target))
+      )
+        return;
+      setMenu(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [menu]);
+  const closeMenu = (refocus: boolean) => {
+    const trigger = menu?.trigger;
+    setMenu(null);
+    if (refocus) trigger?.focus();
+  };
   // Above the frame the tooltip covers none of the lanes, but the fixed site
   // header is drawn over it. Once the page is scrolled so the frame's top is
   // near or under the header, a tooltip there would be hidden while its bar
@@ -268,20 +319,71 @@ export function DossierGuildHistory({
     const visibleWidth = scroll?.clientWidth ?? width;
     return Math.max(0, Math.min(left, visibleWidth - TOOLTIP_WIDTH));
   };
+  // An open menu already covers the bar, so no tooltip joins it.
   const showTooltip = (
     lines: readonly ReactNode[],
     anchor: number,
     y: number,
     focused = false
-  ) => setTooltip({ lines, anchor, x: place(anchor), y, focused });
+  ) => {
+    if (!openMenu.current)
+      setTooltip({ lines, anchor, x: place(anchor), y, focused });
+  };
   // Focusing an off-screen bar makes the browser scroll it into view, and
   // that scroll arrives after `focus`: a focused tooltip is moved with its
   // bar rather than hidden. A hovered one would be left pointing at
   // whatever scrolled under the pointer, so it goes.
-  const onScroll = () =>
+  // An open menu would be left pointing past its bar, so it goes too.
+  const onScroll = () => {
     setTooltip((shown) =>
       shown?.focused ? { ...shown, x: place(shown.anchor) } : null
     );
+    setMenu(null);
+  };
+  // What a bar or ring needs to open its guild's menu: a click, a right
+  // click, or Enter or Space. The menu opens at the pointer, kept to the
+  // span from `from` to `to`; from the keyboard, at `from`.
+  const menuTrigger = (
+    id: string,
+    guild: GuildMenu["guild"],
+    from: number,
+    to: number,
+    y: number
+  ) => {
+    const open = (trigger: SVGGElement, clientX: number | null) => {
+      const pointer =
+        clientX === null
+          ? from
+          : clientX -
+            (trigger.ownerSVGElement?.getBoundingClientRect().left ?? 0);
+      setTooltip(null);
+      setMenu({
+        guild,
+        id,
+        x: place(Math.max(from, Math.min(pointer, to))),
+        y,
+        trigger
+      });
+    };
+    return {
+      "aria-expanded": menu?.id === id,
+      "aria-haspopup": "menu" as const,
+      onClick: (event: MouseEvent<SVGGElement>) => {
+        if (openMenu.current?.id === id) setMenu(null);
+        else open(event.currentTarget, event.clientX);
+      },
+      onContextMenu: (event: MouseEvent<SVGGElement>) => {
+        event.preventDefault();
+        open(event.currentTarget, event.clientX);
+      },
+      onKeyDown: (event: KeyboardEvent<SVGGElement>) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        open(event.currentTarget, null);
+      },
+      role: "button"
+    };
+  };
 
   return (
     <section
@@ -293,7 +395,8 @@ export function DossierGuildHistory({
       </h2>
       <p className="empty-state">
         Raid nights on guild logs, from every character shown. A bar breaks
-        where a whole tier passed without one.
+        where a whole tier passed without one. Click a bar or ring for the guild
+        on Raider.IO and Warcraft Logs.
       </p>
       {!layout ? (
         <p className="empty-state">
@@ -391,11 +494,12 @@ export function DossierGuildHistory({
                 {layout.bars.map((bar, index) => {
                   const y = laneY(bar.lane) + (LANE_HEIGHT - BAR_HEIGHT) / 2;
                   const lines = barTooltipLines(bar);
+                  const id = `${bar.guildId}-${bar.firstNight}`;
                   return (
                     <g
                       aria-label={describeBar(bar).join(". ")}
                       className="dossier-guild-timeline-bar"
-                      key={`${bar.guildId}-${bar.firstNight}`}
+                      key={id}
                       onBlur={() => setTooltip(null)}
                       onFocus={() =>
                         showTooltip(lines, bar.x, y + BAR_HEIGHT + 4, true)
@@ -403,8 +507,14 @@ export function DossierGuildHistory({
                       onMouseEnter={() =>
                         showTooltip(lines, bar.x, y + BAR_HEIGHT + 4)
                       }
-                      role="img"
                       tabIndex={0}
+                      {...menuTrigger(
+                        `bar-${id}`,
+                        bar.guild,
+                        bar.x,
+                        bar.x + bar.width,
+                        y + BAR_HEIGHT + 4
+                      )}
                     >
                       <rect
                         fill={colours.get(bar.guildId)}
@@ -453,8 +563,14 @@ export function DossierGuildHistory({
                       onBlur={() => setTooltip(null)}
                       onFocus={() => showTooltip(lines, x - 120, cy + 12, true)}
                       onMouseEnter={() => showTooltip(lines, x - 120, cy + 12)}
-                      role="img"
                       tabIndex={0}
+                      {...menuTrigger(
+                        `ring-${guildId}`,
+                        guild,
+                        x - 5,
+                        x + 5,
+                        cy + 12
+                      )}
                     >
                       <circle
                         cx={x}
@@ -501,6 +617,52 @@ export function DossierGuildHistory({
                   <span key={index}>{line}</span>
                 )
               )}
+            </div>
+          ) : null}
+          {menu ? (
+            <div
+              aria-label={`Links for ${menu.guild.name}`}
+              className="dossier-character-menu-items dossier-guild-timeline-menu"
+              onKeyDown={(event) => {
+                if (event.key === "Escape" || event.key === "Tab") {
+                  if (event.key === "Escape") event.preventDefault();
+                  event.stopPropagation();
+                  closeMenu(true);
+                  return;
+                }
+                if (moveMenuFocus(menuRef.current, event.key))
+                  event.preventDefault();
+              }}
+              ref={menuRef}
+              role="menu"
+              style={{ left: `${menu.x}px`, top: `${menu.y}px` }}
+            >
+              {(
+                [
+                  ["raiderio", "Raider.IO", raiderIoGuildUrl(menu.guild)],
+                  [
+                    "warcraft_logs",
+                    "Warcraft Logs",
+                    warcraftLogsGuildUrl(menu.guild)
+                  ]
+                ] as const
+              ).map(([source, site, href]) => (
+                <a
+                  aria-label={`View ${menu.guild.name} on ${site} (opens in a new tab)`}
+                  className="dossier-character-menu-item dossier-guild-timeline-menu-item"
+                  href={href}
+                  key={source}
+                  // Enter on a link is a click with no pointer, detail 0,
+                  // and returns focus to the bar as Escape does.
+                  onClick={(event) => closeMenu(event.detail === 0)}
+                  rel="noopener noreferrer"
+                  role="menuitem"
+                  target="_blank"
+                >
+                  <UpstreamIcon source={source} />
+                  View on {site}
+                </a>
+              ))}
             </div>
           ) : null}
         </div>

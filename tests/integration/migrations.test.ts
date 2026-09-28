@@ -59,6 +59,7 @@ describe("database migrations", () => {
       "character_historic_aliases",
       "character_mythic_kills",
       "character_mythic_wipes",
+      "character_raiderio_first_kills",
       "character_terminal_tiers",
       "character_tier_best_parses",
       "characters",
@@ -75,6 +76,8 @@ describe("database migrations", () => {
       "operator_login_attempts",
       "operator_sessions",
       "operators",
+      "raiderio_logged_encounter_members",
+      "raiderio_logged_encounters",
       "rate_limit_events",
       "snapshot_characters",
       "snapshots",
@@ -181,7 +184,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-34).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-35).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
@@ -216,7 +219,8 @@ describe("database migrations", () => {
       { idx: 61, tag: "0062_evidence_run_origin" },
       { idx: 62, tag: "0063_evidence_run_root" },
       { idx: 63, tag: "0064_history_actor_requests" },
-      { idx: 64, tag: "0065_guild_report_requests" }
+      { idx: 64, tag: "0065_guild_report_requests" },
+      { idx: 65, tag: "0066_raiderio_logged_kills" }
     ]);
   });
 

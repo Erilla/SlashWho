@@ -513,9 +513,38 @@ Since #733 the ranked walk goes first, and the attendance walk depends on it:
   `not_found`): it says nothing either way, and the guilds are walked as
   before. A deferral there would never be continued. The set of continued
   codes is pinned against `retryDelayMsFor` by a test.
-- **Reports the ranked walk read are still hydrated.** It loads only its one
-  ranked fight, so the rest of the report, its wipes and any unranked kills,
-  is attendance's to find.
+- **Reports the ranked walk read are still hydrated.** It loads only the
+  report's Mythic kills, so the report's wipes, and kills of encounters the
+  character is not ranked on in the zone, are attendance's to find.
+
+Since #712 the ranked walk reads each report once a zone, not once a ranked
+fight. A raid night holds several ranked bosses, and one read of a report
+costs 2.1 points whether it loads one fight or every Mythic kill in it
+(measured 2026-09-28).
+
+- **What one read credits:** every kill in the report of an encounter the
+  character is ranked on in the zone. Identity is proved once for the report,
+  by canonical id and a unique actor.
+- **When the report counts as read:** after one read, always. Everything the
+  decoder judges (zone, identity, which kills count) is the report's, not the
+  ranked fight's, so no later ranking of it can change the answer. The
+  ranking's spec is not checked against the fight. Checked on only the fight
+  a read was for, it made the kills credited depend on which boss the walk
+  reached first (#741 review), and a spec logged differently makes the kill no
+  less the character's.
+- **A ranked fight missing from the read** is `schema_drift`. That covers both
+  the read it triggered and a read of its report made for another boss. The
+  ranking named a Mythic kill that the report's kills leave out.
+- **Duplicate copies:** a report ranked for some bosses often also holds
+  another uploader's copy of the night's other kills. These are now credited,
+  as the history scan has always done: about 90% of stored kills have a copy
+  of the same boss within ten minutes in another report.
+
+Measured live on one character across four tiers, the walk went from 265
+reads to 169, and no kill was lost. The kills credited rose from 125 to 200,
+nearly all of them duplicate copies. On one tier with no `rankedCharacters`
+at all (2017), a read of each ranked fight became a read of each report: 73
+reads to 48.
 
 Before #733, a press searched every connected character's guilds whether or
 not they raided the tier. From 25 to 28 September 2026 that was 406 attendance

@@ -15,6 +15,7 @@ type DossierParseListProps = Readonly<{
   parses: readonly ApplicantDossierCharacterParses[];
   loading?: boolean;
   showCharacterName?: boolean;
+  emptyText?: string;
 }>;
 
 type MetricName = "Damage" | "Healing" | "Boss Dam";
@@ -83,7 +84,8 @@ export function DossierParseList({
   label,
   parses,
   loading = false,
-  showCharacterName = true
+  showCharacterName = true,
+  emptyText = "No parse values were available."
 }: DossierParseListProps) {
   return (
     <section
@@ -92,7 +94,7 @@ export function DossierParseList({
     >
       <h5>{label}</h5>
       {parses.length === 0 ? (
-        <p className="dossier-parse-empty">No parse values were available.</p>
+        <p className="dossier-parse-empty">{emptyText}</p>
       ) : (
         <ul>
           {parses.map((parse) => (

@@ -24,6 +24,7 @@ import type {
   StoredCharacterMythicWipe
 } from "../repositories";
 import type { Queryable } from "../sql";
+import { loadPublishedRaiderIoFirstKills } from "./raiderio-first-kills";
 
 export async function loadCompletedEvidence(
   client: Queryable,
@@ -105,6 +106,12 @@ export async function loadCompletedEvidence(
     kills: killsResult.rows.map(mapCharacterMythicKill),
     wipes: wipesResult.rows.map(mapCharacterMythicWipe),
     tierBests: tierBestsResult.rows.map(mapCharacterTierBestParse),
+    // From the snapshot run, like the kills: the first kills are part of what
+    // the newest publication shows, read with today's suppressions.
+    raiderIoFirstKills: await loadPublishedRaiderIoFirstKills(
+      client,
+      snapshot.id
+    ),
     cuttingEdges: cuttingEdgesResult.rows.map((row) => ({
       achievementId: row.achievement_id,
       completedAt: row.completed_at.toISOString()

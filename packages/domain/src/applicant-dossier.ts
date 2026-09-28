@@ -5,6 +5,7 @@ import {
   lookupJournalEncounter,
   lookupRaidBossByName,
   lookupRaidByName,
+  lookupRaidEncounterByRaiderIoSlugs,
   lookupRaidEncounterForEvidence,
   currentContentEligibilityByRaidId,
   supportedRaidCatalogue,
@@ -12,6 +13,8 @@ import {
 } from "./raid-catalogue";
 import { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 import { isNonRaidZone } from "./dungeon-catalogue";
+import { matchesRaiderIoKill } from "./kill-matching";
+import { isRosterShown } from "./logged-encounter";
 
 export type DossierCharacter = Readonly<{
   key: CharacterKey;
@@ -97,6 +100,71 @@ export type DossierCuttingEdgeEvidence = Readonly<{
   achievementId: string;
   completedAt: string;
 }>;
+export type DossierRosterRole = "tank" | "healer" | "dps";
+export type DossierRosterMember = Readonly<{
+  name: string;
+  realm: string;
+  region: string;
+  className: string;
+  specName: string;
+  role: DossierRosterRole;
+  itemLevel: number | null;
+}>;
+/** Raider.IO's parsed combat log of one Mythic kill (#732). */
+export type DossierLoggedEncounter = Readonly<{
+  pulledAt: string;
+  defeatedAt: string;
+  durationMs: number;
+  guild: DossierKillEvidence["guild"];
+  itemLevel: Readonly<{ average: number; min: number; max: number }>;
+  deathCount: number;
+  vantusCount: number;
+  roster:
+    | Readonly<{
+        state: "available";
+        /** Everyone Raider.IO listed, by role, including raiders `members` leaves out. */
+        roleCounts: Readonly<Record<DossierRosterRole, number>>;
+        /** The raiders a dossier may name: suppressed ones already left out. */
+        members: readonly DossierRosterMember[];
+      }>
+    | Readonly<{ state: "private" }>;
+}>;
+/**
+ * One Raider.IO Mythic first kill of a dossier character (#732). `read` is
+ * evidence of its own; `not_read` is evidence whose log is still to be read,
+ * attributed by Raider.IO's own kill list; `none` is a plain kill with no log,
+ * which lends nothing and is never evidence alone.
+ */
+export type DossierRaiderIoFirstKill = Readonly<{
+  character: CharacterKey;
+  raidSlug: string;
+  bossSlug: string;
+  killedAt: string;
+  guild: DossierKillEvidence["guild"];
+  historicWorldRank: number | null;
+  encounter:
+    | Readonly<{ state: "read"; encounter: DossierLoggedEncounter }>
+    | Readonly<{ state: "not_read" }>
+    | Readonly<{ state: "none" }>;
+}>;
+export type ApplicantDossierRosterMember = DossierRosterMember &
+  Readonly<{ isDossierCharacter: boolean }>;
+export type ApplicantDossierKillRoster =
+  | Readonly<{
+      state: "available";
+      playerCount: number;
+      roleCounts: Readonly<Record<DossierRosterRole, number>>;
+      itemLevel: Readonly<{ average: number; min: number; max: number }>;
+      pulledAt: string;
+      durationMs: number;
+      deathCount: number;
+      vantusCount: number;
+      members: readonly ApplicantDossierRosterMember[];
+    }>
+  | Readonly<{
+      state: "unavailable";
+      reason: "private" | "no_logged_encounter" | "not_read";
+    }>;
 export type BuildApplicantDossierInput = Readonly<{
   root: CharacterKey;
   characters: readonly DossierCharacter[];
@@ -105,6 +173,7 @@ export type BuildApplicantDossierInput = Readonly<{
   tierBests?: readonly DossierTierBestParse[];
   completeWarcraftLogsCharacters?: readonly CharacterKey[];
   cuttingEdges?: readonly DossierCuttingEdgeEvidence[];
+  raiderIoFirstKills?: readonly DossierRaiderIoFirstKill[];
   limitations: readonly DossierLimitation[];
 }>;
 export type ApplicantDossierFirstKill = Readonly<{
@@ -120,6 +189,8 @@ export type ApplicantDossierFirstKill = Readonly<{
   reports: readonly ApplicantDossierReport[];
   characters: readonly CharacterKey[];
   parses: readonly ApplicantDossierCharacterParses[];
+  /** Absent when no Raider.IO first kill was matched to this event. */
+  roster?: ApplicantDossierKillRoster;
 }>;
 export type ApplicantDossierReport = Readonly<{
   reportUrl: string;
@@ -181,7 +252,9 @@ export type ApplicantDossierRaid = Readonly<{
 }>;
 type AggregatedDossierBoss = Extract<ApplicantDossierBoss, { state: "kill" }> &
   Readonly<{ isFinalBoss: boolean }>;
-type CatalogueMatchedKill = DossierKillEvidence & RaidCatalogueEncounter;
+type CatalogueMatchedKill = DossierKillEvidence &
+  RaidCatalogueEncounter &
+  Readonly<{ raiderIoFirstKill?: DossierRaiderIoFirstKill }>;
 export type ApplicantDossierCuttingEdge = Readonly<{
   achievementId: string;
   achievementName: string;
@@ -335,6 +408,88 @@ function catalogueEncounter(evidence: {
 
 function currentness(killedAt: string, raidId: string): boolean | null {
   return currentContentEligibilityByRaidId(killedAt, raidId);
+}
+
+const UNPARSED: DossierKillPerformance = {
+  damage: { state: "unavailable" },
+  healing: { state: "unavailable" },
+  bossDamage: { state: "unavailable" }
+};
+
+/** A kill with a public Warcraft Logs report behind it, not a Raider.IO one alone. */
+function hasPublicLog(kill: CatalogueMatchedKill): boolean {
+  return kill.raiderIoFirstKill === undefined || kill.reportUrl !== null;
+}
+
+const ROLE_ORDER: Readonly<Record<DossierRosterRole, number>> = {
+  tank: 0,
+  healer: 1,
+  dps: 2
+};
+
+function isDossierCharacter(
+  member: DossierRosterMember,
+  characters: readonly DossierCharacter[]
+): boolean {
+  return characters.some(
+    ({ key }) =>
+      key.region === member.region.toLocaleLowerCase("en-US") &&
+      key.realm === member.realm.toLocaleLowerCase("en-US") &&
+      key.name === member.name.toLocaleLowerCase("en-US")
+  );
+}
+
+function killRoster(
+  shared: readonly CatalogueMatchedKill[],
+  characters: readonly DossierCharacter[]
+): ApplicantDossierKillRoster | undefined {
+  const firsts = shared.flatMap((kill) =>
+    kill.raiderIoFirstKill ? [kill.raiderIoFirstKill] : []
+  );
+  if (firsts.length === 0) return undefined;
+  const read = firsts.find((first) => first.encounter.state === "read");
+  if (read?.encounter.state === "read") {
+    const encounter = read.encounter.encounter;
+    // Suppressed raiders are already off the list. What is left is judged by
+    // the one rule the client judged the response by, so a list left with
+    // nobody to name reads as hidden, never as "nobody was there".
+    if (
+      encounter.roster.state === "private" ||
+      !isRosterShown(true, encounter.roster.members)
+    ) {
+      return { state: "unavailable", reason: "private" };
+    }
+    const members = [...encounter.roster.members]
+      .sort(
+        (a, b) =>
+          ROLE_ORDER[a.role] - ROLE_ORDER[b.role] ||
+          text(a.name, b.name) ||
+          text(a.realm, b.realm)
+      )
+      .map((member) => ({
+        ...member,
+        isDossierCharacter: isDossierCharacter(member, characters)
+      }));
+    // Raider.IO's counts: a raider left off the list still raided.
+    const { tank, healer, dps } = encounter.roster.roleCounts;
+    return {
+      state: "available",
+      playerCount: tank + healer + dps,
+      roleCounts: { tank, healer, dps },
+      itemLevel: encounter.itemLevel,
+      pulledAt: encounter.pulledAt,
+      durationMs: encounter.durationMs,
+      deathCount: encounter.deathCount,
+      vantusCount: encounter.vantusCount,
+      members
+    };
+  }
+  return {
+    state: "unavailable",
+    reason: firsts.some((first) => first.encounter.state === "not_read")
+      ? "not_read"
+      : "no_logged_encounter"
+  };
 }
 
 function selectParseMetric(
@@ -551,16 +706,20 @@ export function buildApplicantDossier(
       character: CharacterKey;
       raidName: string;
       bossName: string;
-    }>
+    }>,
+    source: DossierLimitation["source"] = "warcraft_logs"
   ) => {
-    const key = `${code}\0${canonicalCharacterId(kill.character)}`;
+    const key = `${source}\0${code}\0${canonicalCharacterId(kill.character)}`;
     const entry = withheldKillReasons.get(key) ?? {
-      limitation: { source: "warcraft_logs", character: kill.character, code },
+      limitation: { source, character: kill.character, code },
       encounters: new Map()
     };
     tallyEncounter(entry.encounters, kill.raidName, kill.bossName);
     withheldKillReasons.set(key, entry);
   };
+  // The Warcraft Logs kills withheld as out of window, so a Raider.IO first
+  // kill of the same kill is not tallied a second time.
+  const withheldWarcraftLogsKills: CatalogueMatchedKill[] = [];
   for (const suppliedKill of input.kills) {
     const metadata = catalogueEncounter(suppliedKill);
     if (metadata === null) {
@@ -580,10 +739,77 @@ export function buildApplicantDossier(
         eligible === false
           ? "current_content_evidence_withheld"
           : "current_content_window_unknown";
+      withheldWarcraftLogsKills.push(kill);
       withhold(code, kill);
       continue;
     }
     allKills.push(kill);
+  }
+  // A Raider.IO first kill with a parsed combat log is evidence of its own
+  // (#732). One that matches a Warcraft Logs kill of the same character and
+  // boss lends that kill its roster and changes nothing else about it.
+  const sameKill = (
+    first: DossierRaiderIoFirstKill,
+    kill: CatalogueMatchedKill
+  ) =>
+    canonicalCharacterId(kill.character) ===
+      canonicalCharacterId(first.character) && matchesRaiderIoKill(first, kill);
+  for (const first of input.raiderIoFirstKills ?? []) {
+    const metadata = lookupRaidEncounterByRaiderIoSlugs(
+      first.raidSlug,
+      first.bossSlug
+    );
+    if (metadata === null) continue;
+    const at = Date.parse(first.killedAt);
+    const matched = allKills
+      .map((kill, index) => ({
+        kill,
+        index,
+        distance: Math.abs(Date.parse(kill.killedAt) - at)
+      }))
+      .filter(
+        ({ kill }) =>
+          kill.raiderIoFirstKill === undefined && sameKill(first, kill)
+      )
+      .sort(
+        (a, b) => a.distance - b.distance || compareEvidence(a.kill, b.kill)
+      )[0];
+    if (matched) {
+      allKills[matched.index] = { ...matched.kill, raiderIoFirstKill: first };
+      continue;
+    }
+    // Raider.IO's plain kill list is a place to search, never evidence.
+    if (first.encounter.state === "none") continue;
+    const raiderIoKill: CatalogueMatchedKill = {
+      ...metadata,
+      journalBossId: metadata.bossId,
+      character: first.character,
+      killedAt: first.killedAt,
+      guild:
+        first.encounter.state === "read"
+          ? first.encounter.encounter.guild
+          : first.guild,
+      historicWorldRank: first.historicWorldRank,
+      reportUrl: null,
+      performance: UNPARSED,
+      raiderIoFirstKill: first
+    };
+    const eligible = currentness(raiderIoKill.killedAt, raiderIoKill.raidId);
+    if (eligible !== true) {
+      // Its Warcraft Logs copy was withheld and tallied already: one kill,
+      // counted once.
+      if (withheldWarcraftLogsKills.some((kill) => sameKill(first, kill)))
+        continue;
+      withhold(
+        eligible === false
+          ? "current_content_evidence_withheld"
+          : "current_content_window_unknown",
+        raiderIoKill,
+        "raiderio"
+      );
+      continue;
+    }
+    allKills.push(raiderIoKill);
   }
   limitations.push(
     ...[...withheldKillReasons.values()].map(({ limitation, encounters }) => ({
@@ -656,9 +882,12 @@ export function buildApplicantDossier(
         const ids = new Set(
           shared.map((kill) => canonicalCharacterId(kill.character))
         );
+        const logged = shared.filter(hasPublicLog);
+        const roster = killRoster(shared, input.characters);
         return {
           selected,
           shared,
+          logged,
           firstKill: {
             killedAt: selected.killedAt,
             guild: attributed ?? null,
@@ -669,7 +898,8 @@ export function buildApplicantDossier(
             characters: input.characters
               .filter((c) => ids.has(canonicalCharacterId(c.key)))
               .map((c) => c.key),
-            parses: aggregateEventParses(shared, characters)
+            parses: aggregateEventParses(logged, characters),
+            ...(roster ? { roster } : {})
           }
         };
       })
@@ -702,7 +932,7 @@ export function buildApplicantDossier(
       firstKill: firstKills.at(-1)!.firstKill,
       firstKills: firstKills.map((entry) => entry.firstKill),
       bestParses: aggregateBossParses(
-        firstKills.map((entry) => entry.shared),
+        firstKills.map((entry) => entry.logged),
         characters,
         tierBestsByBoss.get([selected.raidId, selected.bossId].join("\0")) ?? []
       ),

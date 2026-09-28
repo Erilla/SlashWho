@@ -34,7 +34,13 @@ import {
   loadStoredPerformanceByFightUrl,
   loadStoredTierBestParses
 } from "./load";
-import { mergePublishedEvidence } from "./merge";
+import { mergePublishedEvidence, mergeRaiderIoFirstKills } from "./merge";
+import {
+  insertRaiderIoFirstKills,
+  loadLatestRaiderIoFirstKills,
+  loadRaiderIoLoggedEncounters,
+  storeRaiderIoLoggedEncounters
+} from "./raiderio-first-kills";
 import { insertEvidenceRows, performanceColumns } from "./rows";
 
 /**
@@ -731,10 +737,11 @@ export function createEvidenceRepositories(
       },
 
       async publish(runId, input) {
-        // A partial run must name what it fell short of. There are three
+        // A partial run must name what it fell short of. There are four
         // answers, not one, and each was added by a run this guard had already
-        // rejected: a history-scan limitation, a parse limitation, or a run
-        // that deliberately did not scan at all.
+        // rejected: a history-scan limitation, a parse limitation, a run
+        // that deliberately did not scan at all, and a fourth, Raider.IO
+        // logged-encounter reads that fell short (#732).
         //
         // Requiring the history code alone rejected every parse-capped run
         // (#290). Requiring either code rejected every parse-only run whose
@@ -742,13 +749,14 @@ export function createEvidenceRepositories(
         // nearly-finished character makes, so a character failed more reliably
         // the closer it came to being done.
         //
-        // Add the reason here when a fourth way to be partial appears; a
+        // Add the reason here when a fifth way to be partial appears; a
         // partial that can name nothing really is a bug.
         const partialNamesNoReason =
           input.state === "partial" &&
           input.limitationCode === null &&
           input.parseLimitationCode === null &&
-          input.scanSkipped !== true;
+          input.scanSkipped !== true &&
+          (input.raiderIoFirstKills?.limitationCode ?? null) === null;
         if (
           Number.isNaN(input.completedAt.valueOf()) ||
           (input.state === "complete" && input.limitationCode !== null) ||
@@ -1008,6 +1016,19 @@ export function createEvidenceRepositories(
             ],
             targeted ? [] : (input.cuttingEdges ?? [])
           );
+          // In the same transaction as every other row of this snapshot, so
+          // no reader ever sees a run's kills without its Raider.IO first
+          // kills, or the reverse.
+          await insertRaiderIoFirstKills(
+            client,
+            runId,
+            mergeRaiderIoFirstKills(
+              await loadLatestRaiderIoFirstKills(client, activeKey),
+              input.raiderIoFirstKills,
+              input.state,
+              targeted
+            )
+          );
           // The terminal publication marker belongs to this transaction, not
           // to the worker's finally block: evidence a reader can see must not
           // ever say its final phase is still pending after a crash.
@@ -1049,6 +1070,7 @@ export function createEvidenceRepositories(
                    ELSE historic_alias_progress
                  END,
                  publication_scope = $18,
+                 raiderio_limitation_code = $19,
                  wcl_client_id_encrypted = NULL, wcl_client_secret_encrypted = NULL
              WHERE id = $1 AND status IN ('queued', 'running', 'retrying')`,
             [
@@ -1081,7 +1103,8 @@ export function createEvidenceRepositories(
               !targeted && Object.hasOwn(input, "historicAliasProgress"),
               JSON.stringify(input.historicAliasProgress ?? null),
               input.omittedInvalidTimestamp ?? false,
-              targeted ? "tier" : "full"
+              targeted ? "tier" : "full",
+              input.raiderIoFirstKills?.limitationCode ?? null
             ]
           );
           if (publication.rowCount !== 1) {
@@ -1161,6 +1184,18 @@ export function createEvidenceRepositories(
 
       async getCompleted(key) {
         return loadCompletedEvidence(pool, key);
+      },
+
+      async saveRaiderIoLoggedEncounters(answers, readAt) {
+        await storeRaiderIoLoggedEncounters(pool, answers, readAt);
+      },
+
+      async raiderIoLoggedEncounters(ids) {
+        return loadRaiderIoLoggedEncounters(pool, ids);
+      },
+
+      async storedRaiderIoFirstKills(key) {
+        return loadLatestRaiderIoFirstKills(pool, key);
       },
 
       async recordHistoricRankLookup(killId, rank, checkedAt) {
@@ -1904,12 +1939,13 @@ export function createEvidenceRepositories(
              blizzard_achievements_requests,
              duration_ms, queue_wait_ms, warcraft_logs_ms,
              warcraft_logs_historic_alias_ms, db_ms, db_max_call_name, origin,
-             history_actor_requests, guild_report_requests
+             history_actor_requests, guild_report_requests,
+             raiderio_logged_encounter_requests
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
                    $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
-                   $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44)
+                   $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -1955,7 +1991,8 @@ export function createEvidenceRepositories(
              db_max_call_name = EXCLUDED.db_max_call_name,
              origin = EXCLUDED.origin,
              history_actor_requests = EXCLUDED.history_actor_requests,
-             guild_report_requests = EXCLUDED.guild_report_requests`,
+             guild_report_requests = EXCLUDED.guild_report_requests,
+             raiderio_logged_encounter_requests = EXCLUDED.raiderio_logged_encounter_requests`,
           [
             cost.runId,
             cost.attempt,
@@ -2000,7 +2037,8 @@ export function createEvidenceRepositories(
             cost.timings?.dbMaxCallName ?? null,
             cost.origin ?? "unknown",
             cost.requests.historyActors ?? 0,
-            cost.requests.guildReports ?? 0
+            cost.requests.guildReports ?? 0,
+            cost.requests.raiderIoLoggedEncounters ?? 0
           ]
         );
       },

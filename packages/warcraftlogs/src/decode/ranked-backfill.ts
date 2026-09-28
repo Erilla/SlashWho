@@ -233,14 +233,27 @@ export function decodedUnderRankedName(
   return decodedHydratedReport(value, identity);
 }
 
-export function decodedRankedKill(
+/**
+ * The character's Mythic kills in one hydrated ranked report: every kill of
+ * the zone's ranked encounters, not only the ranked fight that led to the
+ * report, so a raid night is read once for all its bosses (#712). Identity is
+ * proved once for the report, by canonical id and a unique actor, and each
+ * kill still needs that actor among its fight's players.
+ *
+ * The ranking's spec is not checked against the fight. It was a secondary
+ * check on the one fight a read was for; applied to that fight alone, it made
+ * the kills a read credits depend on which boss the walk reached first. A
+ * spec the log records differently makes the kill no less the character's.
+ */
+export function decodedRankedKills(
   value: unknown,
   expected: {
     code: string;
-    fightId: number;
-    spec?: string;
+    /** The ranked fight that led here. */
+    ranked: Readonly<{ fightId: number }>;
     zoneId: number;
-    encounterId: number;
+    /** The zone's encounters the character is ranked on. */
+    encounterIds: readonly number[];
     characterId: number;
     journalRaidId: string;
     region: CharacterKey["region"];
@@ -253,19 +266,19 @@ export function decodedRankedKill(
     return { kind: "limitation", code: "schema_drift" };
   if (positiveInteger(record(entry.zone)?.id) !== expected.zoneId) return [];
   const fights = entry.fights;
-  if (!Array.isArray(fights) || fights.length !== 1)
+  if (!Array.isArray(fights))
     return { kind: "limitation", code: "schema_drift" };
-  const fight = record(fights[0]);
-  if (
-    positiveInteger(fight?.id) !== expected.fightId ||
-    positiveInteger(fight?.encounterID) !== expected.encounterId ||
-    fight?.difficulty !== MYTHIC_DIFFICULTY ||
-    fight.kill !== true
-  )
-    return [];
   const ranked = entry.rankedCharacters;
   const actors = record(entry.masterData)?.actors;
   if (ranked === null) return [];
+  // The ranking named this fight a Mythic kill of this report. A kills-only
+  // read that leaves it out is not the report the ranking described.
+  if (
+    !fights.some(
+      (fight) => positiveInteger(record(fight)?.id) === expected.ranked.fightId
+    )
+  )
+    return { kind: "limitation", code: "schema_drift" };
   if (!Array.isArray(ranked) || !Array.isArray(actors))
     return { kind: "limitation", code: "schema_drift" };
   const identities = ranked.map(record);
@@ -299,20 +312,6 @@ export function decodedRankedKill(
     );
   if (matches.length !== 1) return [];
   const actor = matches[0]!;
-  // Specs are an independent consistency check when the report supplies
-  // them. Identity was already established by canonical ID and unique actor.
-  if (expected.spec && Array.isArray(fight.friendlySpecs)) {
-    const actorIndex = Array.isArray(fight.friendlyPlayers)
-      ? fight.friendlyPlayers.indexOf(actor.id)
-      : -1;
-    const fightSpec = nonEmptyString(fight.friendlySpecs[actorIndex]);
-    if (
-      fightSpec &&
-      fightSpec.toLocaleLowerCase("en-US") !==
-        expected.spec.toLocaleLowerCase("en-US")
-    )
-      return [];
-  }
   const alias = {
     region: expected.region,
     realm: String(actor.server).toLocaleLowerCase("en-US"),
@@ -321,11 +320,12 @@ export function decodedRankedKill(
   const decoded = decodedHydratedReport(value, alias);
   if (decoded.kind !== "evidence") return decoded;
   if (decoded.limitation) return decoded.limitation;
+  const encounters = new Set(expected.encounterIds.map(String));
   return decoded.kills.filter(
     (kill) =>
       kill.reportCode === expected.code &&
-      kill.fightId === expected.fightId &&
-      kill.bossId === String(expected.encounterId) &&
+      encounters.has(kill.bossId) &&
+      kill.difficulty === MYTHIC_DIFFICULTY &&
       // A combined zone's fights name no raid, so the boss has to place them.
       lookupRaidForEvidence(kill)?.raidId === expected.journalRaidId &&
       currentContentEligibilityByRaidId(

@@ -6,6 +6,7 @@ import {
   lookupRaidBossByName,
   lookupRaiderIoBoss,
   lookupRaidByName,
+  lookupRaidEncounterByRaiderIoSlugs,
   lookupRaidEncounterForEvidence,
   lookupRaidForEvidence,
   lookupSiblingRaidBossByName,
@@ -776,4 +777,86 @@ it("closes a Raider.IO raid when the last raid filed under its slug closes", () 
   // Still open, and a slug nothing is filed under: neither has closed.
   expect(raiderIoRaidContentWindowEnd("the-venomous-abyss")).toBeNull();
   expect(raiderIoRaidContentWindowEnd("awakened-amirdrassil")).toBeNull();
+});
+
+it.each([
+  [
+    "tier-mn-1",
+    "midnight-falls",
+    "March on Quel'Danas",
+    "Midnight Falls",
+    "2740"
+  ],
+  [
+    "tier-mn-1",
+    "chimaerus-the-undreamt-god",
+    "The Dreamrift",
+    "Chimaerus the Undreamt God",
+    "2795"
+  ],
+  [
+    "tier-mn-1",
+    "fallenking-salhadaar",
+    "The Voidspire",
+    "Fallen-King Salhadaar",
+    null
+  ],
+  [
+    "manaforge-omega",
+    "dimensius",
+    "Manaforge Omega",
+    "Dimensius, the All-Devouring",
+    null
+  ]
+])(
+  "places Raider.IO's %s / %s in the catalogue",
+  (raidSlug, bossSlug, raidName, bossName, bossId) => {
+    const encounter = lookupRaidEncounterByRaiderIoSlugs(raidSlug, bossSlug);
+    expect(encounter).toMatchObject({ raidName, bossName });
+    if (bossId !== null) expect(encounter?.bossId).toBe(bossId);
+  }
+);
+
+it("places every catalogued encounter Raider.IO names under a boss with the same slugs", () => {
+  // Pinned against the forward lookup, so the two can never disagree about
+  // which boss a Raider.IO kill is shown under. Where Raider.IO ranks two
+  // Journal encounters as one boss, both place under the same one.
+  for (const raid of supportedRaidCatalogue()) {
+    for (const encounter of raid.encounters) {
+      const slugs = lookupRaiderIoBoss(encounter.raidName, encounter.bossName);
+      if (!slugs) continue;
+      const placed = lookupRaidEncounterByRaiderIoSlugs(
+        slugs.raidSlug,
+        slugs.bossSlug
+      );
+      expect(placed, `${encounter.raidName} / ${encounter.bossName}`).not.toBe(
+        null
+      );
+      expect(lookupRaiderIoBoss(placed!.raidName, placed!.bossName)).toEqual(
+        slugs
+      );
+      expect(placed!.raidId).toBe(encounter.raidId);
+    }
+  }
+});
+
+it("shows Raider.IO's one Grong under the Grong the Journal lists first", () => {
+  // Break caught: both faction versions override to `grong`, so a lookup
+  // that demanded exactly one match placed neither, and a Raider.IO Grong
+  // kill was dropped from the dossier without a word.
+  expect(
+    lookupRaidEncounterByRaiderIoSlugs("battle-of-dazaralor", "grong")
+  ).toMatchObject({ bossId: "2325", bossName: "Grong, the Jungle Lord" });
+  expect(
+    lookupRaiderIoBoss("Battle of Dazar'alor", "Grong, the Revenant")
+  ).toEqual({ raidSlug: "battle-of-dazaralor", bossSlug: "grong" });
+});
+
+it("places nothing it cannot name exactly", () => {
+  expect(
+    lookupRaidEncounterByRaiderIoSlugs("tier-mn-1", "not-a-boss")
+  ).toBeNull();
+  expect(
+    lookupRaidEncounterByRaiderIoSlugs("not-a-raid", "midnight-falls")
+  ).toBeNull();
 });

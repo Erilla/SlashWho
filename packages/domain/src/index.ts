@@ -9,11 +9,14 @@ export {
 } from "./character-key";
 export type { CharacterGuild, CharacterKey, Region } from "./character-key";
 export { formatCharacterDisplayName } from "./display-name";
+export { isRosterShown } from "./logged-encounter";
+export { matchesRaiderIoKill, STORED_KILL_MATCH_MS } from "./kill-matching";
 export {
   currentContentEligibility,
   currentContentEligibilityByRaidId,
   lookupRaidByName,
   lookupRaidCurrentContentWindow,
+  lookupRaidEncounterByRaiderIoSlugs,
   lookupRaidForEvidence,
   lookupRaiderIoBoss,
   raidContentWindowOpenedBetween,
@@ -49,7 +52,9 @@ export type {
   ApplicantDossierBoss,
   ApplicantDossierCuttingEdge,
   ApplicantDossierFirstKill,
+  ApplicantDossierKillRoster,
   ApplicantDossierRaid,
+  ApplicantDossierRosterMember,
   ApplicantDossierWipe,
   BuildApplicantDossierInput,
   DossierCharacter,
@@ -57,6 +62,10 @@ export type {
   DossierKillEvidence,
   DossierLimitation,
   DossierLimitationEncounter,
+  DossierLoggedEncounter,
+  DossierRaiderIoFirstKill,
+  DossierRosterMember,
+  DossierRosterRole,
   DossierTierBestParse,
   DossierWipeEvidence
 } from "./applicant-dossier";

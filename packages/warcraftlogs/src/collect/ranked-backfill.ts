@@ -2,7 +2,7 @@ import type { CharacterKey } from "@slashwho/domain";
 
 import { isLimitation, validCharacterKey, record } from "../decode/primitives";
 import {
-  decodedRankedKill,
+  decodedRankedKills,
   rankedCharacterName,
   historicEncounterIds,
   historicReportRefs,
@@ -110,7 +110,6 @@ export async function getRankedKillReports(
   >();
   const names = () =>
     rankedNames.size > 0 ? { rankedNames: [...rankedNames.values()] } : {};
-  const hydratedFights = new Set(acceptedFights);
   const limited = (
     query: WarcraftLogsQueryType,
     limitation: WarcraftLogsLimitation
@@ -158,6 +157,12 @@ export async function getRankedKillReports(
   }
   while (progress.zoneIndex < progress.zoneIds.length) {
     const zoneId = progress.zoneIds[progress.zoneIndex]!;
+    // One read covers every kill of the zone's ranked encounters in a
+    // report, so a report is read at most once a zone. Per zone, because a
+    // zone walked again under another partition ranks other encounters.
+    // Each read report's Mythic kill fights, or "gone" for one Warcraft
+    // Logs no longer serves.
+    const readReports = new Map<string, ReadonlySet<number> | "gone">();
     const partition = progress.partitionIds?.[progress.zoneIndex];
     if (partition === undefined)
       return limited("zone_rankings", {
@@ -237,14 +242,23 @@ export async function getRankedKillReports(
         ) {
           const ref = refs[progress.reportIndex]!;
           const fightKey = `${ref.code}:${ref.fightId}`;
-          if (hydratedFights.has(fightKey)) continue;
+          if (acceptedFights.has(fightKey)) continue;
+          const read = readReports.get(ref.code);
+          if (read !== undefined) {
+            // The ranking names a Mythic kill of a report whose kills were
+            // read without it: not the report the ranking described.
+            if (read !== "gone" && !read.has(ref.fightId)) {
+              return limited("report_hydration", {
+                kind: "limitation",
+                code: "schema_drift"
+              });
+            }
+            continue;
+          }
           const detail = await request(
             "report_hydration",
             historicRankedReportQuery,
-            {
-              code: ref.code,
-              fightId: ref.fightId
-            }
+            { code: ref.code }
           );
           if (!detail)
             return limited("report_hydration", {
@@ -253,26 +267,23 @@ export async function getRankedKillReports(
             });
           if (detail.kind !== "success") {
             if (detail.code === "not_found" || detail.code === "private") {
-              hydratedFights.add(fightKey);
+              readReports.set(ref.code, "gone");
               continue;
             }
             return limited("report_hydration", detail);
           }
-          const decoded = decodedRankedKill(detail.value, {
-            ...ref,
+          const decoded = decodedRankedKills(detail.value, {
+            code: ref.code,
+            ranked: ref,
             zoneId,
-            encounterId,
+            encounterIds: progress.encounterIds,
             characterId: progress.characterId!,
             journalRaidId: options.journalRaidId,
             region: key.region
           });
           if (isLimitation(decoded))
             return limited("report_hydration", decoded);
-          const report = record(
-            record(record(detail.value)?.data)?.reportData
-          )?.report;
           if (decoded.length > 0) {
-            acceptedFights.add(fightKey);
             const ranked = rankedCharacterName(
               detail.value,
               progress.characterId!
@@ -284,13 +295,28 @@ export async function getRankedKillReports(
               );
             }
           }
-          if (
-            decoded.length > 0 ||
-            report === null ||
-            record(report)?.rankedCharacters === null
-          )
-            hydratedFights.add(fightKey);
-          for (const kill of decoded) kills.set(kill.fightUrl, kill);
+          // Everything the decoder judges -- zone, identity, and every kill
+          // of the zone's ranked encounters -- is the report's, not the
+          // ranked fight's, so no later ranking of the report can change the
+          // answer (#712).
+          const readFights = record(
+            record(record(record(detail.value)?.data)?.reportData)?.report
+          )?.fights;
+          readReports.set(
+            ref.code,
+            new Set(
+              (Array.isArray(readFights) ? readFights : []).flatMap(
+                (fight: unknown) => {
+                  const id = record(fight)?.id;
+                  return typeof id === "number" ? [id] : [];
+                }
+              )
+            )
+          );
+          for (const kill of decoded) {
+            acceptedFights.add(`${kill.reportCode}:${kill.fightId}`);
+            kills.set(kill.fightUrl, kill);
+          }
         }
       }
       progress = {

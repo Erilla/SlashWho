@@ -918,6 +918,41 @@ export function lookupRaiderIoBoss(
 }
 
 /**
+ * The encounter Raider.IO names by its own raid and boss slugs: the reverse of
+ * `lookupRaiderIoBoss`, for evidence that arrives from Raider.IO rather than
+ * from a Warcraft Logs zone (#732).
+ *
+ * Raider.IO ranks some bosses the Journal lists twice as one: both faction
+ * versions of Grong override to `grong`. Such a kill is shown under the one
+ * the Journal lists first. Two encounters that only happen to slug alike, or
+ * that sit in different raids of one Raider.IO tier, stay ambiguous and place
+ * nothing.
+ */
+export function lookupRaidEncounterByRaiderIoSlugs(
+  raidSlug: string,
+  bossSlug: string
+): RaidCatalogueEncounter | null {
+  const matches = [...encounters.values()]
+    .filter(
+      (encounter) =>
+        raiderIoRaidSlugs.get(encounter.raidId) === raidSlug &&
+        (encounter.raiderIoBossSlug ?? raiderIoBossSlug(encounter.bossName)) ===
+          bossSlug
+    )
+    .sort((a, b) => a.bossOrder - b.bossOrder);
+  const first = matches[0];
+  if (!first) return null;
+  if (matches.length === 1) return first;
+  return matches.every(
+    (encounter) =>
+      encounter.raidId === first.raidId &&
+      encounter.raiderIoBossSlug === bossSlug
+  )
+    ? first
+    : null;
+}
+
+/**
  * One raid tier: the raids that were current together, and the day the tier
  * opened. A tier lasts until the next one opens.
  */

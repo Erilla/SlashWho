@@ -3,6 +3,7 @@ import type {
   CharacterMythicWipeInput,
   CharacterTierBestParseInput,
   CharacterCuttingEdgeInput,
+  RaiderIoFirstKillsPublication,
   StagedEvidenceCollection,
   TerminalTier
 } from "@slashwho/database";
@@ -63,6 +64,11 @@ export type EvidencePublication = Readonly<{
   tierBests: readonly CharacterTierBestParseInput[];
   cuttingEdges: readonly CharacterCuttingEdgeInput[];
   /**
+   * The run's Raider.IO first kills (#732). Absent when the run did not read
+   * the kill list, and storage then carries every stored one forward.
+   */
+  raiderIoFirstKills?: RaiderIoFirstKillsPublication;
+  /**
    * Fight URLs this run asked Warcraft Logs about and got an answer for,
    * whatever the answer was. Storage stamps those kills so a later run can
    * tell them from fights nothing has ever asked about -- which is what stops
@@ -121,6 +127,9 @@ export function toStagedCollection(
     wipes: publication.wipes,
     tierBests: publication.tierBests,
     cuttingEdges: publication.cuttingEdges,
+    ...(publication.raiderIoFirstKills
+      ? { raiderIoFirstKills: publication.raiderIoFirstKills }
+      : {}),
     parsedFightUrls: publication.parsedFightUrls,
     completedAt: publication.completedAt.toISOString(),
     ...(troubledRaidIds ? { troubledRaidIds } : {})
@@ -167,6 +176,9 @@ export function fromStagedCollection(
     wipes: staged.wipes,
     tierBests: staged.tierBests,
     cuttingEdges: staged.cuttingEdges ?? [],
+    ...(staged.raiderIoFirstKills
+      ? { raiderIoFirstKills: staged.raiderIoFirstKills }
+      : {}),
     // A stage written before this field existed recorded no attempts. Absent
     // is read as empty, which costs the republished run a re-request of the
     // fights it had already answered and nothing else -- unlike
