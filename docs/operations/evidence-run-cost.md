@@ -533,7 +533,7 @@ under:
 - every name the tier's ranked walk found them ranked under, confirmed by
   their Warcraft Logs id.
 
-Each hydrated report is decoded under each of those names. Before this, a
+Each hydrated report is decoded under each of those names. The current name is tried first, and a report that credits the character under it is not read under a former name too: one character is one actor, so a second actor under a former name in the same report is someone else. Before this, a
 renamed character's nights from before the rename were ruled out unread
 (#733). The ranked walk, which works by character id, was the only thing that
 found those kills.

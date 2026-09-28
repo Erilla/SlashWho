@@ -254,12 +254,21 @@ export async function searchTierAttendance(
         }
         summary.reportsHydrated += 1;
         // Read as each name: only the one the character raided under that
-        // night attributes anything.
-        for (const identity of identities.values()) {
+        // night attributes anything. The current name comes first, and a
+        // report that credits it is not read under a former name too: one
+        // character is one actor, so a second actor under a former name in
+        // the same report is somebody else.
+        let creditedCurrentName = false;
+        for (const [index, identity] of [...identities.values()].entries()) {
+          if (index > 0 && creditedCurrentName) break;
           const decoded = decodedHydratedReport(hydrated.value, identity);
           if (decoded.kind === "limitation") {
             summary.outcome = "incomplete";
             continue;
+          }
+          if (index === 0) {
+            creditedCurrentName =
+              decoded.kills.length > 0 || decoded.wipes.length > 0;
           }
           for (const kill of decoded.kills) {
             if (!kills.has(kill.fightUrl)) summary.recoveredKills += 1;
