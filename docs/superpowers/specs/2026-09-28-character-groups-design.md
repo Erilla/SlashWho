@@ -160,21 +160,33 @@ read, because it can be lifted or expire.
   `deduplicate.ts` keeps one row for the snapshot, but the connections record
   every source the run saw.
 
-**`character_groups`**: one row per group, holding `id`, `created_at` and
-`last_discovered_at`, and from phase 3 `links_valid_until`.
+**`character_groups`**: one row per group, holding `id` and `created_at`, and
+from phase 3 `links_valid_until`.
 
 **`character_group_members`**: `character_id` (the primary key) and `group_id`.
 
-**Group freshness.** `last_discovered_at` is the newest `refreshed_at` among
-the latest completed snapshots of the group's members.
+**Freshness: one definition, derived when it's read.**
+`isFresh(members, at)` is true when any of the given members has a discovery
+run with status `complete` whose `completed_at` is within `FRESHNESS_HOURS` of
+`at`.
 
-- **When it's written.** Every recompute rewrites it, and every publication
-  recomputes the starting character's own group whether or not a link
-  changed. So an ordinary rediscovery that finds the same characters still
-  renews freshness.
-- **Why it's stored.** It is a pure function of the members, so a group split
-  off gets its own value without a special rule. It is stored only so
-  freshness is one indexed read.
+- **What counts as a completed run.** Every run that completes counts,
+  whatever its snapshot's state, including one that completes against a live
+  sweep's snapshot (`completeWithLiveSweepSnapshot`). A failed run doesn't.
+- **What it's called with.** Always a page's members, never the whole stored
+  group. It is the only freshness rule, and search's short cut, `reserve`,
+  `groupStale` and the replay all call it.
+- **Why no stored timestamp.** An earlier draft stored a group
+  `last_discovered_at` taken from snapshot `refreshed_at`, and it was wrong
+  twice over:
+  - a continuation amends its snapshot without moving `refreshed_at`, and a
+    live-sweep completion writes no snapshot at all, so a group could stay
+    stale for good;
+  - a stored group-wide value also counts members hidden behind a suppressed
+    character.
+
+  Deriving it from run completion removes both problems, and it is one indexed
+  lookup per page member.
 
 **Unchanged tables.** `snapshots`, `snapshot_characters`, `discovery_runs`,
 `manual_dossier_connections`, `dossier_character_exclusions` and the
@@ -198,10 +210,14 @@ to an existing table in any phase.
   - **A self-exclusion is ignored.** Today the root's own row offers Exclude,
     and `setDiscoveredExcluded` will write a row from O naming O. That is
     harmless today, because `resolveSubjects` never shows the root excluded.
-    Under groups it would grey O on every sibling's page. So every read and the
-    replay ignore a row whose maker is the character it names. Phase 2 guards
-    the write and hides Exclude on the opened character's row. The replay
-    counts the self-exclusions on test.
+    Under groups it would grey O on every sibling's page.
+    - **Which rows count.** A self-exclusion is a row whose named key is in its
+      maker's shared Warcraft Logs identity set, meaning the maker itself or
+      any key sharing its recorded Warcraft Logs id (#423). Today, excluding
+      O's merged row writes one row naming O and one naming each such alias.
+    - **What happens to them.** Every read and the replay ignore these rows.
+      Phase 2 guards the write for all those keys and hides Exclude on the
+      opened character's row. The replay counts the self-exclusions on test.
 
 ### Publishing a discovery
 
@@ -241,13 +257,14 @@ to an existing table in any phase.
 1. Take the locks above.
 2. Write the snapshot, or amend it, exactly as today.
 3. Update O's observations by the retraction rules below.
-4. Recompute O's group and the groups of every character whose counting links
-   changed, rewriting `last_discovered_at`.
+4. Recompute the groups of every character whose counting links changed.
 
 **Step 3 is monotone,** so a delayed write can never undo a newer one:
 
 - it never lowers `observed_at`;
-- it never retracts a row observed after its own run started.
+- it never retracts a row observed after its own run started;
+- it writes nothing at all for an observer that already has a row from a run
+  started after this one. The newer run's write stands.
 
 A continuation cycle that commits late therefore cannot re-add rows with an
 older time over a newer run's, and its seal cannot retract what a newer run
@@ -324,8 +341,7 @@ another migration took the number):
    - A root whose latest snapshot dropped fingerprint members through a
      `not_due` refresh gets them back. That is growth, and the replay reports
      it.
-4. **Compute groups** with a recursive CTE over `countingLinks`, and derive
-   `last_discovered_at`.
+4. **Compute groups** with a recursive CTE over `countingLinks`.
 5. **Sanity check.** A `DO` block raises an exception if any latest-snapshot
    member or resolved manual target is outside its root's group. That rolls
    back only the migration, which creates tables and touches no existing data.
@@ -337,17 +353,20 @@ itself changes: `completeWithLiveSweepSnapshot` stays the single statement it
 is today, and continuations cannot be pushed into `continueWithoutProgress` by
 the new writes.
 
-**Healing lost writes.** The maintenance pass finds every run completed in the
-last 7 days that published a snapshot but has no `character_connections` row
-carrying its run id. A fixed look-back needs no stored watermark, and
-replaying twice is harmless. For each, it replays step 3 from that snapshot, under
-the same locks and the same monotone rule.
+**Lost writes are detected, not healed.** A best-effort write that fails logs
+`character_groups_write_failed`, and nothing replays it automatically, in any
+phase.
 
-- **Why it's safe.** A run whose observations were all retracted since, or
-  that observed nothing, is replayed harmlessly: step 3 is idempotent.
-- **What it can't restore.** The Raider.IO observations of a run that completed
-  against a live sweep's snapshot, which no snapshot holds. The observer's
-  next discovery re-observes them.
+An automatic heal was considered and rejected:
+
+- replaying a run from its snapshot re-adds links a newer run retracted;
+- it cannot know what to retract, because `raiderIoLimitation` and the
+  sweep's outcome live only in the handler;
+- it loses the second source of a character both sources found;
+- it cannot see a lost continuation cycle.
+
+Detection is the replay's observation reconciliation plus the exit criteria:
+zero write failures, or a rebuild and a restart of the three days.
 
 **Manual edits in phase 1.** Adding or removing a manual connection is a web
 action, and phase 1 does not touch the web. So the worker's maintenance pass
@@ -482,11 +501,18 @@ order does not matter.
 - **`groupOf(key)`** returns the key's stored group, or nothing for a
   character never discovered or a suppressed one. A suppressed key reads as
   not found, as today.
-- **Group decisions are made over page members.** Freshness, "a member has an
-  active run" and the due checks for new guild members are computed over
-  `pageMembers(O)`, not the stored group. A member reachable only through a
-  suppressed character therefore cannot make O's group fresh, have its run
-  joined, or hold off O's check.
+- **Group decisions are made over page members.** These are all computed over
+  `pageMembers(O)`, never the stored group:
+  - freshness (`isFresh`);
+  - "a member has an active run";
+  - the due checks for new guild members;
+  - which rows the reviewer edits below read and write.
+
+  A member reachable only through a suppressed character therefore cannot make
+  O's group fresh, have its run joined, hold off O's check, or have its rows
+  grey, flag or be deleted from O's page. A suppressed member's own rows are
+  untouched, and take effect again if the suppression lifts.
+
 - **`pageMembers(O)`** is the walk defined under [Terms](#terms). It walks the
   current counting links within O's stored group, which phase 2 keeps
   consistent with the links in every writing transaction.
@@ -513,12 +539,23 @@ The group logic lives inside `searchReservations.reserve`, following the lock
 order. Search, the applicant watcher and the check for new guild members all
 go through it, so none of them can disagree.
 
-| O's group                                             | Result                                                                                                                                  |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Fresh (`last_discovered_at` within `FRESHNESS_HOURS`) | `fresh`. Nothing is reserved and no search rate limit is spent, as for a fresh own snapshot today.                                      |
-| Stale, and any member has an active discovery run     | `active`, joining that run. The groups lock makes this atomic, so concurrent searches for several members reserve one run between them. |
-| Stale, with no run active                             | Reserve a discovery from O, as today.                                                                                                   |
-| None                                                  | Unchanged: the negative cache, then Raider.IO, then a discovery from O.                                                                 |
+**Cheap checks first, then the lock.** `reserve` first runs `isFresh` and the
+active-run test without the groups lock, and returns straight away when the
+group is fresh. It takes the groups lock only on the stale path, and repeats
+both tests under the lock before reserving. Every holder of the groups lock is
+bounded:
+
+- a publication holds it for its database writes only;
+- a stale `reserve` holds it for two indexed reads and one insert;
+- each maintenance recompute, phase 1's and phase 3's expiry pass alike, holds
+  it for at most 30 seconds and then resumes from a saved position.
+
+| O's page members                                  | Result                                                                                                                                  |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Fresh (`isFresh`)                                 | `fresh`. Nothing is reserved and no search rate limit is spent, as for a fresh own snapshot today.                                      |
+| Stale, and any member has an active discovery run | `active`, joining that run. The groups lock makes this atomic, so concurrent searches for several members reserve one run between them. |
+| Stale, with no run active                         | Reserve a discovery from O, as today.                                                                                                   |
+| None                                              | Unchanged: the negative cache, then Raider.IO, then a discovery from O.                                                                 |
 
 - **The `fresh` result for a member with no snapshot of its own.**
   - **Today** the fresh branch re-reads only O's own snapshot and answers
@@ -528,11 +565,27 @@ go through it, so none of them can disagree.
     time.
   - **What changes.** `search.create` gains an internal result kind,
     `group_ready`, carrying O's key and nothing else. The web route maps it to
-    `{kind: "ready"}`, exactly as it maps `character`. `dossiers.start` records
-    the search for both kinds.
+    `{kind: "ready"}`, exactly as it maps `character`.
 
-  The landing-page search therefore opens the page, and `recentSearches.record`
-  runs.
+  The landing-page search therefore opens the page.
+
+- **Recording a recent search.** `dossier_searches` is one global list with no
+  visitor on it, shown to everyone on the landing page. So only a deliberate
+  search may add to it.
+  - **A landing-page search** keeps today's rule, which records a `job` or
+    `character` result, and now also records `group_ready`.
+  - **A page's automatic start** sends `origin: "page"` in its `POST` body, and
+    `dossiers.start` never records it. Merely viewing a sibling's page
+    therefore never adds that character to the landing list.
+- **A stale member that Raider.IO no longer knows.** For a key that is in a
+  group, `search.create` first checks the negative cache and runs `reserve`,
+  and only then reads the root character from Raider.IO. If that read fails,
+  the reservation is cancelled.
+  - A negative-cache hit answers `not_found` with no Raider.IO read.
+  - A refused `reserve`, such as `rate_limited`, answers with no Raider.IO read.
+
+  A renamed member, or a low-level alt the sweep found, therefore costs one
+  Raider.IO read per `NEGATIVE_CACHE_TTL_MS`, not one per page load.
 
 - **The URL returned is always O's**, even when the run joined belongs to
   another member. Today `search-service.ts` returns the run's own character
@@ -586,14 +639,20 @@ go through it, so none of them can disagree.
 
 - **Contract additions.** Two fields, both optional, because the dossier schema
   is `.strict()` and `/demo` parses the frozen `ryii-dossier.json`:
-  - `hasManualConnection` on a character, true when any member of the group
-    has a manual row targeting it. The menu's Remove item uses it instead of
-    the label, so a manual target labelled by a provider path can still be
+  - `hasManualConnection` on a character, true when any page member has a
+    manual row targeting it. The menu's Remove item uses it instead of the
+    label, so a manual target labelled by a provider path can still be
     removed.
-  - `groupStale` on the dossier. It is true when no page member's latest
-    completed snapshot is within `FRESHNESS_HOURS` and no page member has an
-    active discovery run. It is absent or false otherwise, so a page already
-    following a run never starts another.
+  - `groupStale` on the dossier. It is true only when all of these hold:
+    - `isFresh(pageMembers(O))` is false;
+    - no page member has an active discovery run;
+    - O is not in the negative cache.
+
+    It is absent or false otherwise. A page already following a run therefore
+    never starts another, and a member Raider.IO no longer knows doesn't keep
+    asking. Because `isFresh` counts a run that completed against a live
+    sweep's snapshot, a character whose own sweep chain is live or abandoned
+    becomes fresh as soon as one start completes. It never loops.
 - **Research state.** The contract stays one `{state, message}`.
   - **Where it comes from:** the latest completed snapshots of the page's
     members, the characters actually shown, not of the whole group.
@@ -610,14 +669,24 @@ go through it, so none of them can disagree.
   - **A root-only view,** a character in no group with anyone else and never
     discovered. This is today's case, keyed on the `submitted` label, and a
     refused start shows today's research error.
-  - **`groupStale` is true.** The page sends one `POST start` per page load.
-    - It joins any member's run through `reserve`, so it never adds a second
-      run.
-    - If the start is refused (`rate_limited`, suppressed or failed), the
-      dossier stays displayed with no research error, because the page already
-      shows usable content. `research-failed` is only for the root-only case.
-    - `dossiers.start` records a recent search only when it reserves or joins
-      a run, so repeat views of a fresh or refused page write nothing.
+  - **`groupStale` is true.** The page sends one `POST start`, with
+    `origin: "page"`, per page load.
+    - **Only the first read decides.** `readCurrentOrStartResearch` evaluates
+      `groupStale`, as today it runs only without an active job id. Nothing
+      re-evaluates it: not `readDossierPoll`, `refreshDossier`,
+      `readExpandedDossier` nor `readCompletedDossier`. A page polling live
+      evidence therefore never sends a second start.
+    - **It never adds a second run.** It joins any member's run through
+      `reserve`.
+    - **A refused start is silent.** "Refused" means any result other than a
+      job or ready: `rate_limited`, `not_found`, `invalid`, `unauthorized`,
+      `client_ip_unavailable`, suppressed or failed. The dossier stays
+      displayed with no research error, because the page already shows usable
+      content.
+    - **A failed job is silent too.** That includes a joined member's run. The
+      page keeps its content and shows no error. `researchFailed` and its
+      message stay for the root-only case alone.
+    - **It is never recorded** as a recent search.
   - **`provisional`** is no longer produced, and the page's "root differs" case
     cannot occur. The contract keeps accepting `provisional`, so a new page
     against an old server, or after a rollback, still parses.
@@ -629,8 +698,10 @@ go through it, so none of them can disagree.
   - no member has an active discovery run (`queued`, `running` or
     `retrying`).
 
-  When due, it reserves through `reserve`, so its check and its reservation
-  happen under the same groups lock.
+  It runs these tests without the groups lock first, and returns at once when
+  the check isn't due. It fires on every dossier read, polls included, so the
+  common case must cost no lock. When due, it reserves through `reserve`, which
+  repeats the tests under the groups lock.
   - **Freshness doesn't hold it off.** It passes `ignoreFreshness`, because
     the weekly check is not a search and must not wait up to
     `FRESHNESS_HOURS` behind a fresh group.
@@ -643,8 +714,10 @@ go through it, so none of them can disagree.
 
 ### Reviewer edits
 
-Every edit resolves rows across the group, and keeps the two exclusion stores
-apart:
+Every edit resolves rows across the page's members, not just the rows made on
+the page being viewed. "A member of O's group" in the table means a page
+member: a suppressed member's rows are neither read nor written from O's page.
+The two exclusion stores are kept apart:
 
 | Edit                           | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -707,7 +780,8 @@ with its own test).
 - **When it takes effect.** `links_valid_until` is the oldest counting observed
   link's `observed_at` plus 90 days, rewritten on every recompute. The
   maintenance pass recomputes every group whose `links_valid_until` has
-  passed, as its own step in its own `try`. A failure in it is logged as
+  passed, as its own step in its own `try`, within the same 30-second bound
+  and saved position as phase 1's recompute. A failure in it is logged as
   `character_groups_expiry_failed`.
 - **Renewal.** A link is renewed when its observer re-observes it, and
   retracted by the rules above.
@@ -734,6 +808,12 @@ by a reviewer's rejection, and by expiry on every page but the observer's.
 | P5  | A member's label never weakens.                                                                                                                                                                                                                                         | The replay fails on a weakened label. At run time a read logs `group_label_weakened` if any member other than O has a label weaker than its row in O's own latest snapshot, and a test covers it. O's own row is excluded: it keeps today's root label by definition. |
 | P6  | Manual connections and both kinds of exclusion keep their rows and their effect, from every member's page.                                                                                                                                                              | The replay compares excluded state against the exclusion rows. End-to-end tests add, exclude, include and remove from a page other than the one the row was made on.                                                                                                  |
 | P7  | Where anything changes, it only adds characters, or greys one that a shared exclusion names.                                                                                                                                                                            | The replay reports growth and shared exclusions. It fails on removals, unexplained exclusions and over-ceiling pages.                                                                                                                                                 |
+
+**How the checksums compare.** P2's and P3's writer-on against writer-off
+checksums cover every column except those set from the clock (`created_at`,
+`completed_at`, `started_at`, `refreshed_at`, `recorded_at`) and generated
+ids. Those differ between any two runs, so including them would make the
+check always fail.
 
 **The old read code stays until phase 3.** The replay needs today's
 `resolveSubjects` to compare against. Phase 2 therefore keeps it, renamed
@@ -806,7 +886,8 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
     including an aborted job and a delayed `enqueueFingerprintAdmission`;
   - a delayed continuation write after a newer run cannot lower `observed_at`
     or retract that run's rows;
-  - the healing pass replays a lost write;
+  - a delayed write for an observer whose newer run has been written adds
+    nothing, including a delayed continuation after a newer retraction;
   - the maintenance recompute stops at its 30-second bound and resumes;
   - the replay's observation reconciliation fails on a lost addition and on a
     lost retraction;
@@ -839,9 +920,19 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
   - a fresh sibling page sends no `POST start`, and a stale one sends exactly
     one, which joins a running member's run if there is one; O's row carries
     today's root label;
-  - a stale page whose start is rate-limited keeps showing its dossier with
-    no research error;
-  - a self-exclusion made on O's page does not grey O on a sibling's page;
+  - a stale page whose start is rate-limited, or whose joined run fails, keeps
+    showing its dossier with no research error;
+  - a stale page whose O owns a live sweep chain, and one whose O owns an
+    abandoned chain, each send one start and then none on later loads;
+  - a stale page for a member Raider.IO answers 404 sends one start, costs one
+    Raider.IO read, and then none within the negative-cache time;
+  - a page's automatic start is not added to recent searches, and a landing
+    search for a `group_ready` member is;
+  - polling a page with live evidence sends no second start;
+  - a self-exclusion made on O's page, including through a Warcraft Logs
+    alias, does not grey O on a sibling's page;
+  - a suppressed member's exclusion does not grey T on O's page, and Remove
+    leaves the suppressed member's row in place;
   - a fresh group's member opens with the same list and queues nothing;
   - opening several siblings queues at most one sweep;
   - cross-page exclude and include for both stores;
