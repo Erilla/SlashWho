@@ -6,6 +6,9 @@ import {
   lookupRaidBossByName,
   lookupRaiderIoBoss,
   lookupRaidByName,
+  lookupRaidEncounterForEvidence,
+  lookupRaidForEvidence,
+  lookupSiblingRaidBossByName,
   lookupUniqueRaidBossByName,
   lookupRaidCurrentContentWindow,
   mythicDifficultyExistedDuring,
@@ -203,6 +206,52 @@ it("does not let a Warcraft Logs alias claim a boss in another raid", () => {
     lookupRaidBossByName("Manaforge Omega", "One-Armed Bandit")
   ).toBeNull();
   expect(lookupRaidBossByName("Nerub-ar Palace", "Mekkatorque")).toBeNull();
+});
+
+// Break caught: Warcraft Logs ranking zone 53 is named `The Venomous Abyss`
+// but also holds The Tidebound Grotto's only boss. The raid name was known, so
+// the unique boss name was never consulted, and every such kill, wipe and
+// parse was withheld as an unmatched encounter (#729). Stored rows on test show
+// the reverse too: Venomous Abyss bosses under `The Tidebound Grotto`.
+it.each([
+  ["The Venomous Abyss", "Nymrissa Wavecaller", "1317", "2849"],
+  ["The Tidebound Grotto", "The Lost Explorers", "1320", "2894"],
+  ["The Tidebound Grotto", "Entombed Sentinels", "1320", "2874"]
+])(
+  "places a %s-labelled %s kill in its own raid of the same tier",
+  (raidName, bossName, raidId, bossId) => {
+    const evidence = { raidName, bossName, journalBossId: null };
+    expect(lookupRaidEncounterForEvidence(evidence)).toMatchObject({
+      raidId,
+      bossId
+    });
+    expect(lookupRaidForEvidence(evidence)?.raidId).toBe(raidId);
+  }
+);
+
+it("never places a boss from another tier by a raid name's sibling rule", () => {
+  // Undermine's One-Armed Bandit is unique in the catalogue, but Manaforge
+  // Omega is the next tier: a mislabelled zone must not move it across.
+  const evidence = {
+    raidName: "Manaforge Omega",
+    bossName: "One-Armed Bandit",
+    journalBossId: null
+  };
+  expect(
+    lookupSiblingRaidBossByName(evidence.raidName, evidence.bossName)
+  ).toBeNull();
+  expect(lookupRaidEncounterForEvidence(evidence)).toBeNull();
+  expect(lookupRaidForEvidence(evidence)?.raidName).toBe("Manaforge Omega");
+});
+
+it("still names the raid when the boss cannot be placed", () => {
+  expect(
+    lookupRaidForEvidence({
+      raidName: "The Venomous Abyss",
+      bossName: "Unknown",
+      journalBossId: null
+    })?.raidId
+  ).toBe("1320");
 });
 
 // Break caught: the Journal lists a Horde and an Alliance copy of these fights

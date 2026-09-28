@@ -3,11 +3,10 @@ import type { CharacterGuild, CharacterKey } from "./character-key";
 import { formatCharacterDisplayName } from "./display-name";
 import {
   lookupJournalEncounter,
-  lookupRaidBossByLegacyName,
   lookupRaidBossByName,
   lookupRaidByName,
+  lookupRaidEncounterForEvidence,
   currentContentEligibilityByRaidId,
-  lookupUniqueRaidBossByName,
   supportedRaidCatalogue,
   type RaidCatalogueEncounter
 } from "./raid-catalogue";
@@ -331,26 +330,7 @@ function catalogueEncounter(evidence: {
   journalBossId: string | null;
 }): RaidCatalogueEncounter | null {
   if (isNonRaidZone(evidence.raidName)) return null;
-  const raid = lookupRaidByName(evidence.raidName);
-  const journalEncounter =
-    evidence.journalBossId === null
-      ? null
-      : lookupJournalEncounter(evidence.journalBossId);
-  const namedEncounter = lookupRaidBossByName(
-    evidence.raidName,
-    evidence.bossName
-  );
-  const journalEncounterMatchesRaid =
-    raid !== null && journalEncounter?.raidId === raid.raidId;
-  const legacyWarcraftLogsEncounter =
-    raid !== null && !journalEncounterMatchesRaid && namedEncounter === null
-      ? lookupRaidBossByLegacyName(raid.raidId, evidence.bossName)
-      : null;
-  return raid
-    ? (namedEncounter ??
-        (journalEncounterMatchesRaid ? journalEncounter : null) ??
-        legacyWarcraftLogsEncounter)
-    : (journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName));
+  return lookupRaidEncounterForEvidence(evidence);
 }
 
 function currentness(killedAt: string, raidId: string): boolean | null {

@@ -889,6 +889,16 @@ describe("ranked Mythic backfill", () => {
         partitions: [{ id: 1 }],
         encounters: [{ id: 2092, name: "Argus the Unmaker" }]
       },
+      // Names the tier's larger raid while ranking its sibling's boss too.
+      {
+        id: 53,
+        name: "The Venomous Abyss",
+        partitions: [{ id: 1 }],
+        encounters: [
+          { id: 3379, name: "Nymrissa Wavecaller" },
+          { id: 3470, name: "Nek'zali the Soulcoiler" }
+        ]
+      },
       { id: 45, name: "Mythic+ Season 1", partitions: [{ id: 1 }] }
     ];
     const walk = (rankedEncounters: readonly number[]) => {
@@ -1009,6 +1019,45 @@ describe("ranked Mythic backfill", () => {
 
       expect(asked.zones).toEqual([17]);
       expect(asked.encounters).toEqual([2063, 2092, 4000]);
+    });
+
+    it("walks a sibling raid's zone for this raid's bosses only", async () => {
+      // Break caught: zone 53 is named for The Venomous Abyss but also ranks
+      // The Tidebound Grotto's Nymrissa Wavecaller. A zone naming another raid
+      // was never taken, so a Tidebound walk could not reach her kills (#729).
+      const { asked, client } = walk([3379, 3470]);
+
+      await client.getRankedKillReports(key, {
+        journalRaidId: "1317",
+        requestCap: 20
+      });
+
+      expect(asked.zones).toEqual([53]);
+      expect(asked.encounters).toEqual([3379]);
+    });
+
+    it("skips another raid's zone whose encounter list it cannot read", async () => {
+      // Break caught in review: reading a sibling zone's bosses meant a
+      // malformed list in any other raid's zone failed the whole walk, where
+      // that zone had always been skipped unread.
+      zones.push({
+        id: 60,
+        name: "Nerub-ar Palace",
+        partitions: [{ id: 1 }],
+        encounters: [{ id: 0, name: "" }]
+      });
+      try {
+        const { asked, client } = walk([3379]);
+
+        await client.getRankedKillReports(key, {
+          journalRaidId: "1317",
+          requestCap: 20
+        });
+
+        expect(asked.zones).toEqual([53]);
+      } finally {
+        zones.pop();
+      }
     });
   });
 
