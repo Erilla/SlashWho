@@ -24,10 +24,11 @@ import {
   isAccountWideCuttingEdgeAchievement,
   lookupRaidForEvidence
 } from "@slashwho/domain";
-import type {
-  MythicBossRanking,
-  MythicBossRankingsOptions,
-  RaiderIoGateway
+import {
+  raiderIoHistoricTierOrdinals,
+  type MythicBossRanking,
+  type MythicBossRankingsOptions,
+  type RaiderIoGateway
 } from "@slashwho/raiderio";
 import type {
   WarcraftLogsFirstKillEvidence,
@@ -1689,6 +1690,10 @@ export function createApplicantEvidenceJobHandler(
                   {
                     storedKills: storedEvidence.kills,
                     ...(killScanFloor ? { killScanFloor } : {}),
+                    // Task 5 replaces this with the character's real marks;
+                    // marking every pinned tier keeps today's behaviour until
+                    // then.
+                    markedTierOrdinals: new Set(raiderIoHistoricTierOrdinals),
                     signal: activeContext.signal,
                     onPhysicalRequest: () =>
                       scope.increment("raiderIoHistoricRequests")

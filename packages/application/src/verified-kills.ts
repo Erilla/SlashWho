@@ -31,6 +31,10 @@ export type VerifiedKillsResult = Readonly<{
   firstKills?: readonly HistoricMythicKill[];
   /** The raids the asked tiers answer for, and any a kill came back from. */
   askedRaidSlugs?: readonly string[];
+  /** The tiers asked only because they were unmarked, evidence only. */
+  backCatalogueTierOrdinals?: readonly number[];
+  /** The raids of asked tiers that are not settled. */
+  currentRaidSlugs?: readonly string[];
 }>;
 
 /**
@@ -47,11 +51,16 @@ export async function raiderIoVerifiedKills(
   options: Readonly<{
     storedKills: readonly Readonly<{ killedAt: string }>[];
     killScanFloor?: string;
+    markedTierOrdinals: ReadonlySet<number>;
     signal?: AbortSignal;
     onPhysicalRequest?: () => void;
   }>
 ): Promise<VerifiedKillsResult> {
-  const tierOrdinals = historicTierOrdinalsFrom(options.killScanFloor);
+  const settled = new Set(settledTierOrdinals(options.killScanFloor));
+  const tierOrdinals = historicTierOrdinalsFrom(
+    options.killScanFloor,
+    options.markedTierOrdinals
+  );
   let result: Awaited<ReturnType<RaiderIoGateway["getHistoricMythicKills"]>>;
   try {
     result = await raiderio.getHistoricMythicKills(key, {
@@ -68,9 +77,23 @@ export async function raiderIoVerifiedKills(
   if (result.kind === "limitation") {
     return { kills: [], limitation: result.code };
   }
+  const backCatalogueTierOrdinals = tierOrdinals.filter((ordinal) =>
+    settled.has(ordinal)
+  );
+  const backCatalogueRaids = new Set(
+    raiderIoHistoricTiers
+      .filter((tier) => backCatalogueTierOrdinals.includes(tier.ordinal))
+      .flatMap((tier) => tier.raidSlugs)
+  );
+  // A back-catalogue tier is evidence only: its kills are below the floor or
+  // after their raid's window, so they are no search hint, and its guilds are
+  // no place for a tier search to walk.
+  const searchable = result.kills.filter(
+    (kill) => !backCatalogueRaids.has(kill.raidSlug)
+  );
   return {
-    kills: searchableKills(result.kills, options),
-    guilds: raiderIoGuilds(result.kills),
+    kills: searchableKills(searchable, options),
+    guilds: raiderIoGuilds(searchable),
     firstKills: result.kills,
     askedRaidSlugs: [
       ...new Set([
@@ -79,19 +102,58 @@ export async function raiderIoVerifiedKills(
           .flatMap((tier) => tier.raidSlugs),
         ...result.kills.map((kill) => kill.raidSlug)
       ])
-    ].sort()
+    ].sort(),
+    backCatalogueTierOrdinals,
+    currentRaidSlugs: raiderIoHistoricTiers
+      .filter(
+        (tier) =>
+          tierOrdinals.includes(tier.ordinal) && !settled.has(tier.ordinal)
+      )
+      .flatMap((tier) => tier.raidSlugs)
+      .sort()
   };
+}
+
+type PinnedTier = Readonly<{ ordinal: number; raidSlugs: readonly string[] }>;
+
+/**
+ * The tiers every raid of which stopped being current content before the
+ * character's scan floor. Whatever such a tier returns is below the floor or a
+ * first kill made after its raid's window closed, so it holds no search hint
+ * (#298), only Raider.IO-logged first kills (#732). Never the last pinned tier,
+ * which current raids ride along on.
+ */
+export function settledTierOrdinals(
+  killScanFloor: string | undefined,
+  tiers: readonly PinnedTier[] = raiderIoHistoricTiers,
+  contentWindowEnd: (
+    raidSlug: string
+  ) => string | null = raiderIoRaidContentWindowEnd
+): readonly number[] {
+  const floor =
+    killScanFloor === undefined ? Number.NaN : Date.parse(killScanFloor);
+  if (Number.isNaN(floor)) return [];
+  const closedBelowFloor = (slug: string) => {
+    const endsAt = contentWindowEnd(slug);
+    return endsAt !== null && Date.parse(endsAt) < floor;
+  };
+  return tiers
+    .filter(
+      (tier, index) =>
+        index !== tiers.length - 1 && tier.raidSlugs.every(closedBelowFloor)
+    )
+    .map((tier) => tier.ordinal);
 }
 
 /**
  * The Raider.IO tiers still worth asking, given the character's scan floor.
  *
- * A tier is left out only when every raid it answers for stopped being
- * current content before the floor. Whatever it could return is then either
- * below the floor, which `searchableKills` never searches, or a first kill
- * made after its raid's content window closed, which the dossier does not
- * count as current. Asking for it again on every run was most of a full run's
- * Raider.IO requests and about a quarter of its median time (#298).
+ * A settled tier is left out only once it is marked as read
+ * (`character_raiderio_tier_reads`, current version, not expired). Until then
+ * it is asked, once, for its logged first kills. Asking every settled tier on
+ * every run was most of a full run's Raider.IO requests and about a quarter
+ * of its median time (#298); leaving them all out for good meant a settled
+ * tier's logged kills were never collected at all.
  *
  * Kept whenever that cannot be shown: no floor, a floor that cannot be read,
  * or a raid the catalogue cannot place. The last pinned tier is always kept,
@@ -100,26 +162,19 @@ export async function raiderIoVerifiedKills(
  */
 export function historicTierOrdinalsFrom(
   killScanFloor: string | undefined,
-  tiers: readonly Readonly<{
-    ordinal: number;
-    raidSlugs: readonly string[];
-  }>[] = raiderIoHistoricTiers,
+  markedTierOrdinals: ReadonlySet<number>,
+  tiers: readonly PinnedTier[] = raiderIoHistoricTiers,
   contentWindowEnd: (
     raidSlug: string
   ) => string | null = raiderIoRaidContentWindowEnd
 ): readonly number[] {
-  const floor =
-    killScanFloor === undefined ? Number.NaN : Date.parse(killScanFloor);
-  const closedBelowFloor = (slug: string) => {
-    const endsAt = contentWindowEnd(slug);
-    return endsAt !== null && Date.parse(endsAt) < floor;
-  };
+  const settled = new Set(
+    settledTierOrdinals(killScanFloor, tiers, contentWindowEnd)
+  );
   return tiers
     .filter(
-      (tier, index) =>
-        Number.isNaN(floor) ||
-        index === tiers.length - 1 ||
-        !tier.raidSlugs.every(closedBelowFloor)
+      (tier) =>
+        !settled.has(tier.ordinal) || !markedTierOrdinals.has(tier.ordinal)
     )
     .map((tier) => tier.ordinal);
 }
