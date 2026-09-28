@@ -582,9 +582,11 @@ describe("mergeRaiderIoFirstKills presence", () => {
     historicRankCheckedAt: null,
     presenceChecked: true
   };
-  const publication = (
-    kills: readonly CharacterRaiderIoFirstKillInput[]
-  ) => ({ kills, askedRaidSlugs: ["tier-mn-1"], limitationCode: null });
+  const publication = (kills: readonly CharacterRaiderIoFirstKillInput[]) => ({
+    kills,
+    askedRaidSlugs: ["tier-mn-1"],
+    limitationCode: null
+  });
 
   it("takes the flag of a kill the run found again", () => {
     expect(
@@ -614,12 +616,7 @@ describe("mergeRaiderIoFirstKills presence", () => {
   it("carries a row's own flag through a partial run", () => {
     const unchecked = { ...read, presenceChecked: false };
     expect(
-      mergeRaiderIoFirstKills(
-        [unchecked],
-        publication([]),
-        "partial",
-        false
-      )
+      mergeRaiderIoFirstKills([unchecked], publication([]), "partial", false)
     ).toEqual([unchecked]);
   });
 });

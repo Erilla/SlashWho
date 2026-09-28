@@ -962,7 +962,10 @@ describe("collectRaiderIoFirstKills", () => {
       [midnightFalls],
       gateway({
         getLoggedEncounter: vi.fn(async () =>
-          encounter("midnight-falls", { state: "unavailable", reason: "private" })
+          encounter("midnight-falls", {
+            state: "unavailable",
+            reason: "private"
+          })
         )
       })
     );
@@ -1052,8 +1055,12 @@ describe("collectRaiderIoFirstKills", () => {
     const settledA = { ...kill("a", 1), raidSlug: "nerubar-palace" };
     const settledB = { ...kill("b", 2), raidSlug: "nerubar-palace" };
     const current = kill("c", 3);
-    const due = (id: number, bossSlug: string, raidSlug: string, readAt: string) =>
-      storedRead({ loggedEncounterId: id, bossSlug, raidSlug, readAt });
+    const due = (
+      id: number,
+      bossSlug: string,
+      raidSlug: string,
+      readAt: string
+    ) => storedRead({ loggedEncounterId: id, bossSlug, raidSlug, readAt });
     const order: number[] = [];
     const raiderio = gateway({
       getLoggedEncounter: vi.fn(async (raidSlug: string, id: number) => {

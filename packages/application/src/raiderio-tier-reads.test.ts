@@ -26,10 +26,18 @@ describe("raiderIoTierReadSince", () => {
 
   it("spreads offsets across characters", () => {
     const offsets = new Set(
-      ["alfa", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"]
-        .map((name) =>
-          raiderIoTierReadOffsetMs({ region: "eu", realm: "draenor", name })
-        )
+      [
+        "alfa",
+        "bravo",
+        "charlie",
+        "delta",
+        "echo",
+        "foxtrot",
+        "golf",
+        "hotel"
+      ].map((name) =>
+        raiderIoTierReadOffsetMs({ region: "eu", realm: "draenor", name })
+      )
     );
     expect(offsets.size).toBeGreaterThan(1);
   });

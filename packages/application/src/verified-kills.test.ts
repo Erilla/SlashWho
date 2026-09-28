@@ -354,9 +354,9 @@ describe("historicTierOrdinalsFrom", () => {
   });
 
   it("keeps every tier without a floor, marked or not", () => {
-    expect(
-      historicTierOrdinalsFrom(undefined, new Set([19, 20])).length
-    ).toBe(raiderIoHistoricTiers.length);
+    expect(historicTierOrdinalsFrom(undefined, new Set([19, 20])).length).toBe(
+      raiderIoHistoricTiers.length
+    );
   });
 
   it("names every pinned raid slug in the catalogue", () => {

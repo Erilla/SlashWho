@@ -92,6 +92,7 @@ Nothing else about #732 changes:
 
   The other rules stand: no floor, or a floor that can't be read, keeps every
   tier, and the last pinned tier is always kept.
+
 - **A back-catalogue tier is evidence only.** A tier asked only because it is
   unmarked (every raid closed before the floor) is:
   - **included in** `firstKills` and `askedRaidSlugs`;
@@ -103,6 +104,7 @@ Nothing else about #732 changes:
   is how a complete marking run, and every re-ask after expiry, drops a stored
   kill that Raider.IO no longer lists, whether withdrawn or belonging to a
   name's previous owner.
+
 - **Expiries are spread out.** Each character's TTL is 90 days plus an offset
   of 0-14 days, taken from a stable hash of the character key. Tiers marked in
   the same rollout week therefore don't all expire on the same day.
@@ -138,6 +140,7 @@ Nothing else about #732 changes:
   A partial publish carries stale rows forward, so it must not vouch for a
   tier. A capped, rate-limited or failed phase marks nothing either: the tier
   is asked again next run, and the next 50 reads drain its backlog.
+
 - **All or nothing.** The run marks every such tier or none, whichever tier the
   shortfall came from. It fails safe: the only cost is repeated tier requests,
   at most 16 per run until a complete run lands.
@@ -155,6 +158,7 @@ Nothing else about #732 changes:
   `collectRaiderIoFirstKills` with the run's own kills. Rebuilding only the
   due ones while adding their raids to `askedRaidSlugs` would delete the rest
   on a complete publish.
+
 - **What they cost.** A rebuilt kill with a stored encounter or refusal is read
   again only under #732's rules:
   - a visible roster, once the guild's `shareRaidUntil` has passed, or after
@@ -166,6 +170,7 @@ Nothing else about #732 changes:
   `rate_limited`) has no stored answer. It is a first read, like any unread
   kill, and counts toward `request_cap`. A rebuilt kill with no logged
   encounter costs nothing.
+
 - **Queue order.** Re-reads queue behind first reads within the 50-read cap.
   Among re-reads, the order is:
   1. kills in raids of tiers that would be asked anyway (not closed before the
@@ -175,6 +180,7 @@ Nothing else about #732 changes:
   This holds whichever path supplied the kill, the kill list or a rebuild. So
   neither the rollout's first due date nor a 90-day re-ask lets a whole back
   catalogue crowd out current rosters.
+
 - **They count as asked.** The rebuilt kills' raid slugs join `askedRaidSlugs`,
   so `mergeRaiderIoFirstKills` treats them like any asked raid:
   - a kill found again is kept;
@@ -196,7 +202,7 @@ Nothing else about #732 changes:
 ### 4. Presence recorded on the first kill
 
 - **A new column.** `character_raiderio_first_kills` gains `presence_checked
-  boolean NOT NULL DEFAULT false`, in the same migration.
+boolean NOT NULL DEFAULT false`, in the same migration.
 - **What sets it.** A `read` kill is published with it true only when its
   roster was visible and held the character's Raider.IO id in this run's
   check, or when the flag was already true.
@@ -239,6 +245,7 @@ Nothing else about #732 changes:
   A character read that throws is still a shortfall (`unavailable`), as today.
   Such a character makes one character read per run while any kill waits on
   its check.
+
 - **A failed check is permanent.** A kill whose visible roster lacks the
   character is dropped by the next complete publish. A log's roster doesn't
   change, a dropped kill is not stored to be re-read, and a later re-ask meets

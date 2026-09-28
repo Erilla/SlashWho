@@ -673,15 +673,14 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
       completedAt: new Date("2026-09-28T12:05:00.000Z")
     });
 
-    const stored = await repositories.evidence.storedRaiderIoFirstKills!(
-      rootKey
+    const stored =
+      await repositories.evidence.storedRaiderIoFirstKills!(rootKey);
+    expect(stored.map((kill) => [kill.bossSlug, kill.presenceChecked])).toEqual(
+      [
+        ["belo-ren", false],
+        ["midnight-falls", true]
+      ]
     );
-    expect(
-      stored.map((kill) => [kill.bossSlug, kill.presenceChecked])
-    ).toEqual([
-      ["belo-ren", false],
-      ["midnight-falls", true]
-    ]);
   });
 
   it("marks tier reads, gated on version and read_at, and never lowers the version", async () => {
