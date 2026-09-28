@@ -249,6 +249,80 @@ describe("character connections: observation writes", () => {
     ]);
   });
 
+  it("keeps a chain's seal from retracting after an earlier cycle skipped a guild", async () => {
+    // Break caught: a 404'd historical guild in a capped cycle was forgotten
+    // at the seal, whose `replaced` retracted links the chain never re-read.
+    const fingerprintWrite = (
+      decision: "added_only" | "replaced",
+      reason: "skipped_guild" | "matched",
+      observed: { key: CharacterKey; source: "fingerprint" }[]
+    ) => ({
+      family: "fingerprint" as const,
+      decision,
+      reason,
+      sweepReservationId: null,
+      observed
+    });
+    const earlier = await publishedRun();
+    await connections().writeObservations({
+      runId: earlier,
+      observerKey: rootKey,
+      families: [
+        fingerprintWrite("replaced", "matched", [
+          { key: thirdKey, source: "fingerprint" }
+        ])
+      ]
+    });
+    const chain = await publishedRun();
+    await connections().writeObservations({
+      runId: chain,
+      observerKey: rootKey,
+      families: [
+        fingerprintWrite("added_only", "skipped_guild", [
+          { key: altKey, source: "fingerprint" }
+        ])
+      ]
+    });
+    await connections().writeObservations({
+      runId: chain,
+      observerKey: rootKey,
+      families: [fingerprintWrite("replaced", "matched", [])]
+    });
+
+    const links = async () =>
+      (
+        await pool.query<{ discovery_run_id: string }>(
+          `SELECT discovery_run_id FROM character_connections
+            WHERE source = 'fingerprint' ORDER BY discovery_run_id`
+        )
+      ).rows.map((row) => row.discovery_run_id);
+    expect(await links()).toEqual([earlier, chain].sort());
+    const ledger = async (runId: string) =>
+      (
+        await pool.query(
+          `SELECT decision, reason FROM character_connection_write_log
+            WHERE run_id = $1 ORDER BY id`,
+          [runId]
+        )
+      ).rows;
+    expect(await ledger(chain)).toEqual([
+      { decision: "added_only", reason: "skipped_guild" },
+      { decision: "added_only", reason: "skipped_guild" }
+    ]);
+
+    // A separate run carries no skip of its own, so its match still replaces.
+    const later = await publishedRun();
+    await connections().writeObservations({
+      runId: later,
+      observerKey: rootKey,
+      families: [fingerprintWrite("replaced", "matched", [])]
+    });
+    expect(await links()).toEqual([]);
+    expect(await ledger(later)).toEqual([
+      { decision: "replaced", reason: "matched" }
+    ]);
+  });
+
   it("never lowers observed_at", async () => {
     const runId = await publishedRun();
     const write = {

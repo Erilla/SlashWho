@@ -792,6 +792,8 @@ function handlerHarness(
   // continuation silently kill the chain.
   let nextAdmission: FingerprintAdmission | null = null;
   const requestedAdmissions: { continuation: boolean }[] = [];
+  // Every reservation id the default `admitted` answer handed out, in order.
+  const admittedReservations: string[] = [];
   repositories.fingerprintSweeps.requestAdmission = async (input) => {
     requestedAdmissions.push({ continuation: input.continuation === true });
     if (nextAdmission) {
@@ -809,9 +811,11 @@ function handlerHarness(
       }
       return nextAdmission;
     }
+    const reservationId = `harness-reservation-${++reservations}`;
+    admittedReservations.push(reservationId);
     return {
       kind: "admitted" as const,
-      reservationId: `harness-reservation-${++reservations}`,
+      reservationId,
       requestCap: sweepRequestCap
     };
   };
@@ -905,6 +909,7 @@ function handlerHarness(
       enqueueFollowUp = value;
     },
     requestedAdmissions,
+    admittedReservations,
     /** The outcome label of the most recent execution. */
     lastOutcome(): unknown {
       return logged.filter((event) => event.event === "discovery_run").at(-1)
@@ -3258,6 +3263,68 @@ describe("observation writes after publication", () => {
       })
     ).rejects.toThrow("shutdown");
     expect(connections.writes).toHaveLength(1);
+    // A shutdown leaves the recompute to the hourly maintenance pass.
+    expect(connections.recomputed).toEqual([]);
+  });
+
+  it("keeps a throwing failure log from escaping the run", async () => {
+    const repositories = createMemoryRepositories();
+    repositories.characterConnections = {
+      ...recordingConnections().repository,
+      async writeObservations() {
+        throw new Error("lock timeout");
+      }
+    };
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await handlerFor(repositories, new MutableGateway(), {
+      logger: {
+        info(value) {
+          if (value.event === "character_groups_write_failed") {
+            throw new Error("log sink down");
+          }
+        }
+      }
+    }).execute(run.id, delivery());
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({ state: "complete" });
+  });
+
+  it("carries an unread root to the write as added_only", async () => {
+    const harness = handlerHarness();
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+    harness.blizzardGateway.getGuildRoster = async () => {
+      throw Object.assign(new Error("missing"), { kind: "not_found" });
+    };
+    await harness.handler.execute(harness.runId);
+    expect(connections.writes[0]!.families[1]).toMatchObject({
+      family: "fingerprint",
+      decision: "added_only",
+      reason: "unread"
+    });
+  });
+
+  it("carries a skipped historical guild on a capped cycle to the write as added_only", async () => {
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 5
+    });
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+    harness.repositories.evidence.getCompleted = async () =>
+      ({
+        kills: [{ guild: { name: "Gone", region: "eu", realm: "draenor" } }]
+      }) as never;
+    harness.blizzardGateway.getGuildRosterByIdentity = async () => {
+      throw Object.assign(new Error("missing"), { kind: "not_found" });
+    };
+    await harness.handler.execute(harness.runId);
+    expect(connections.writes[0]!.families[1]).toMatchObject({
+      family: "fingerprint",
+      decision: "added_only",
+      reason: "skipped_guild"
+    });
   });
 
   it("logs a failed write and changes nothing else", async () => {
@@ -3294,10 +3361,11 @@ describe("observation writes after publication", () => {
       undefined,
       continuation(harness)
     );
+    expect(harness.admittedReservations).toHaveLength(2);
     expect(connections.writes[1]!.families).toEqual([
       expect.objectContaining({
         family: "fingerprint",
-        sweepReservationId: expect.any(String)
+        sweepReservationId: harness.admittedReservations[1]
       })
     ]);
   });

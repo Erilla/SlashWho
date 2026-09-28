@@ -65,6 +65,11 @@ export type FingerprintSweepOutcome =
        * A capped outcome with no cursor must leave a stored cursor unchanged.
        */
       resumeAfter?: string;
+      /**
+       * Historical guilds skipped because their roster answered not found. A
+       * chain's seal must not retract links a capped cycle's skip never read.
+       */
+      skippedHistoricalGuilds?: number;
     }
   | {
       kind: "failure";
@@ -548,7 +553,8 @@ export async function discoverFingerprintMatches(
         kind: "capped",
         characters: matches,
         requestsUsed,
-        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId }),
+        ...(skippedHistoricalGuilds > 0 ? { skippedHistoricalGuilds } : {})
       };
     }
     return failureOutcome(error);
@@ -559,7 +565,8 @@ export async function discoverFingerprintMatches(
         kind: "capped",
         characters: matches,
         requestsUsed,
-        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId }),
+        ...(skippedHistoricalGuilds > 0 ? { skippedHistoricalGuilds } : {})
       }
     : {
         kind: "matched",

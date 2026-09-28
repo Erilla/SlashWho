@@ -295,6 +295,24 @@ describe("discoverFingerprintMatches", () => {
     });
   });
 
+  it("counts a skipped historical guild on a capped sweep too", async () => {
+    // Break caught: only `matched` carried the count, so a chain that skipped a
+    // 404'd guild in a capped cycle sealed as a full read and retracted links.
+    const gone = { name: "Gone", region: "eu" as const, realm: "draenor" };
+    const outcome = await discoverFingerprintMatches(
+      root,
+      gatewayFor([candidate(matchingKey)], { [keyId(root)]: fingerprint(200) }),
+      { ...options, requestCap: 3, historicalGuilds: [gone] }
+    );
+
+    expect(outcome).toEqual({
+      kind: "capped",
+      characters: [],
+      requestsUsed: 3,
+      skippedHistoricalGuilds: 1
+    });
+  });
+
   it("skips a candidate with no readable profile and keeps sweeping", async () => {
     // Break caught: a roster member whose achievements are unreadable is
     // ordinary — the measured live sweep saw 23 of 393 — so treating one as an

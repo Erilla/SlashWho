@@ -47,6 +47,18 @@ describe("retraction decisions", () => {
       decision: "added_only",
       reason: "capped"
     });
+    // Break caught: a capped cycle's skip read as plain `capped`, so the ledger
+    // held nothing for the chain's seal to find and honour.
+    expect(
+      fingerprintDecision({
+        ...full,
+        kind: "capped",
+        skippedHistoricalGuilds: 1
+      })
+    ).toEqual({
+      decision: "added_only",
+      reason: "skipped_guild"
+    });
     // Break caught: a 404 on the root read as an empty match and cut every link.
     expect(fingerprintDecision({ ...full, unreadRoot: true })).toEqual({
       decision: "added_only",

@@ -429,16 +429,21 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   /**
    * Phase 1's best-effort observation write (#738). It runs after the
    * publication committed and after the run's timing log, never throws, and
-   * ignores the job's abort signal, so it cannot change an outcome.
+   * ignores the job's abort signal, so it cannot change an outcome. On a
+   * shutdown it still writes, but leaves the group recompute to the hourly
+   * maintenance pass.
    */
   async function writeCommittedObservations(
-    write: ObservationWriteInput
+    write: ObservationWriteInput,
+    signal: AbortSignal
   ): Promise<void> {
     const connections = options.repositories.characterConnections;
     if (!connections) return;
     try {
       const result = await connections.writeObservations(write);
-      await connections.recomputeGroupsOf(result.changedCharacterIds);
+      if (!signal.aborted) {
+        await connections.recomputeGroupsOf(result.changedCharacterIds);
+      }
       if (result.unknownCharacters > 0) {
         options.logger?.info({
           event: "character_groups_write",
@@ -446,10 +451,16 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         });
       }
     } catch (error) {
-      options.logger?.info({
-        event: "character_groups_write_failed",
-        errorName: error instanceof Error ? error.name : "unknown"
-      });
+      // Runs inside the handler's `finally`: a logger that throws here would
+      // replace the run's own outcome, so it is swallowed.
+      try {
+        options.logger?.info({
+          event: "character_groups_write_failed",
+          errorName: error instanceof Error ? error.name : "unknown"
+        });
+      } catch {
+        // Best effort only.
+      }
     }
   }
 
@@ -1193,7 +1204,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
           options.logger.info({ ...record, ...scope.totals() });
         }
-        if (pendingWrite) await writeCommittedObservations(pendingWrite);
+        if (pendingWrite) {
+          await writeCommittedObservations(pendingWrite, context.signal);
+        }
       }
     }
   };

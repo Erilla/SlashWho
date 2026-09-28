@@ -140,6 +140,26 @@ export function createCharacterConnectionRepositories(
             continue;
           }
 
+          // A sweep chain's cycles and seal share cycle 1's run id, and only
+          // the cycle that hit a 404'd historical guild knows it skipped one.
+          // A seal after such a cycle read less than a full match, so it adds
+          // without retracting.
+          let decision = family.decision;
+          let reason = family.reason;
+          if (family.family === "fingerprint" && decision === "replaced") {
+            const skipped = await client.query(
+              `SELECT 1 FROM character_connection_write_log
+                WHERE run_id = $1 AND observer_character_id = $2
+                  AND family = 'fingerprint' AND reason = 'skipped_guild'
+                LIMIT 1`,
+              [input.runId, observerId]
+            );
+            if (skipped.rows.length > 0) {
+              decision = "added_only";
+              reason = "skipped_guild";
+            }
+          }
+
           for (const item of family.observed) {
             if (familyOf(item.source) !== family.family)
               throw new Error("character_connections_family_mismatch");
@@ -182,7 +202,7 @@ export function createCharacterConnectionRepositories(
             }
           }
 
-          if (family.decision === "replaced") {
+          if (decision === "replaced") {
             const sources = sourcesForFamily(family.family);
             const removed = await client.query<{
               low: string;
@@ -225,8 +245,8 @@ export function createCharacterConnectionRepositories(
             input.runId,
             family,
             observerId,
-            family.decision,
-            family.reason,
+            decision,
+            reason,
             runStartedAt
           );
         }

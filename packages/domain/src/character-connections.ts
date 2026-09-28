@@ -55,14 +55,15 @@ export type SweepFacts = Readonly<{
 
 /**
  * Whether a sweep may retract the observer's earlier fingerprint links: only
- * a match that read every roster it set out to.
+ * a match that read every roster it set out to. A skipped guild wins over
+ * `capped`, so a chain's seal can find the skip in the ledger and not retract.
  */
 export function fingerprintDecision(sweep: SweepFacts): FamilyDecision {
+  if (sweep.skippedHistoricalGuilds > 0)
+    return { decision: "added_only", reason: "skipped_guild" };
   if (sweep.kind === "capped")
     return { decision: "added_only", reason: "capped" };
   if (sweep.unreadRoot) return { decision: "added_only", reason: "unread" };
-  if (sweep.skippedHistoricalGuilds > 0)
-    return { decision: "added_only", reason: "skipped_guild" };
   return { decision: "replaced", reason: "matched" };
 }
 

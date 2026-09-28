@@ -106,6 +106,14 @@ describe("observation writes", () => {
       reason: "capped",
       sweepReservationId: "res"
     });
+    expect(
+      continuationCycleWrite({
+        runId: "run",
+        rootKey,
+        reservationId: "res",
+        sweep: { kind: "capped", characters: [], skippedHistoricalGuilds: 1 }
+      }).families[0]
+    ).toMatchObject({ decision: "added_only", reason: "skipped_guild" });
   });
 
   it("only adds on a live-sweep completion", () => {

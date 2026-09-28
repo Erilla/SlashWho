@@ -4,6 +4,7 @@ import {
   raiderIoDecision,
   type CharacterKey,
   type DiscoveredCharacter,
+  type FingerprintSweepOutcome,
   type ObservationSource
 } from "@slashwho/domain";
 import type {
@@ -11,12 +12,23 @@ import type {
   ObservationWriteInput
 } from "@slashwho/database";
 
-export type SweepForWrite = Readonly<{
-  kind: "matched" | "capped";
-  characters: readonly DiscoveredCharacter[];
-  unreadRoot?: true;
-  skippedHistoricalGuilds?: number;
-}>;
+/**
+ * The sweep facts a write reads, picked from the domain outcome so a renamed
+ * flag fails to compile rather than silently reading as absent.
+ */
+export type SweepForWrite =
+  | Readonly<
+      Pick<
+        Extract<FingerprintSweepOutcome, { kind: "matched" }>,
+        "kind" | "characters" | "unreadRoot" | "skippedHistoricalGuilds"
+      >
+    >
+  | Readonly<
+      Pick<
+        Extract<FingerprintSweepOutcome, { kind: "capped" }>,
+        "kind" | "characters" | "skippedHistoricalGuilds"
+      >
+    >;
 
 /** A run's characters as observations, minus the root itself. */
 function observed(
@@ -59,7 +71,7 @@ function fingerprintFamily(
     family: "fingerprint",
     ...fingerprintDecision({
       kind: sweep.kind,
-      unreadRoot: sweep.unreadRoot === true,
+      unreadRoot: sweep.kind === "matched" && sweep.unreadRoot === true,
       skippedHistoricalGuilds: sweep.skippedHistoricalGuilds ?? 0
     }),
     sweepReservationId: reservationId,
