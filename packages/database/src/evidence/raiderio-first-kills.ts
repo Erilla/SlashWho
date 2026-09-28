@@ -342,8 +342,37 @@ export async function storeRaiderIoLoggedEncounters(
 ): Promise<void> {
   if (answers.encounters.length === 0 && answers.unavailable.length === 0)
     return;
+  // Every row is written in id order, whichever kind of answer it holds. Two
+  // runs saving overlapping encounters then take their row locks in the same
+  // order and one waits for the other, where read-completion order could
+  // deadlock them.
+  const writes = [
+    ...answers.encounters.map((encounter) => ({
+      loggedEncounterId: encounter.loggedEncounterId,
+      encounter,
+      unavailable: null
+    })),
+    ...answers.unavailable.map((unavailable) => ({
+      loggedEncounterId: unavailable.loggedEncounterId,
+      encounter: null,
+      unavailable
+    }))
+  ].sort((a, b) => a.loggedEncounterId - b.loggedEncounterId);
   await withTransaction(pool, async (client) => {
-    for (const encounter of answers.encounters) {
+    for (const { encounter, unavailable: answer } of writes) {
+      if (encounter === null) {
+        await client.query(
+          `INSERT INTO raiderio_logged_encounters (
+             logged_encounter_id, unavailable_code, read_at
+           ) VALUES ($1::bigint, $2, $3)
+           ON CONFLICT (logged_encounter_id) DO UPDATE SET
+             unavailable_code = EXCLUDED.unavailable_code,
+             read_at = EXCLUDED.read_at
+           WHERE raiderio_logged_encounters.unavailable_code IS NOT NULL`,
+          [answer.loggedEncounterId, answer.code, readAt]
+        );
+        continue;
+      }
       const written = await client.query(
         `INSERT INTO raiderio_logged_encounters (
            logged_encounter_id, unavailable_code, raid_slug, boss_slug,
@@ -423,18 +452,6 @@ export async function storeRaiderIoLoggedEncounters(
           members.map((member) => member.role),
           members.map((member) => member.itemLevel)
         ]
-      );
-    }
-    for (const answer of answers.unavailable) {
-      await client.query(
-        `INSERT INTO raiderio_logged_encounters (
-           logged_encounter_id, unavailable_code, read_at
-         ) VALUES ($1::bigint, $2, $3)
-         ON CONFLICT (logged_encounter_id) DO UPDATE SET
-           unavailable_code = EXCLUDED.unavailable_code,
-           read_at = EXCLUDED.read_at
-         WHERE raiderio_logged_encounters.unavailable_code IS NOT NULL`,
-        [answer.loggedEncounterId, answer.code, readAt]
       );
     }
   });
