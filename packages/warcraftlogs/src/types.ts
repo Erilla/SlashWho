@@ -235,11 +235,13 @@ export type WarcraftLogsTierSearch = Readonly<{
  * whole window, or that the tier's finished ranked walk and stored evidence
  * both place the character nowhere in it, so there was nothing to walk for;
  * `request_cap` that its budget ran out first; `incomplete` that some guild's
- * attendance could not be read. None of them limits the run: a
- * search only ever adds evidence.
+ * attendance could not be read; `deferred` that nothing places the
+ * character in the tier yet and the ranked walk that decides it continues in
+ * a later run (#733). None of them limits the run: a search only ever adds
+ * evidence.
  */
 export type WarcraftLogsTierSearchOutcome = Readonly<{
-  outcome: "complete" | "request_cap" | "incomplete";
+  outcome: "complete" | "request_cap" | "incomplete" | "deferred";
   requests: number;
   guildsSearched: number;
   reportsHydrated: number;

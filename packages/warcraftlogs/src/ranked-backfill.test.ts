@@ -1276,6 +1276,7 @@ describe("ranked Mythic backfill", () => {
         rankedKills: number;
         rankedCap?: number;
         raidedTier?: boolean;
+        zoneRankings?: unknown;
       }>
     ) => {
       const asked: string[] = [];
@@ -1297,7 +1298,9 @@ describe("ranked Mythic backfill", () => {
           if (query.includes("HistoricRaidZones"))
             return Response.json(antorus);
           if (query.includes("HistoricZoneRankings"))
-            return Response.json(ranked(options.rankedKills));
+            return Response.json(
+              options.zoneRankings ?? ranked(options.rankedKills)
+            );
           if (query.includes("HistoricEncounterRankings"))
             return Response.json(encounterRankings);
           if (query.includes("CharacterGuilds"))
@@ -1364,13 +1367,13 @@ describe("ranked Mythic backfill", () => {
       });
     });
 
-    it("walks attendance once the ranked walk finds a kill, without re-reading its reports", async () => {
+    it("walks attendance once the ranked walk finds a kill", async () => {
       const { result, asked, hydrated } = await search({ rankedKills: 1 });
 
       expect(asked).toContain("GuildAttendance");
-      // `ranked` was hydrated by the ranked walk; attendance adds only the
-      // night it did not read.
-      expect(hydrated).toEqual(["unranked"]);
+      // The ranked walk read only its one fight of `ranked`, so the whole
+      // report is still read for its wipes and unranked kills.
+      expect(hydrated).toEqual(["ranked", "unranked"]);
       expect(result).toMatchObject({ tierSearch: { guildsSearched: 1 } });
     });
 
@@ -1386,9 +1389,25 @@ describe("ranked Mythic backfill", () => {
       const { result, asked } = await search({ rankedKills: 1, rankedCap: 3 });
 
       expect(asked).not.toContain("GuildAttendance");
-      // No outcome: attendance is not recorded complete, so the run that
-      // continues the walk decides again.
-      expect(result).not.toHaveProperty("tierSearch");
+      // Recorded as deferred, not left empty: the newest outcome is what a
+      // continuation reads, and an empty one would let it read an earlier
+      // press's `complete` as this one's.
+      expect(result).toMatchObject({
+        tierSearch: { outcome: "deferred", requests: 0 }
+      });
+    });
+
+    it("walks attendance as before when the ranked walk fails for good", async () => {
+      // Break caught in review of #735: `schema_drift` gets no retry, so a
+      // deferral would never be continued, and the tier's attendance would
+      // never be walked again.
+      const { result, asked } = await search({
+        rankedKills: 0,
+        zoneRankings: { data: { characterData: { character: null } } }
+      });
+
+      expect(asked).toContain("GuildAttendance");
+      expect(result).toMatchObject({ tierSearch: { guildsSearched: 1 } });
     });
   });
 });

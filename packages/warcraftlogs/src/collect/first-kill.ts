@@ -6,6 +6,7 @@ import { characterLookup } from "../queries";
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsLimitation,
+  WarcraftLogsLimitationCode,
   WarcraftLogsRankedBackfillResult,
   WarcraftLogsReportResult,
   WarcraftLogsTierSearch,
@@ -243,48 +244,61 @@ export async function collectFirstKillReports(
 }
 
 /**
+ * The ranked-walk limitations a later run continues: the capped walk, and
+ * the transient failures. `retryDelayMsFor` reschedules these, and the
+ * continuation resumes the saved cursor. Any other limitation ends the walk
+ * for good. Pinned against that policy by a test in `packages/application`.
+ */
+export const CONTINUED_RANKED_WALK_LIMITATIONS: ReadonlySet<WarcraftLogsLimitationCode> =
+  new Set(["request_cap", "rate_limited", "unavailable"]);
+
+const nothingWalked = (
+  outcome: "complete" | "deferred"
+): WarcraftLogsTierSearchOutcome => ({
+  outcome,
+  requests: 0,
+  guildsSearched: 0,
+  reportsHydrated: 0,
+  recoveredKills: 0,
+  recoveredWipes: 0
+});
+
+/**
  * A tier's guild attendance is every report its guilds logged across the
  * tier, walked back from today, and it can only match the character by the
  * name they raided under. Walked for every connected character of a dossier,
  * most of whom started raiding years after the tier, it read 406 pages in
  * four days and hydrated none (#733). So it is walked only for a character
  * something already places in the tier: a kill the ranked walk found, or
- * stored evidence there. A ranked walk that found nothing but has not
- * finished defers the walk to the run that continues it; one that finished
- * settles it, and the tier is reported searched. Without a ranked walk in
- * this call there is no evidence either way, and attendance is walked as
- * before.
+ * stored evidence there.
+ *
+ * When nothing places them there, the ranked walk decides:
+ *
+ * - **finished:** that settles it, and the tier is reported searched;
+ * - **stopped, and continued later:** the walk is `deferred` to the run that
+ *   continues it, recorded as such so that run does not read an earlier
+ *   press's outcome as this one's;
+ * - **failed for good:** it says nothing either way, and attendance is walked
+ *   as before. So is a call with no ranked walk.
  */
 async function searchTierIfRaided(
   run: CollectionRun,
   search: WarcraftLogsTierSearch,
   rankedBackfill: WarcraftLogsRankedBackfillResult | undefined
-): Promise<WarcraftLogsTierSearchOutcome | undefined> {
-  if (rankedBackfill?.kind === "evidence") {
-    // The ranked walk read these reports already.
-    for (const kill of rankedBackfill.kills) {
-      // Built by the decoder as `.../reports/<encoded code>`.
-      const code = kill.reportUrl.split("/reports/")[1];
-      if (code) run.scannedReportCodes.add(decodeURIComponent(code));
-    }
-  }
+): Promise<WarcraftLogsTierSearchOutcome> {
   const raided =
     search.raidedTier === true ||
-    rankedBackfill === undefined ||
-    (rankedBackfill.kind === "evidence" && rankedBackfill.kills.length > 0);
-  if (raided) return searchTierAttendance(run, search);
-  const rankedFinished =
-    rankedBackfill.kind === "evidence" &&
-    rankedBackfill.cursor === undefined &&
-    rankedBackfill.limitation === undefined;
-  return rankedFinished
-    ? {
-        outcome: "complete",
-        requests: 0,
-        guildsSearched: 0,
-        reportsHydrated: 0,
-        recoveredKills: 0,
-        recoveredWipes: 0
-      }
-    : undefined;
+    (rankedBackfill?.kind === "evidence" && rankedBackfill.kills.length > 0);
+  if (raided || rankedBackfill === undefined) {
+    return searchTierAttendance(run, search);
+  }
+  const limitation =
+    rankedBackfill.kind === "evidence"
+      ? rankedBackfill.limitation
+      : rankedBackfill;
+  if (limitation === undefined) return nothingWalked("complete");
+  if (CONTINUED_RANKED_WALK_LIMITATIONS.has(limitation.code)) {
+    return nothingWalked("deferred");
+  }
+  return searchTierAttendance(run, search);
 }
