@@ -2,6 +2,16 @@
 
 Issue: #738. Delivered in three phases, each its own pull request.
 
+**Status (2026-09-28).**
+
+- **Up for approval now:** the model (Terms through Convergence) and phase 1.
+- **Draft:** phases 2 and 3. They are kept as the current best design, not as
+  approved, and are re-reviewed against phase 1's real data from test before
+  either is built. The implementation plan covers phase 1 only.
+- **Where phase 1's design depends on phase 2 or 3,** that is stated as a
+  constraint phase 1 must leave room for. Examples are the replay calling phase
+  2's resolution code, and `countingLinks` honouring rejections.
+
 ## Problem
 
 A dossier's character list is a snapshot rooted at the character that was
@@ -501,6 +511,9 @@ growth costs little new collection.
 
 ## Phase 2: read, search and edit from groups
 
+> **Draft.** Not approved. Re-reviewed against phase 1's data before it is
+> built.
+
 Phase 2 merges only after phase 1 has met its exit criteria, and after the
 replay passes again against the tree phase 2 will deploy. Its worker and web
 both keep phase 1's writes, now inside the publication transaction, so deploy
@@ -803,6 +816,9 @@ The two exclusion stores are kept apart:
 it re-collects one character's evidence and does not rediscover.
 
 ## Phase 3: rejection and expiry
+
+> **Draft.** Not approved. Re-reviewed against phase 1's data before it is
+> built.
 
 ### Not the same person
 
