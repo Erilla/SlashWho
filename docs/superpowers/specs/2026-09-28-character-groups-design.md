@@ -243,6 +243,8 @@ to an existing table in any phase.
 
 **Lock order.** Every writer takes locks in this one order:
 
+0. the rebuild lock: a transaction-level advisory lock. Every writer of the new
+   tables takes it shared; only the rebuild takes it exclusive;
 1. the existing bucket and root advisory locks, sorted, as today;
 2. the existing fingerprint-sweeps lock;
 3. the groups lock: one transaction-level advisory lock serialising every
@@ -250,23 +252,31 @@ to an existing table in any phase.
 4. only then, any `discovery_runs` row lock, such as phase 2's `reserve`
    locking another member's run `FOR UPDATE`.
 
-- **Writers that need only the groups lock** take only that: a manual
-  connection add or remove, a rejection, an undo and the maintenance pass.
-- **Phase 1's post-commit write** takes O's root lock, then the groups lock.
-  That serialises it with every other publication from O, as the publication
-  itself was serialised.
-- **What the ordering guarantees.** No writer takes the groups lock and then
-  a root lock, and no writer holds a `discovery_runs` row lock while waiting
-  for an advisory lock. This rules out deadlocks among advisory locks, and
-  between them and those row locks.
+- **Writers that need only the groups lock** take only that, after the
+  rebuild lock: a manual connection add or remove, a rejection, an undo and each
+  maintenance recompute.
+- **Phase 1's post-commit write is several short transactions, never one long
+  one.**
+  - The **observation write** takes the rebuild lock (shared), then O's root
+    lock. It writes the connection rows, the marker and the ledger, and
+    commits. It takes no groups lock, so it never holds O's root lock while
+    waiting for a recompute. A landing search, `suppress(O)` or
+    `negativeCache.put(O)` is held up only for that write's own milliseconds.
+  - **Each affected group's recompute** is then its own transaction: the rebuild
+    lock (shared), then the groups lock, recomputing that one group.
+- **What the ordering guarantees.** No writer takes the groups lock and then a
+  root lock, and no writer holds a `discovery_runs` row lock while waiting for
+  an advisory lock. This rules out deadlocks among advisory locks, and between
+  them and those row locks.
 - **No lock is held across a provider call.** Discovery finishes every
-  Raider.IO and Blizzard read before it opens the transaction.
+  Raider.IO and Blizzard read before it opens a transaction.
 
 **Steps.**
 
 1. Take the locks above.
 2. Write the snapshot, or amend it, exactly as today.
-3. Update O's observations by the retraction rules below.
+3. Update O's observations by the retraction rules below, and write the marker
+   and the ledger.
 4. Recompute the groups of every character whose counting links changed.
 
 **Step 3 is monotone,** so a delayed write can never undo a newer one:
@@ -275,38 +285,73 @@ to an existing table in any phase.
 - it never retracts a row observed after its own run started;
 - it writes nothing for a source family whose newest recorded write, for this
   observer, came from a run started after this one. The newer run's write
-  stands.
+  stands, and the ledger records `blocked_by_newer`.
 
-**How writes are recorded.** `character_connection_writes` holds one row per
-observer and source family: `observer_character_id`, `family` (`raiderio` or
-`fingerprint`), `run_id` and `run_started_at`.
+**The marker: `character_connection_writes`.** One row per observer and source
+family: `observer_character_id`, `family` (`raiderio` or `fingerprint`),
+`run_id` and `run_started_at`.
 
-- **When it's written.** Every write step 3 makes upserts it for each family
-  the run actually discovered, even when the write left no connection rows. A
-  newer run that retracted everything therefore still blocks an older, delayed
-  write.
-- **Continuation cycles.** They write the fingerprint family under their
-  chain's cycle-1 run. They are compared with the newest fingerprint write, so
-  they are blocked only by a newer sweep chain, never by a Raider.IO-only run.
+- **When it's written.** In the same transaction as the rows, for each family
+  the run actually discovered, even when the write left no rows. A newer run
+  that retracted everything therefore still blocks an older, delayed write.
+- **It only moves forward:** `run_started_at = GREATEST(existing, new)`, and
+  `run_id` changes only when it does.
+- **Continuation cycles** write the fingerprint family under their chain's
+  cycle-1 run, whose `started_at` is set once. They are compared with the
+  newest fingerprint write, so only a newer sweep chain blocks them, never a
+  Raider.IO-only run.
 - **Runs that didn't sweep.** A `not_due` publication or a live-sweep
-  completion discovers only the Raider.IO family, so it records and blocks
-  only that family. It never blocks a chain's later cycles or its seal.
+  completion discovers only the Raider.IO family, so it records and blocks only
+  that family. It never blocks a chain's later cycles or its seal.
+- **Clocks.** `run_started_at` is the run's `discovery_runs.started_at`. Every
+  `observed_at` and `written_at` in the new tables is the database's `now()`,
+  never the worker's clock.
 
-The table is new, so P2 is unaffected.
+**The ledger: `character_connection_write_log`.** Append-only: one row per
+publication per source family it wrote or decided. It is written in the same
+transaction as the rows, so a publication has a ledger row if and only if its
+write committed.
 
-- **Phase 1:** the snapshot commits as today. Steps 3 and 4 then run in a
-  separate, best-effort transaction.
-  - It runs after the handler's own follow-ups, including
-    `enqueueFingerprintAdmission`, so waiting for the groups lock never delays
-    them.
-  - It sits in a catch-all that ignores the job's abort signal, so an abort
-    cannot turn it into a `cancelled` job or skip anything after it.
+| Column                  | Meaning                                                                                                                                                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run_id`                | The discovery run whose publication this is.                                                                                                                                                                                                   |
+| `sweep_reservation_id`  | For a continuation cycle or seal, its sweep reservation. Null otherwise.                                                                                                                                                                       |
+| `observer_character_id` | O.                                                                                                                                                                                                                                             |
+| `family`                | `raiderio` or `fingerprint`.                                                                                                                                                                                                                   |
+| `decision`              | `added_only`, `replaced` or `blocked`.                                                                                                                                                                                                         |
+| `reason`                | Why, from the handler's own facts: `raiderio_complete`, `raiderio_limited`, `privacy_hidden`, `continuation`, `not_due`, `capped`, `matched`, `unread`, `skipped_guild`, `live_sweep_completion`, `blocked_by_newer`, `backfill` or `rebuild`. |
+| `written_at`            | The database's `now()`.                                                                                                                                                                                                                        |
+
+It holds run, reservation and character ids and enum values, nothing else.
+
+**What gets recorded.**
+
+- **On which paths.** Observations are recorded on the four publication paths
+  only.
+- **What.** Each records its run's **published set per source**, after the
+  tournament-profile filter: `excludedTournamentCharacterIds` never reach any
+  new table. That set is taken before `deduplicate.ts` keeps one copy for the
+  snapshot, so a character both sources found gets both observations. A run
+  completing against a live sweep's snapshot records its Raider.IO
+  observations.
+- **Renewal.** Each write renews `observed_at` for the pairs it saw again.
+- **A run that publishes nothing records nothing,** such as a failed sweep that
+  is retried, or a run left waiting for an admission. The run that eventually
+  publishes records them.
+
+**Phase 1 and phase 2.**
+
+- **Phase 1:** the snapshot commits as today. Steps 3 and 4 then run as the
+  short transactions above, on a best-effort basis.
+  - They run after the handler's own follow-ups, including
+    `enqueueFingerprintAdmission`, and outside the handler's measured scope,
+    after the `finally` that records its timings. So they neither delay the
+    follow-ups nor inflate the run's measured duration or database time.
+  - They sit in a catch-all that ignores the job's abort signal, so an abort
+    cannot turn them into a `cancelled` job or skip anything after them.
   - A failure logs `character_groups_write_failed` and never fails the
     publication.
-- **Phase 2 onwards:** all four steps are one transaction. A failure rolls the
-  whole publication back, snapshot included. A snapshot then never commits
-  without its group update, and a reader sees either the state before or the
-  state after.
+- **Phase 2 onwards (draft):** steps 1 to 4 are one transaction.
 
 **Which group keeps its id.** On a merge, the oldest group's id survives. On a
 split, the part with the most members keeps it; ties go to the part holding
@@ -315,12 +360,13 @@ the lowest character id. Group ids never leave the database.
 ### What a run may retract
 
 Retraction is decided separately for each source family, from what the run
-actually did, not from its snapshot's overall state.
+actually did, not from its snapshot's overall state. The decision and its
+reason are written to the ledger.
 
-| Family                                                  | O's earlier observations of this family that this run did not see are retracted when                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Raider.IO (`claimed`, `declared_main`, `profile_guess`) | The run did its own Raider.IO discovery and `raiderIoLimitation` is null. This is read from the handler, never from the snapshot, whose limitation becomes `fingerprint_sweep_capped` on a capped cycle. A `privacy_hidden` run retracts none. A continuation cycle never retracts a Raider.IO link: it did no Raider.IO discovery of its own.                                                                                                                                             |
-| Fingerprint                                             | The sweep reached `matched` having read every roster it set out to. For a continuation chain, this is at the seal, over the observations the chain's cycles made since cycle 1 started. It needs one domain change: `discoverFingerprintMatches` gains an outcome `unread` for a 404 on O's profile or roster, which today returns the same empty `matched` as a real empty match, and `unread` retracts nothing. A `matched` that skipped a 404'd historical guild also retracts nothing. |
+| Family                                                  | O's earlier observations of this family that this run did not see are retracted when                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Raider.IO (`claimed`, `declared_main`, `profile_guess`) | The run published its own snapshot, did its own Raider.IO discovery, and `raiderIoLimitation` is null. This is read from the handler, never from the snapshot, whose limitation becomes `fingerprint_sweep_capped` on a capped cycle. A `privacy_hidden` run retracts none. A continuation cycle never retracts a Raider.IO link. Nor does a live-sweep completion, even when its own Raider.IO part was unlimited: the chain's snapshot still shows those characters.                                       |
+| Fingerprint                                             | The sweep reached `matched` having read every roster it set out to. For a continuation chain, this is at the seal, over the observations the chain's cycles made since cycle 1 started. It needs one domain change: `discoverFingerprintMatches` gains an outcome `unread` for a 404 on O's profile or roster, which today returns the same empty `matched` as a real empty match, and `unread` retracts nothing. A `matched` that skipped a 404'd historical guild also retracts nothing (`skipped_guild`). |
 
 - **Nothing to retract in these cases:**
   - a sweep that was `not_due`;
@@ -330,13 +376,6 @@ actually did, not from its snapshot's overall state.
 - **The `not_due` case matters.** Such a run publishes the Raider.IO
   characters alone, and can be `complete`. That must never cut fingerprint
   links.
-- **What gets recorded.** Observations are recorded on the four publication
-  paths only. Each records everything its run saw, whatever its snapshot
-  state, and renews `observed_at` for the pairs it saw again. A run completing
-  against a live sweep's snapshot records its Raider.IO observations. A run
-  that publishes nothing records nothing, such as a failed sweep that is
-  retried, or a run left waiting for an admission. The run that eventually
-  publishes records them.
 
 ### Convergence
 
@@ -355,7 +394,14 @@ page, route, response or publication outcome changes.
 second renumbers the SQL file, the journal index, a strictly greater `when`,
 and the migrations test's slice):
 
-1. **Create** the three tables.
+1. **Create six tables:**
+   - `character_connections`;
+   - `character_groups`;
+   - `character_group_members`;
+   - `character_connection_writes`;
+   - `character_connection_write_log`;
+   - `character_groups_maintenance`, one row holding the recompute cursor and
+     when a full cursor cycle last completed.
 2. **Backfill Raider.IO links** from each root's latest completed snapshot.
    `observed_at` is the snapshot's `refreshed_at`.
 3. **Backfill fingerprint links** from each root's latest completed snapshot
@@ -366,21 +412,28 @@ and the migrations test's slice):
    - A root whose latest snapshot dropped fingerprint members through a
      `not_due` refresh gets them back. That is growth, and the replay reports
      it.
-4. **Compute groups** with a recursive CTE over `countingLinks`.
-5. **Sanity check.** A `DO` block raises an exception if any latest-snapshot
+4. **Backfill the marker and the ledger.** One marker row per root and family
+   from the snapshot's run, and one ledger row with reason `backfill` for each
+   backfilled publication.
+5. **Compute groups** with a recursive CTE over `countingLinks`.
+6. **Sanity check.** A `DO` block raises an exception if any latest-snapshot
    member or resolved manual target is outside its root's group. That rolls
    back only the migration, which creates tables and touches no existing data.
    It guards the query itself; the real check is the replay.
 
-**Worker.** Every publication path runs steps 3 and 4 in a best-effort
-transaction after its own commit and follow-ups. Nothing about the publication
-itself changes: `completeWithLiveSweepSnapshot` stays the single statement it
-is today, and continuations cannot be pushed into `continueWithoutProgress` by
-the new writes.
+**Worker.** Every publication path runs steps 3 and 4 after its own commit and
+follow-ups, as described above. Nothing about the publication itself changes:
+`completeWithLiveSweepSnapshot` stays the single statement it is today, and
+continuations cannot be pushed into `continueWithoutProgress` by the new
+writes.
 
-**Lost writes are detected, not healed.** A best-effort write that fails logs
-`character_groups_write_failed`, and nothing replays it automatically, in any
-phase.
+**Lost writes are detected, not healed.** Nothing replays a lost write
+automatically, in any phase. A write is lost in one of two ways:
+
+- it fails, and logs `character_groups_write_failed`;
+- the worker dies between the snapshot commit and the write, through a deploy
+  restart, an out-of-memory kill or a job expiry, and logs nothing. The
+  ledger's completeness check finds that publication with no ledger row.
 
 An automatic heal was considered and rejected:
 
@@ -390,39 +443,47 @@ An automatic heal was considered and rejected:
 - it loses the second source of a character both sources found;
 - it cannot see a lost continuation cycle.
 
-Detection is the replay's observation reconciliation plus the exit criteria:
-zero write failures, or a rebuild and a restart of the three days.
+Both kinds of loss get the same response: fix the cause, run the rebuild, and
+restart the three days.
 
 **Manual edits in phase 1.** Adding or removing a manual connection is a web
 action, and phase 1 does not touch the web. So the worker's maintenance pass
-recomputes every group from the stored observations and the live manual rows,
-under the groups lock. That catches removals as well as additions.
+recomputes every group from the stored observations and the live manual rows.
+That catches removals as well as additions.
 
-- It is a phase 1 measure. The groups are small, and phase 2 moves the
-  recompute into each edit's own transaction.
-- It runs as its own maintenance step, in its own `try`. A failure logs
-  `character_groups_write_failed` and never skips `recoverPendingSearches` or
-  any other step. Today `maintenanceCleanup` rethrows an earlier failure.
+- **Scope.** It is a phase 1 measure. The groups are small, and phase 2 moves
+  the recompute into each edit's own transaction.
+- **Isolation.** It runs as its own maintenance step, in its own `try`. A
+  failure logs `character_groups_write_failed` and never skips
+  `recoverPendingSearches` or any other step. Today `maintenanceCleanup`
+  rethrows an earlier failure.
 - **It is bounded.**
-  - It recomputes groups in id order for at most 30 seconds, then saves its
-    position and resumes there next pass, so it cannot hold the groups lock
-    longer than that.
+  - Each group is its own short transaction under the groups lock, so the lock
+    is held for one group at a time.
+  - The pass walks groups in id order for at most 30 seconds in total, then
+    saves its position in `character_groups_maintenance` and resumes there
+    next pass. When it wraps round, it records that a full cycle completed.
   - It logs `character_groups_recompute` with its duration and the groups
     covered.
   - Maintenance runs hourly with a 300-second job expiry, so 30 seconds leaves
     the rest of the pass its time.
 
-**Rebuild.** `scripts/rebuild-character-groups` rebuilds observed links and
-groups from snapshots and manual connections exactly as the migration does. It
-never deletes rejection rows.
+**Rebuild.** `scripts/rebuild-character-groups` rebuilds observed links, the
+marker and groups from snapshots and manual connections exactly as the
+migration does.
 
-- **It is a recovery, not a replay of history.** It resets `observed_at` to
-  snapshot times. It cannot restore Raider.IO observations from runs that
-  completed against a live sweep's snapshot, nor older fingerprint links that
-  a capped chain had not yet sealed. The next discovery of each observer
-  re-observes them.
-- **When it's run.** It is run by hand as a documented step when rolling
-  forward after a revert of phase 1 or 2. It is not run automatically.
+- **Locking.** It runs in one transaction holding the rebuild lock exclusively,
+  then the groups lock. So no post-commit write or recompute interleaves with
+  its deletes and re-inserts, and the worker need not be stopped.
+- **What it writes.** It appends a ledger row with reason `rebuild` for each
+  rebuilt observer and family, and never deletes ledger rows or rejection rows.
+- **It is a recovery, not a replay of history.**
+  - It resets `observed_at` to snapshot times.
+  - It cannot restore Raider.IO observations from runs that completed against a
+    live sweep's snapshot, nor older fingerprint links that a capped chain had
+    not yet sealed. The next discovery of each observer re-observes them.
+- **When it's run.** By hand, as a documented step: after a lost write, and
+  when rolling forward after a revert. It is not run automatically.
 
 **Replay.** `scripts/diagnostics/character-groups-replay.mts` runs read-only.
 It calls the real phase 2 resolution code, shipped in phase 1 but called by no
@@ -437,48 +498,96 @@ route: `pageMembers`, labels and research state.
   1. It runs the phase 2 code over groups it recomputes in memory from the
      current links, which tests the read logic.
   2. It separately reports drift between those and the stored groups, which
-     tests the best-effort writes and should be zero outside a maintenance
-     interval.
+     tests the writes.
+     - Drift is checked only against a state after a full cursor cycle has
+       completed.
+     - Drift that comes entirely from manual links changed since that cycle
+       started is reported, not failed.
 - **What it compares per page:** members, labels, excluded state, limitation
   codes and research state.
   - Excluded state follows Warcraft Logs identity aliases, as today's read
     does (#423, `groupBySharedWarcraftLogsId`): a row counts as excluded when
     any of its alias keys is named.
   - Self-exclusions are ignored, and counted separately.
-- **Reconciling observations.** For every root, its latest publication's
-  members must each have an observation from that root in the matching source
-  family. Every other observation from that root must be explained by a later
-  run that did not retract. An unexplained missing or extra observation fails
-  the replay: that is how it sees a lost addition or a lost retraction, which
-  comparing groups alone cannot.
+- **Reconciling writes against the ledger.** Every check reads from what is
+  stored, never from an inference about what a run decided. Publications
+  younger than 10 minutes are skipped, because their write may still be
+  pending.
+  - **(a) Completeness.** Every publication in the window has a ledger row for
+    each family it discovered. The publications are:
+    - every completed `discovery_runs` row, live-sweep completions included;
+    - every published `fingerprint_sweep_reservations` row, for continuation
+      cycles and seals.
+
+    A publication with no ledger row is a lost write.
+
+  - **(b) Presence.** Every member of every root's latest snapshot has an
+    observation from that root in some family. It reads raw membership, which
+    ignores suppression, so a suppressed member or a suppressed root is still
+    checked, and never printed. "Some family" allows for de-duplication: a
+    character the sweep re-matched but the snapshot keeps as Raider.IO counts
+    either way.
+  - **(c) Provenance.** Every observation's `discovery_run_id` has a ledger row
+    for its observer and family. An observation no snapshot holds, such as a
+    new alt found by a live-sweep completion, is therefore accounted for.
+  - **(d) Retraction applied.** For each observer and family, if the newest
+    ledger row that isn't `blocked` is `replaced`, every surviving observation
+    from that observer in that family was last seen by that run or a later
+    one.
+
+  Any failure of (a) to (d) fails the replay.
+
 - **It fails on any of:**
   - a character removed;
   - a label weakened;
   - a page over `DOSSIER_CHARACTER_CEILING`;
   - a character shown as excluded on a page where no exclusion row in its
     group names it;
-  - a limitation code missing that no shared exclusion explains.
+  - a limitation code missing that no shared exclusion explains;
+  - any of the ledger checks (a) to (d).
 - **It reports without failing:**
   - pages that grew;
   - research states that changed;
   - characters excluded on a page because a shared exclusion made from
     another member names them, which is the intended effect of one shared
     dossier;
-  - the limitations those exclusions remove.
+  - the limitations those exclusions remove;
+  - drift from manual links alone.
 - **It never prints a suppressed character's key.**
 
 **Exit criteria for phase 1.**
 
-- The replay passes against test on three consecutive days of live
-  publications, and reports zero drift after each maintenance pass.
-- No `character_groups_write_failed` is logged in those three days. If one is
-  logged, the response is to fix its cause, run the rebuild, and restart the
-  three days.
-- It also passes in the integration suite, on seeded fixtures with:
+- **Three clean days.** The replay passes against test on three consecutive
+  days of live publications. Drift is zero after each completed cursor cycle.
+- **No lost writes.** In those three days there is no
+  `character_groups_write_failed`, and no publication missing a ledger row. If
+  either happens, fix its cause, run the rebuild, and restart the three days.
+- **Every risky path was exercised.** The window must include at least one
+  publication of each of:
+  - a first sweep cycle (`createAndFinishFingerprintSweep`);
+  - a continuation cycle;
+  - a seal;
+  - a live-sweep completion;
+  - a `not_due` refresh;
+  - a privacy-hidden run;
+  - a capped sweep;
+  - a manual connection added and one removed.
+
+  Test's volume is low, about 8 discovery runs in three days. So the phase 1
+  plan lists how to trigger each path deliberately (for example a stale root
+  with a live chain, a capped sweep, a `not_due` refresh), and the replay
+  reports which paths the window covered.
+
+- **Fixtures.** It also passes in the integration suite, on seeded fixtures
+  with:
   - identical, containing and manual shapes;
   - a `not_due` refresh;
   - a capped sweep with a continuation;
-  - a suppressed member and a suppressed manual target;
+  - a character found by both sources;
+  - a live-sweep completion that finds a new alt;
+  - an `unread` sweep;
+  - a suppressed member, a suppressed root and a suppressed manual target;
+  - a replay run while a write is still pending;
   - a historic alias;
   - both kinds of exclusion.
 
@@ -971,8 +1080,23 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
   - a delayed write for an observer whose newer run has been written adds
     nothing, including a delayed continuation after a newer retraction;
   - the maintenance recompute stops at its 30-second bound and resumes;
-  - the replay's observation reconciliation fails on a lost addition and on a
-    lost retraction;
+  - the ledger checks: (a) fails on a publication with no ledger row, (b) on
+    a snapshot member with no observation, (c) on an observation with no
+    ledger row, and (d) on a retraction not applied. None fails on a
+    character found by both sources, a live-sweep completion's new alt, an
+    `unread` sweep, a suppressed member or root, or a publication younger
+    than 10 minutes;
+  - a worker killed between the snapshot commit and the write leaves a
+    publication with no ledger row, and the replay fails on it;
+  - the replay's path-coverage report lists each of the exit criteria's
+    paths;
+  - drift: a manual removal made mid-cycle is reported, not failed, and a
+    partial cursor cycle is never checked;
+  - the observation write never waits on the groups lock while holding O's
+    root lock, and runs outside the handler's measured timings;
+  - the rebuild runs while post-commit writes are attempted and none
+    interleaves;
+  - tournament-excluded characters never appear in any new table;
   - the maintenance recompute catches a removed manual connection, and a
     failure in it does not skip `recoverPendingSearches`;
   - the migration and rebuild on seeded shapes;
