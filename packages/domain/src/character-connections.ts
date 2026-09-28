@@ -1,3 +1,4 @@
+import type { CharacterKey } from "./character-key";
 import type { DiscoverySource } from "./deduplicate";
 
 /**
@@ -189,6 +190,44 @@ export type StrengthLink = Readonly<{
   a: string;
   b: string;
   strength: LinkStrength;
+}>;
+
+/**
+ * A character group's full read model for phase 2's dossier resolution
+ * (#738). Defined here, rather than in `application`, because Task 10's
+ * loader lives in the database package, which cannot import from
+ * `application` (application depends on database).
+ */
+export type GroupGraph = Readonly<{
+  characters: ReadonlyMap<
+    string,
+    Readonly<{
+      key: CharacterKey;
+      displayName: string;
+      className: string;
+      level: number;
+      raiderIoUrl: string;
+    }>
+  >;
+  idOf: (key: CharacterKey) => string | undefined;
+  groupOf: ReadonlyMap<string, string>; // character id → group id
+  links: readonly Readonly<{ a: string; b: string; strength: LinkStrength }>[]; // counting links, manual included
+  manual: readonly Readonly<{
+    makerId: string;
+    targetId: string;
+    excluded: boolean;
+  }>[];
+  discoveredExclusions: readonly Readonly<{
+    makerId: string;
+    targetId: string;
+  }>[];
+  suppressed: ReadonlySet<string>; // character ids
+  warcraftLogsIds: ReadonlyMap<string, number>; // character id → WCL id
+  sharedIdentity: (id: string) => ReadonlySet<string>; // ids sharing a WCL id, self included
+  latestSnapshot: ReadonlyMap<
+    string,
+    Readonly<{ state: "complete" | "partial"; limitationCode: string | null }>
+  >; // by root id, suppression-filtered
 }>;
 
 /**
