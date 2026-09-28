@@ -500,6 +500,59 @@ describe("mergeRaiderIoFirstKills", () => {
     });
   });
 
+  it("never loses a read encounter when Raider.IO later drops the link", () => {
+    // Break caught: a complete publish replacing a read kill, and so its
+    // encounter and roster, with a kill Raider.IO no longer links to a log.
+    const merged = mergeRaiderIoFirstKills(
+      stored,
+      {
+        kills: [
+          firstKill("tier-mn-1", "midnight-falls", {
+            killedAt: "2026-07-20T17:25:57.000Z",
+            loggedEncounterId: null,
+            encounterState: "unavailable"
+          })
+        ],
+        askedRaidSlugs: ["tier-mn-1"],
+        limitationCode: null
+      },
+      "complete",
+      false
+    );
+    expect(merged.find((kill) => kill.bossSlug === "midnight-falls")).toEqual(
+      midnightFalls
+    );
+  });
+
+  it("lets a later lookup that found no world rank replace an older rank", () => {
+    // Break caught: `??` borrowing the stored rank when the new lookup was
+    // made and answered null.
+    const merged = mergeRaiderIoFirstKills(
+      [
+        firstKill("tier-mn-1", "midnight-falls", {
+          historicWorldRank: 3,
+          historicRankCheckedAt: "2026-09-01T00:00:00.000Z"
+        })
+      ],
+      {
+        kills: [
+          firstKill("tier-mn-1", "midnight-falls", {
+            historicWorldRank: null,
+            historicRankCheckedAt: "2026-09-28T12:00:00.000Z"
+          })
+        ],
+        askedRaidSlugs: ["tier-mn-1"],
+        limitationCode: null
+      },
+      "complete",
+      false
+    );
+    expect(merged[0]).toMatchObject({
+      historicWorldRank: null,
+      historicRankCheckedAt: "2026-09-28T12:00:00.000Z"
+    });
+  });
+
   it("never duplicates a boss", () => {
     const merged = mergeRaiderIoFirstKills(
       stored,

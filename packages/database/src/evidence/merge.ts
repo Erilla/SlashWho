@@ -239,23 +239,26 @@ function mergeFirstKill(
   incoming: CharacterRaiderIoFirstKillInput
 ): CharacterRaiderIoFirstKillInput {
   // A logged encounter never changes, so one already read is never lost to a
-  // later read that failed.
+  // later read that failed, nor to Raider.IO later dropping the link to it.
   const keepRead =
     previous.encounterState === "read" &&
     incoming.encounterState !== "read" &&
-    previous.loggedEncounterId === incoming.loggedEncounterId;
+    (incoming.loggedEncounterId === null ||
+      previous.loggedEncounterId === incoming.loggedEncounterId);
+  // A lookup this run made wins, even one that found no rank.
+  const rank = incoming.historicRankCheckedAt !== null ? incoming : previous;
   return {
     ...incoming,
     ...(keepRead
       ? {
           killedAt: previous.killedAt,
+          loggedEncounterId: previous.loggedEncounterId,
           encounterState: "read" as const,
           encounterLimitationCode: null
         }
       : {}),
-    historicWorldRank: incoming.historicWorldRank ?? previous.historicWorldRank,
-    historicRankCheckedAt:
-      incoming.historicRankCheckedAt ?? previous.historicRankCheckedAt
+    historicWorldRank: rank.historicWorldRank,
+    historicRankCheckedAt: rank.historicRankCheckedAt
   };
 }
 
