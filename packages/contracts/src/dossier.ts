@@ -76,6 +76,7 @@ export const collectionPhaseSchema = z
       "warcraft_logs_fight_parses",
       "warcraft_logs_ranking_identities",
       "raiderio_rankings",
+      "raiderio_logged_encounters",
       "blizzard_achievements",
       "publication"
     ]),

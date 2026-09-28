@@ -24,12 +24,20 @@ export type VerifiedKillsResult = Readonly<{
    * otherwise retry forever.
    */
   limitation?: string;
+  /**
+   * Every first kill Raider.IO answered with, before any is filtered as a
+   * search hint (#732). Absent when Raider.IO could not answer.
+   */
+  firstKills?: readonly HistoricMythicKill[];
+  /** The raids the asked tiers answer for, and any a kill came back from. */
+  askedRaidSlugs?: readonly string[];
 }>;
 
 /**
  * The Mythic kills Raider.IO attributes to the character that stored
- * Warcraft Logs evidence does not already hold, as places to search. Never
- * evidence: a kill counts only once a hydrated log attributes it. What is
+ * Warcraft Logs evidence does not already hold, as places to search. A plain
+ * kill is never evidence: it counts only once a hydrated log attributes it,
+ * or once Raider.IO's own logged encounter of it is read (#732). What is
  * already stored is kept by `storedKillReportCodes`, never by this: a
  * Raider.IO failure must not decide what stored evidence survives.
  */
@@ -43,10 +51,11 @@ export async function raiderIoVerifiedKills(
     onPhysicalRequest?: () => void;
   }>
 ): Promise<VerifiedKillsResult> {
+  const tierOrdinals = historicTierOrdinalsFrom(options.killScanFloor);
   let result: Awaited<ReturnType<RaiderIoGateway["getHistoricMythicKills"]>>;
   try {
     result = await raiderio.getHistoricMythicKills(key, {
-      tierOrdinals: historicTierOrdinalsFrom(options.killScanFloor),
+      tierOrdinals,
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.onPhysicalRequest
         ? { onPhysicalRequest: options.onPhysicalRequest }
@@ -61,7 +70,16 @@ export async function raiderIoVerifiedKills(
   }
   return {
     kills: searchableKills(result.kills, options),
-    guilds: raiderIoGuilds(result.kills)
+    guilds: raiderIoGuilds(result.kills),
+    firstKills: result.kills,
+    askedRaidSlugs: [
+      ...new Set([
+        ...raiderIoHistoricTiers
+          .filter((tier) => tierOrdinals.includes(tier.ordinal))
+          .flatMap((tier) => tier.raidSlugs),
+        ...result.kills.map((kill) => kill.raidSlug)
+      ])
+    ].sort()
   };
 }
 

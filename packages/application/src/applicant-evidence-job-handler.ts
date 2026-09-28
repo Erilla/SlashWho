@@ -2,15 +2,19 @@ import type {
   CharacterMythicKillInput,
   CharacterCuttingEdgeInput,
   CharacterMythicWipeInput,
+  CharacterRaiderIoFirstKillInput,
   CharacterTierBestParseInput,
   DiscoveryWorkContext,
   EmptyAttendanceSearch,
   EvidenceRunCost,
   EvidenceRunOrigin,
   EvidenceRunPhase,
+  RaiderIoFirstKillsPublication,
+  RaiderIoLoggedEncounterAnswers,
   StagedEvidenceCollection,
   HistoricAliasScanProgress,
   StoredEvidenceTiers,
+  StoredRaiderIoLoggedEncounterAnswers,
   TerminalTier
 } from "@slashwho/database";
 import type { BlizzardGateway } from "@slashwho/blizzard";
@@ -60,6 +64,11 @@ import {
 import { measuredRepositories } from "./measured-repositories";
 import { createMeasurementScope, type MeasurementScope } from "./measurement";
 import { queueWaitMs } from "./queue-wait";
+import {
+  collectRaiderIoFirstKills,
+  rankRaiderIoFirstKills,
+  type RaiderIoFirstKillLimitation
+} from "./raiderio-first-kills";
 import { bindThrottleScope } from "./throttle-attribution";
 import {
   fromStagedCollection,
@@ -214,6 +223,7 @@ export type ApplicantEvidenceStore = {
       wipes: readonly CharacterMythicWipeInput[];
       tierBests: readonly CharacterTierBestParseInput[];
       cuttingEdges?: readonly CharacterCuttingEdgeInput[];
+      raiderIoFirstKills?: RaiderIoFirstKillsPublication;
       /**
        * Fight URLs this run asked about and got an answer for. Named here
        * rather than left to structural typing so an implementation cannot
@@ -306,6 +316,19 @@ export type ApplicantEvidenceStore = {
   collectedTierZones(
     key: CharacterKey
   ): Promise<readonly (readonly [string, string])[]>;
+  /** The first kills of the character's newest publication (#732). */
+  storedRaiderIoFirstKills?(
+    key: CharacterKey
+  ): Promise<readonly CharacterRaiderIoFirstKillInput[]>;
+  /** The stored answers among these logged-encounter ids. */
+  raiderIoLoggedEncounters?(
+    ids: readonly number[]
+  ): Promise<StoredRaiderIoLoggedEncounterAnswers>;
+  /** Stores a run's logged-encounter answers, outside the snapshot transaction. */
+  saveRaiderIoLoggedEncounters?(
+    answers: RaiderIoLoggedEncounterAnswers,
+    readAt: Date
+  ): Promise<void>;
 };
 
 /**
@@ -356,7 +379,12 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
     >;
   blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings"> &
-    Partial<Pick<RaiderIoGateway, "getHistoricMythicKills">>;
+    Partial<
+      Pick<
+        RaiderIoGateway,
+        "getHistoricMythicKills" | "getLoggedEncounter" | "getCharacter"
+      >
+    >;
   createWarcraftLogsGateway?: (credentials: {
     clientId: string;
     clientSecret: string;
@@ -1234,6 +1262,7 @@ export function createApplicantEvidenceJobHandler(
             // before any of it is retained (#298).
             raiderIoHistoric: requests("raiderIoHistoric"),
             raiderIoRankings: requests("raiderIoRankings"),
+            raiderIoLoggedEncounters: requests("raiderIoLoggedEncounter"),
             blizzardAchievements: requests("blizzardAchievements")
           },
           recovery: {
@@ -2228,6 +2257,96 @@ export function createApplicantEvidenceJobHandler(
             }
           }
         }
+        // Raider.IO's parsed combat log of each first kill (#732). Read only
+        // when this run read the kill list: without it there is nothing to
+        // look up, and storage carries every stored first kill forward.
+        let raiderIoFirstKills: RaiderIoFirstKillsPublication | undefined;
+        let raiderIoShortfall: RaiderIoFirstKillLimitation | null = null;
+        const raiderIoLogs = options.raiderio;
+        const getLoggedEncounter = raiderIoLogs?.getLoggedEncounter;
+        if (
+          !targeted &&
+          raiderIoLogs &&
+          getLoggedEncounter &&
+          verified?.firstKills
+        ) {
+          const firstKills = verified.firstKills;
+          const logged = firstKills.some(
+            (kill) => kill.loggedEncounterId != null
+          );
+          await phaseLedger?.transition(
+            "raiderio_logged_encounters",
+            logged ? "active" : "skipped"
+          );
+          try {
+            const published =
+              (await evidence.storedRaiderIoFirstKills?.(run.key)) ?? [];
+            const collected = await scope.time("raiderIoLoggedEncounters", () =>
+              collectRaiderIoFirstKills({
+                key: run.key,
+                kills: firstKills,
+                published,
+                storedEncounters: async (ids) =>
+                  (await evidence.raiderIoLoggedEncounters?.(ids)) ?? {
+                    encounters: [],
+                    unavailable: []
+                  },
+                saveAnswers: async (answers) => {
+                  await evidence.saveRaiderIoLoggedEncounters?.(answers, now());
+                },
+                raiderio: {
+                  getLoggedEncounter,
+                  ...(raiderIoLogs.getCharacter
+                    ? { getCharacter: raiderIoLogs.getCharacter }
+                    : {})
+                },
+                signal: activeContext.signal,
+                now,
+                onEncounterRequest: () =>
+                  scope.increment("raiderIoLoggedEncounterRequests"),
+                // A Raider.IO character read, counted with the kill list's
+                // character reads rather than with the encounters.
+                onCharacterRequest: () =>
+                  scope.increment("raiderIoHistoricRequests")
+              })
+            );
+            const ranked = await rankRaiderIoFirstKills({
+              kills: collected.kills,
+              encounters: collected.encounters,
+              warcraftLogsKills: [...publishedKills, ...storedEvidence.kills],
+              published,
+              raiderio: raiderIoLogs,
+              signal: activeContext.signal,
+              now,
+              onPhysicalRequest: () =>
+                scope.increment("raiderIoRankingsRequests")
+            });
+            raiderIoShortfall = collected.limitation;
+            raiderIoFirstKills = {
+              kills: ranked,
+              askedRaidSlugs: verified.askedRaidSlugs ?? [],
+              limitationCode: collected.limitation?.code ?? null
+            };
+          } catch (error) {
+            if (activeContext.signal.aborted) throw error;
+            // Nothing read here can be trusted to be whole: publish no first
+            // kill of this run's own, and hold the run partial so storage
+            // carries every stored one forward.
+            raiderIoShortfall = { code: "unavailable" };
+            raiderIoFirstKills = {
+              kills: [],
+              askedRaidSlugs: [],
+              limitationCode: "unavailable"
+            };
+          }
+          if (logged) {
+            await phaseLedger?.transition(
+              "raiderio_logged_encounters",
+              raiderIoShortfall ? "limited" : "completed",
+              raiderIoShortfall?.code
+            );
+          }
+        }
         let cuttingEdges: readonly CharacterCuttingEdgeInput[] = [];
         if (options.blizzard && !targeted) {
           await phaseLedger?.transition("blizzard_achievements", "active");
@@ -2269,17 +2388,24 @@ export function createApplicantEvidenceJobHandler(
         // deliberately not given.
         const retryAfterMs = Math.max(
           retryDelayMs(response.limitation) ?? 0,
-          retryDelayMs(drivingParse) ?? 0
+          retryDelayMs(drivingParse) ?? 0,
+          // A capped Raider.IO backlog drains on ordinary runs, 50 at a time.
+          // A cap retry would be a whole evidence run, spending Warcraft Logs
+          // points to read Raider.IO (#732).
+          retryDelayMs(
+            raiderIoShortfall?.code === "request_cap" ? null : raiderIoShortfall
+          ) ?? 0
         );
         // Honest about the run, not just about its history scan: a run that
         // spent its whole parse budget did not finish, and reporting it
         // `complete` was the other half of why the character looked settled.
         // A targeted search skipped the scan by design, not as a shortfall.
-        const incomplete = Boolean(
-          response.limitation ??
-          drivingParse ??
-          (targeted ? undefined : response.scanSkipped)
-        );
+        const incomplete =
+          Boolean(
+            response.limitation ??
+            drivingParse ??
+            (targeted ? undefined : response.scanSkipped)
+          ) || raiderIoFirstKills?.limitationCode != null;
         record.outcome = incomplete ? "partial" : "complete";
         record.limitationCode = response.limitation?.code ?? null;
         record.parseLimitationCode = drivingParse?.code ?? null;
@@ -2350,6 +2476,7 @@ export function createApplicantEvidenceJobHandler(
             wipes: publishedWipes,
             tierBests: publishedTierBests,
             cuttingEdges,
+            ...(raiderIoFirstKills ? { raiderIoFirstKills } : {}),
             parsedFightUrls: publishedParsedFightUrls,
             completedAt: now()
           },

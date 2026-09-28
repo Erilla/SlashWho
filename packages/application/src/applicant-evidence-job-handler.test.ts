@@ -1,13 +1,16 @@
 import { readFileSync } from "node:fs";
 
 import type {
+  CharacterRaiderIoFirstKillInput,
   EvidenceRunPhase,
   EvidenceRunCost,
+  RaiderIoLoggedEncounterAnswers,
   StagedEvidenceCollection,
   StoredKillTier,
   StoredWipeTier,
   TerminalTier
 } from "@slashwho/database";
+import { mergeRaiderIoFirstKills } from "@slashwho/database";
 import {
   createWarcraftLogsClient,
   type WarcraftLogsCollectionPlan,
@@ -25,6 +28,7 @@ import {
   type ApplicantEvidenceStore
 } from "./applicant-evidence-job-handler";
 import { encryptCredential, parseEncryptionKey } from "./credential-encryption";
+import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 import {
   attributeThrottlesTo,
   upstreamThrottleRecord
@@ -2962,6 +2966,7 @@ describe("applicant evidence job handler", () => {
               rankingIdentities: 1,
               raiderIoHistoric: 0,
               raiderIoRankings: 0,
+              raiderIoLoggedEncounters: 0,
               blizzardAchievements: 0
             },
             // No Raider.IO client, so recovery never ran: null, not zero.
@@ -4379,6 +4384,7 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ].map((id, ordinal) => ({
@@ -4451,6 +4457,7 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ].map((id, ordinal) => ({
@@ -4507,6 +4514,7 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ].map((id, ordinal) => ({
@@ -4566,6 +4574,7 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ].map((id, ordinal) => ({
@@ -4627,6 +4636,7 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ].map((id, ordinal) => ({
@@ -4679,6 +4689,7 @@ describe("applicant evidence job handler", () => {
         "warcraft_logs_fight_parses",
         "warcraft_logs_ranking_identities",
         "raiderio_rankings",
+        "raiderio_logged_encounters",
         "blizzard_achievements",
         "publication"
       ].map((id, ordinal): EvidenceRunPhase => ({
@@ -4770,6 +4781,7 @@ describe("applicant evidence job handler", () => {
         "warcraft_logs_fight_parses",
         "warcraft_logs_ranking_identities",
         "raiderio_rankings",
+        "raiderio_logged_encounters",
         "blizzard_achievements",
         "publication"
       ].map((id, ordinal): EvidenceRunPhase => ({
@@ -4845,6 +4857,7 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ];
@@ -5418,6 +5431,7 @@ describe("applicant evidence job handler", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ].map((id, ordinal) => ({
@@ -5615,6 +5629,331 @@ describe("applicant evidence job handler", () => {
         ).rejects.toMatchObject({ retryable: true, retryAfterMs: 949_000 });
         expect(getFirstKillReports).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe("Raider.IO-logged first kills (#732)", () => {
+    // Synthetic identities throughout: this repository is public.
+    const killGuild = {
+      name: "Fixture Guild Alfa",
+      realm: "twisting-nether",
+      region: "eu"
+    };
+    const midnightFalls = {
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      firstDefeated: "2026-07-20T17:25:57.000Z",
+      guild: killGuild,
+      loggedEncounterId: 700_001
+    };
+    const encounter = {
+      kind: "encounter" as const,
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      pulledAt: "2026-07-20T17:17:29.977Z",
+      defeatedAt: "2026-07-20T17:25:57.301Z",
+      durationMs: 507_324,
+      itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+      guild: killGuild,
+      deathCount: 2,
+      vantusCount: 16,
+      roster: {
+        state: "available" as const,
+        members: [
+          {
+            raiderIoCharacterId: 424_242,
+            name: "Alfa",
+            realm: "silvermoon",
+            region: "eu",
+            className: "Demon Hunter",
+            specName: "Havoc",
+            role: "dps" as const,
+            itemLevel: 290.5
+          }
+        ]
+      }
+    };
+    const storedFirstKill: CharacterRaiderIoFirstKillInput = {
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      killedAt: encounter.defeatedAt,
+      guild: killGuild,
+      loggedEncounterId: 700_001,
+      encounterState: "read",
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: null
+    };
+    const noKills = {
+      kind: "evidence" as const,
+      parsedFightUrls: [],
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    };
+
+    function raiderIo(
+      overrides: Partial<
+        Pick<
+          RaiderIoGateway,
+          "getHistoricMythicKills" | "getLoggedEncounter" | "getCharacter"
+        >
+      > = {}
+    ) {
+      return {
+        getMythicBossRankings: vi.fn(async () => ({
+          kind: "rankings" as const,
+          rows: []
+        })),
+        getHistoricMythicKills: vi.fn(async () => ({
+          kind: "evidence" as const,
+          kills: [midnightFalls]
+        })),
+        getLoggedEncounter: vi.fn(
+          async (
+            _raidSlug: string,
+            _id: number,
+            _signal?: AbortSignal,
+            onPhysicalRequest?: () => void
+          ) => {
+            onPhysicalRequest?.();
+            return encounter;
+          }
+        ),
+        getCharacter: vi.fn(async () => ({
+          key,
+          displayName: "Alfa",
+          className: "Demon Hunter",
+          level: 90,
+          guild: null,
+          ownerId: null,
+          profileGuess: null,
+          declaredMain: null,
+          raiderIoCharacterId: 424_242
+        })),
+        ...overrides
+      };
+    }
+
+    function loggedStore() {
+      const evidence = store();
+      const saved: RaiderIoLoggedEncounterAnswers[] = [];
+      const transitions: Array<{ id: string; state: string }> = [];
+      evidence.saveRaiderIoLoggedEncounters = async (answers) => {
+        saved.push(answers);
+      };
+      evidence.raiderIoLoggedEncounters = async () => ({
+        encounters: [],
+        unavailable: []
+      });
+      evidence.storedRaiderIoFirstKills = async () => [];
+      evidence.listPhases = async () =>
+        fullEvidencePhasePlan().map((id, ordinal) => ({
+          id,
+          ordinal,
+          state: "pending" as const,
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        }));
+      evidence.recordPhaseTransitions = async (_runId, phases) => {
+        transitions.push(...phases.map(({ id, state }) => ({ id, state })));
+      };
+      return Object.assign(evidence, { saved, transitions });
+    }
+
+    function loggedHandler(
+      evidence: ReturnType<typeof loggedStore>,
+      raiderio: ReturnType<typeof raiderIo>
+    ) {
+      return handlerFor({
+        evidence,
+        warcraftLogs: {
+          getFirstKillReports: vi.fn(async () => noKills),
+          ...openGate
+        },
+        raiderio,
+        pointsReserve: 0,
+        now: () => new Date("2026-09-28T12:00:00.000Z")
+      });
+    }
+
+    it("publishes each first kill with its logged encounter read and stored", async () => {
+      const evidence = loggedStore();
+
+      await loggedHandler(evidence, raiderIo()).execute(run.id);
+
+      expect(evidence.saved).toEqual([
+        {
+          encounters: [expect.objectContaining({ loggedEncounterId: 700_001 })],
+          unavailable: []
+        }
+      ]);
+      const published = evidence.published[0]!.result;
+      expect(published.state).toBe("complete");
+      expect(published.raiderIoFirstKills).toMatchObject({
+        limitationCode: null,
+        kills: [
+          {
+            raidSlug: "tier-mn-1",
+            bossSlug: "midnight-falls",
+            killedAt: "2026-07-20T17:25:57.301Z",
+            loggedEncounterId: 700_001,
+            encounterState: "read",
+            historicWorldRank: null
+          }
+        ]
+      });
+      expect(published.raiderIoFirstKills?.askedRaidSlugs).toContain(
+        "tier-mn-1"
+      );
+      expect(evidence.transitions).toContainEqual({
+        id: "raiderio_logged_encounters",
+        state: "completed"
+      });
+    });
+
+    it("makes the run partial, and retries it, when a read fails", async () => {
+      const evidence = loggedStore();
+      const raiderio = raiderIo({
+        getLoggedEncounter: vi.fn(async () => {
+          throw new Error("raiderio_down");
+        })
+      });
+
+      await loggedHandler(evidence, raiderio).execute(run.id);
+
+      const published = evidence.published[0]!.result;
+      expect(published.state).toBe("partial");
+      expect(published.raiderIoFirstKills).toMatchObject({
+        limitationCode: "unavailable",
+        kills: [
+          {
+            encounterState: "unavailable",
+            encounterLimitationCode: "unavailable"
+          }
+        ]
+      });
+      // transientRetryMs is 900 000 in DEFAULT_HANDLER_OPTIONS.
+      expect(published.retryAfterAt).toEqual(
+        new Date("2026-09-28T12:15:00.000Z")
+      );
+      expect(evidence.transitions).toContainEqual({
+        id: "raiderio_logged_encounters",
+        state: "limited"
+      });
+    });
+
+    it("drains a capped backlog on ordinary runs, never on a cap retry", async () => {
+      // Break caught (#734 review): at rollout every long-time Mythic raider has
+      // more than 50 unread logs. A cap retry would be a whole evidence run,
+      // spending Warcraft Logs points to read Raider.IO.
+      const evidence = loggedStore();
+      const raiderio = raiderIo({
+        getHistoricMythicKills: vi.fn(async () => ({
+          kind: "evidence" as const,
+          kills: Array.from({ length: 51 }, (_, index) => ({
+            ...midnightFalls,
+            bossSlug: `boss-${String(index + 1)}`,
+            loggedEncounterId: index + 1
+          }))
+        })),
+        getLoggedEncounter: vi.fn(async (_raidSlug: string, id: number) => ({
+          ...encounter,
+          bossSlug: `boss-${String(id)}`,
+          roster: { state: "unavailable" as const, reason: "private" as const }
+        }))
+      });
+
+      await loggedHandler(evidence, raiderio).execute(run.id);
+
+      expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(50);
+      const published = evidence.published[0]!.result;
+      expect(published.state).toBe("partial");
+      expect(published.raiderIoFirstKills?.limitationCode).toBe("request_cap");
+      expect(published).not.toHaveProperty("retryAfterAt");
+    });
+
+    it("carries stored first kills forward when Raider.IO cannot answer", async () => {
+      // Break caught: a complete publish with an empty Raider.IO section would
+      // drop every first kill a private profile once had.
+      const evidence = loggedStore();
+      const stored = [storedFirstKill];
+      evidence.storedRaiderIoFirstKills = async () => stored;
+      const raiderio = raiderIo({
+        getHistoricMythicKills: vi.fn(async () => ({
+          kind: "limitation" as const,
+          code: "private" as const
+        }))
+      });
+
+      await loggedHandler(evidence, raiderio).execute(run.id);
+
+      expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
+      const published = evidence.published[0]!.result;
+      expect(published).not.toHaveProperty("raiderIoFirstKills");
+      expect(published.state).toBe("complete");
+      // What storage writes from this publication, by the rule storage applies.
+      expect(
+        mergeRaiderIoFirstKills(
+          stored,
+          published.raiderIoFirstKills,
+          published.state,
+          false
+        )
+      ).toEqual([storedFirstKill]);
+    });
+
+    it("reads nothing already stored and asks no id it already holds", async () => {
+      const evidence = loggedStore();
+      evidence.raiderIoLoggedEncounters = async () => ({
+        encounters: [
+          {
+            loggedEncounterId: 700_001,
+            raidSlug: "tier-mn-1",
+            bossSlug: "midnight-falls",
+            pulledAt: encounter.pulledAt,
+            defeatedAt: encounter.defeatedAt,
+            durationMs: encounter.durationMs,
+            guild: encounter.guild,
+            itemLevel: encounter.itemLevel,
+            deathCount: 2,
+            vantusCount: 16,
+            rosterState: "available",
+            members: encounter.roster.members,
+            readAt: "2026-09-01T00:00:00.000Z"
+          }
+        ],
+        unavailable: []
+      });
+      evidence.storedRaiderIoFirstKills = async () => [storedFirstKill];
+      const raiderio = raiderIo();
+
+      await loggedHandler(evidence, raiderio).execute(run.id);
+
+      expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
+      expect(raiderio.getCharacter).not.toHaveBeenCalled();
+      expect(evidence.saved).toEqual([]);
+      expect(
+        evidence.published[0]!.result.raiderIoFirstKills?.kills
+      ).toHaveLength(1);
+    });
+
+    it("counts each logged-encounter read on the cost row, and the character read with the kill list's", async () => {
+      const evidence = loggedStore();
+
+      await loggedHandler(evidence, raiderIo()).execute(run.id);
+
+      expect(evidence.costs).toEqual([
+        expect.objectContaining({
+          requests: expect.objectContaining({
+            raiderIoLoggedEncounters: 1,
+            // The profile read that learned the character's Raider.IO id.
+            raiderIoHistoric: 1
+          })
+        })
+      ]);
     });
   });
 });
@@ -6356,6 +6695,7 @@ describe("searching one tier from the dossier", () => {
         "warcraft_logs_fight_parses",
         "warcraft_logs_ranking_identities",
         "raiderio_rankings",
+        "raiderio_logged_encounters",
         "blizzard_achievements",
         "publication"
       ].map((id, ordinal) => ({
