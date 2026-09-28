@@ -4,6 +4,8 @@ import type { DossierCharacter } from "@slashwho/contracts";
 import { formatCharacterDisplayName } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
+import { moveMenuFocus } from "../lib/menu-navigation";
+
 export type DossierCharacterVisibilityToggleProps = Readonly<{
   character: DossierCharacter;
   hidden: boolean;
@@ -116,27 +118,8 @@ export function DossierCharacterVisibilityToggle({
               triggerRef.current?.focus();
               return;
             }
-            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key))
-              return;
-            const items = Array.from(
-              menuRef.current?.querySelectorAll<HTMLButtonElement>(
-                '[role="menuitem"]'
-              ) ?? []
-            );
-            if (items.length === 0) return;
-            event.preventDefault();
-            const index = items.indexOf(
-              document.activeElement as HTMLButtonElement
-            );
-            const next =
-              event.key === "Home"
-                ? 0
-                : event.key === "End"
-                  ? items.length - 1
-                  : event.key === "ArrowDown"
-                    ? (index + 1) % items.length
-                    : (index - 1 + items.length) % items.length;
-            items[next]?.focus();
+            if (moveMenuFocus(menuRef.current, event.key))
+              event.preventDefault();
           }}
           ref={menuRef}
           role="menu"

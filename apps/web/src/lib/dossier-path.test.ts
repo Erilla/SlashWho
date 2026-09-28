@@ -3,7 +3,9 @@ import { expect, it } from "vitest";
 import {
   dossierPath,
   raiderIoCharacterUrl,
-  warcraftLogsCharacterUrl
+  raiderIoGuildUrl,
+  warcraftLogsCharacterUrl,
+  warcraftLogsGuildUrl
 } from "./dossier-path";
 
 it("builds the canonical dossier path for a character key", () => {
@@ -25,5 +27,15 @@ it("builds encoded upstream profile URLs from the same segments", () => {
   );
   expect(raiderIoCharacterUrl(key)).toBe(
     "https://raider.io/characters/eu/silvermoon/r%C3%BFii"
+  );
+});
+
+it("builds encoded upstream guild URLs from the same segments", () => {
+  const guild = { region: "eu", realm: "silvermoon", name: "Pure Chaos" };
+  expect(raiderIoGuildUrl(guild)).toBe(
+    "https://raider.io/guilds/eu/silvermoon/Pure%20Chaos"
+  );
+  expect(warcraftLogsGuildUrl(guild)).toBe(
+    "https://www.warcraftlogs.com/guild/eu/silvermoon/Pure%20Chaos"
   );
 });
