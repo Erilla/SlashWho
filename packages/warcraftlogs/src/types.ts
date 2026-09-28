@@ -248,7 +248,12 @@ export type WarcraftLogsTierSearch = Readonly<{
  * evidence.
  */
 export type WarcraftLogsTierSearchOutcome = Readonly<{
-  outcome: "complete" | "request_cap" | "incomplete" | "deferred";
+  /**
+   * `unprovable`: the ranked walk found nothing and left reports unread,
+   * because those it read could not be proved the character's (#742).
+   */
+  outcome:
+    "complete" | "request_cap" | "incomplete" | "deferred" | "unprovable";
   requests: number;
   guildsSearched: number;
   reportsHydrated: number;
@@ -290,6 +295,11 @@ export type WarcraftLogsRankedBackfillResult =
        * raided under a former one (#733).
        */
       rankedNames?: readonly Readonly<{ name: string; realm: string }>[];
+      /**
+       * The walk left reports unread: those it read rank nobody and held no
+       * name the character is known by (#742). Unread is not searched.
+       */
+      unreadReports?: true;
       cursor?: WarcraftLogsRankedBackfillCursor;
       limitation?: WarcraftLogsLimitation;
     }>

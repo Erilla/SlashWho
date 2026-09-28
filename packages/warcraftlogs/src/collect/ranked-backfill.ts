@@ -34,8 +34,10 @@ import {
 const SHARED_ZONES_TTL_MS = 6 * 60 * 60_000;
 
 // Reports that rank nobody, read without proving any, before the walk stops
-// reading reports while it has accepted no kill (#742).
+// reading a scope's reports while it has accepted no kill (#742).
 const UNPROVABLE_READS = 3;
+
+type RankedRef = Readonly<{ code: string; fightId: number; spec?: string }>;
 
 /**
  * Walks a character's historical Mythic rankings in one raid to the reports
@@ -112,8 +114,13 @@ export async function getRankedKillReports(
     string,
     Readonly<{ name: string; realm: string }>
   >();
-  const names = () =>
-    rankedNames.size > 0 ? { rankedNames: [...rankedNames.values()] } : {};
+  // Whether the walk left reports unread because those it read could prove
+  // nothing (#742). Unread is not the same as searched and found empty.
+  let unreadReports = false;
+  const extras = () => ({
+    ...(rankedNames.size > 0 ? { rankedNames: [...rankedNames.values()] } : {}),
+    ...(unreadReports ? { unreadReports: true as const } : {})
+  });
   // What proves a report that ranks nobody: a name the character is known by
   // on its ranked fight (#742).
   const knownNames = () => [
@@ -121,21 +128,54 @@ export async function getRankedKillReports(
     ...(options.formerNames ?? []),
     ...rankedNames.values()
   ];
-  // Reads of reports that rank nobody and credited nothing. A tier whose logs
-  // predate `rankedCharacters` and hold no known name can prove none of its
-  // reports: Tomb of Sargeras read 48 for nothing, about 100 points a press.
-  // So once a few have shown that, while the walk has accepted no kill and
-  // read no report that ranks anyone, its remaining reports go unread
-  // (#742). A tier that has shown one `rankedCharacters` is read whole.
-  let unprovableReads = 0;
-  let rankingReports = false;
+  const accept = (decoded: readonly WarcraftLogsFirstKillEvidence[]) => {
+    for (const kill of decoded) {
+      acceptedFights.add(`${kill.reportCode}:${kill.fightId}`);
+      kills.set(kill.fightUrl, kill);
+    }
+  };
+  type Scope = Readonly<{ zoneId: number; encounterIds: readonly number[] }>;
+  const decode = (value: unknown, ref: RankedRef, scope: Scope) =>
+    decodedRankedKills(value, {
+      code: ref.code,
+      ranked: ref,
+      zoneId: scope.zoneId,
+      encounterIds: scope.encounterIds,
+      characterId: progress.characterId!,
+      journalRaidId: options.journalRaidId,
+      region: key.region,
+      knownNames: knownNames()
+    });
+  // Reports that rank nobody and that none of their ranked fights has proved
+  // yet, by scope and code, with every ranked fight of theirs seen so far.
+  // Each is decoded again, with no read, when a later ranking names it and
+  // whenever the walk proves a new name, so what it credits does not depend
+  // on the order it met them in (#742).
+  const unproved = new Map<
+    string,
+    Scope & { value: unknown; refs: RankedRef[] }
+  >();
+  const proveAgain = (): WarcraftLogsLimitation | undefined => {
+    for (const [entryKey, entry] of unproved) {
+      for (const ref of entry.refs) {
+        const decoded = decode(entry.value, ref, entry);
+        if (isLimitation(decoded)) return decoded;
+        if (decoded.length > 0) {
+          unproved.delete(entryKey);
+          accept(decoded);
+          break;
+        }
+      }
+    }
+    return undefined;
+  };
   const limited = (
     query: WarcraftLogsQueryType,
     limitation: WarcraftLogsLimitation
   ): WarcraftLogsRankedBackfillResult => ({
     kind: "evidence",
     kills: [...kills.values()],
-    ...names(),
+    ...extras(),
     cursor: { ...progress, acceptedFightKeys: [...acceptedFights] },
     limitation: noteLimitation(query, limitation)
   });
@@ -180,13 +220,18 @@ export async function getRankedKillReports(
     // report, so a report is read at most once a zone. Per zone, because a
     // zone walked again under another partition ranks other encounters.
     // Each read report's Mythic kill fights, or "gone" for one Warcraft
-    // Logs no longer serves. A report that ranks nobody and that no ranked
-    // fight has proved yet keeps its answer: another boss's ranking of it may
-    // prove what the first did not, and must not depend on which came first.
-    const readReports = new Map<
-      string,
-      Readonly<{ fights: ReadonlySet<number>; unproved?: unknown }> | "gone"
-    >();
+    // Logs no longer serves.
+    const readReports = new Map<string, ReadonlySet<number> | "gone">();
+    // Reads of reports that rank nobody and credited nothing, in this zone
+    // and partition. A tier whose logs predate `rankedCharacters` and hold
+    // no known name can prove none of its reports: Tomb of Sargeras read 48
+    // for nothing, about 100 points a press. So once a few have shown that,
+    // while the walk has accepted no kill and this scope has read no report
+    // that ranks anyone, the scope's remaining reports go unread (#742).
+    // Counted per scope: partitions run oldest first, and a later one's logs
+    // may rank the character, or teach the walk a former name.
+    let unprovableReads = 0;
+    let rankingReports = false;
     const partition = progress.partitionIds?.[progress.zoneIndex];
     if (partition === undefined)
       return limited("zone_rankings", {
@@ -267,42 +312,27 @@ export async function getRankedKillReports(
           const ref = refs[progress.reportIndex]!;
           const fightKey = `${ref.code}:${ref.fightId}`;
           if (acceptedFights.has(fightKey)) continue;
-          const decode = (value: unknown) =>
-            decodedRankedKills(value, {
-              code: ref.code,
-              ranked: ref,
-              zoneId,
-              encounterIds: progress.encounterIds,
-              characterId: progress.characterId!,
-              journalRaidId: options.journalRaidId,
-              region: key.region,
-              knownNames: knownNames()
-            });
-          const accept = (
-            decoded: readonly WarcraftLogsFirstKillEvidence[]
-          ) => {
-            for (const kill of decoded) {
-              acceptedFights.add(`${kill.reportCode}:${kill.fightId}`);
-              kills.set(kill.fightUrl, kill);
-            }
-          };
+          const scope = { zoneId, encounterIds: progress.encounterIds };
+          const entryKey = `${progress.zoneIndex}\0${ref.code}`;
           const read = readReports.get(ref.code);
           if (read !== undefined) {
             if (read === "gone") continue;
             // The ranking names a Mythic kill of a report whose kills were
             // read without it: not the report the ranking described.
-            if (!read.fights.has(ref.fightId)) {
+            if (!read.has(ref.fightId)) {
               return limited("report_hydration", {
                 kind: "limitation",
                 code: "schema_drift"
               });
             }
-            if (read.unproved === undefined) continue;
-            const decoded = decode(read.unproved);
+            const entry = unproved.get(entryKey);
+            if (!entry) continue;
+            entry.refs.push(ref);
+            const decoded = decode(entry.value, ref, scope);
             if (isLimitation(decoded))
               return limited("report_hydration", decoded);
             if (decoded.length > 0) {
-              readReports.set(ref.code, { fights: read.fights });
+              unproved.delete(entryKey);
               accept(decoded);
             }
             continue;
@@ -311,8 +341,10 @@ export async function getRankedKillReports(
             unprovableReads >= UNPROVABLE_READS &&
             !rankingReports &&
             acceptedFights.size === 0
-          )
+          ) {
+            unreadReports = true;
             continue;
+          }
           const detail = await request(
             "report_hydration",
             historicRankedReportQuery,
@@ -330,9 +362,10 @@ export async function getRankedKillReports(
             }
             return limited("report_hydration", detail);
           }
-          const decoded = decode(detail.value);
+          const decoded = decode(detail.value, ref, scope);
           if (isLimitation(decoded))
             return limited("report_hydration", decoded);
+          const namesBefore = rankedNames.size;
           if (decoded.length > 0) {
             const ranked = rankedCharacterName(
               detail.value,
@@ -349,28 +382,37 @@ export async function getRankedKillReports(
           // of the zone's ranked encounters -- is the report's, not the
           // ranked fight's, so no later ranking of the report can change the
           // answer (#712). Except where identity is the ranked fight's: a
-          // report that ranks nobody (#742).
+          // report that ranks nobody (#742), kept in `unproved` until proved.
           const entry = record(
             record(record(record(detail.value)?.data)?.reportData)?.report
           );
           const readFights = entry?.fights;
-          const ranksNobody = entry?.rankedCharacters === null;
-          if (ranksNobody && decoded.length === 0) unprovableReads += 1;
-          if (Array.isArray(entry?.rankedCharacters)) rankingReports = true;
-          readReports.set(ref.code, {
-            fights: new Set(
+          readReports.set(
+            ref.code,
+            new Set(
               (Array.isArray(readFights) ? readFights : []).flatMap(
                 (fight: unknown) => {
                   const id = record(fight)?.id;
                   return typeof id === "number" ? [id] : [];
                 }
               )
-            ),
-            ...(ranksNobody && decoded.length === 0
-              ? { unproved: detail.value }
-              : {})
-          });
+            )
+          );
+          if (Array.isArray(entry?.rankedCharacters)) rankingReports = true;
+          if (entry?.rankedCharacters === null && decoded.length === 0) {
+            unprovableReads += 1;
+            unproved.set(entryKey, {
+              ...scope,
+              value: detail.value,
+              refs: [ref]
+            });
+          }
           accept(decoded);
+          // A name proved here may prove a report met before it.
+          if (rankedNames.size > namesBefore) {
+            const limitation = proveAgain();
+            if (limitation) return limited("report_hydration", limitation);
+          }
         }
       }
       progress = {
@@ -390,5 +432,5 @@ export async function getRankedKillReports(
       reportIndex: 0
     };
   }
-  return { kind: "evidence", kills: [...kills.values()], ...names() };
+  return { kind: "evidence", kills: [...kills.values()], ...extras() };
 }

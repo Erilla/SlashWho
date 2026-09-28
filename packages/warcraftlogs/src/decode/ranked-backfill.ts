@@ -371,9 +371,9 @@ function actorProvedByCanonicalId(
  *
  * A name nobody knows proves nothing: a character renamed since raided under
  * a name only a link, or another report's `rankedCharacters`, can supply.
- * Two players with known names, or a spec that differs, prove nothing
- * either. Null in each case; undefined when the fight's players have
- * drifted.
+ * Two players with known names, a spec that differs, or specs that are
+ * missing prove nothing either. Null in each case; undefined when the
+ * fight's players have drifted.
  */
 function actorProvedByRanking(
   fight: Record<string, unknown>,
@@ -386,12 +386,11 @@ function actorProvedByRanking(
 ): CharacterKey | null | undefined {
   const players = fight.friendlyPlayers;
   const specs = fight.friendlySpecs;
-  if (
-    !Array.isArray(players) ||
-    !Array.isArray(specs) ||
-    players.length !== specs.length
-  )
-    return undefined;
+  if (!Array.isArray(players)) return undefined;
+  // The spec is the cross-check. A fight whose specs are missing, or do not
+  // line up with its players, proves nothing, and credits nothing: failing
+  // the walk on it would park every later press on this one report.
+  if (!Array.isArray(specs) || players.length !== specs.length) return null;
   const spec = expected.ranked.spec?.toLocaleLowerCase("en-US");
   if (!spec) return null;
   const known = new Map(

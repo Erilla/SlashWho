@@ -253,7 +253,7 @@ export const CONTINUED_RANKED_WALK_LIMITATIONS: ReadonlySet<WarcraftLogsLimitati
   new Set(["request_cap", "rate_limited", "unavailable"]);
 
 const nothingWalked = (
-  outcome: "complete" | "deferred"
+  outcome: "complete" | "deferred" | "unprovable"
 ): WarcraftLogsTierSearchOutcome => ({
   outcome,
   requests: 0,
@@ -275,6 +275,10 @@ const nothingWalked = (
  * When nothing places them there, the ranked walk decides:
  *
  * - **finished:** that settles it, and the tier is reported searched;
+ * - **finished, but with reports left unread** because those it read could
+ *   not be proved the character's (#742): `unprovable`, not searched.
+ *   Attendance matches by the same names that proved nothing, so it is not
+ *   walked either;
  * - **stopped, and continued later:** the walk is `deferred` to the run that
  *   continues it, recorded as such so that run does not read an earlier
  *   press's outcome as this one's;
@@ -304,7 +308,13 @@ async function searchTierIfRaided(
     rankedBackfill.kind === "evidence"
       ? rankedBackfill.limitation
       : rankedBackfill;
-  if (limitation === undefined) return nothingWalked("complete");
+  if (limitation === undefined) {
+    return nothingWalked(
+      rankedBackfill.kind === "evidence" && rankedBackfill.unreadReports
+        ? "unprovable"
+        : "complete"
+    );
+  }
   if (CONTINUED_RANKED_WALK_LIMITATIONS.has(limitation.code)) {
     return nothingWalked("deferred");
   }
