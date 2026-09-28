@@ -1,5 +1,6 @@
 export { runMigrations } from "./migrate";
 export { createPostgresRepositories } from "./postgres-repositories";
+export { mergeRaiderIoFirstKills } from "./evidence/merge";
 export {
   accountCanonicalEmailMaxLength,
   operatorCanonicalLoginMaxLength
@@ -40,6 +41,7 @@ export type {
   CharacterMythicKillParseMetric,
   CharacterMythicKillPerformance,
   CharacterMythicWipeInput,
+  CharacterRaiderIoFirstKillInput,
   CompletedCharacterEvidence,
   CreateSnapshotInput,
   DiscoveryRun,
@@ -76,6 +78,14 @@ export type {
   Provider,
   ProviderCredentials,
   ProviderPresence,
+  PublishedRaiderIoLoggedEncounter,
+  RaiderIoFirstKillsPublication,
+  RaiderIoLoggedEncounterAnswers,
+  RaiderIoLoggedEncounterInput,
+  RaiderIoLoggedEncounterMemberInput,
+  RaiderIoLoggedEncounterRole,
+  RaiderIoLoggedEncounterUnavailableCode,
+  RaiderIoLoggedEncounterUnavailableInput,
   RateLimitRepository,
   RecentDossierSearch,
   RecentDossierSearchRepository,
@@ -98,5 +108,9 @@ export type {
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
   StoredCharacterTierBestParse,
+  StoredCharacterRaiderIoFirstKill,
+  StoredRaiderIoLoggedEncounter,
+  StoredRaiderIoLoggedEncounterAnswers,
+  StoredRaiderIoLoggedEncounterUnavailable,
   SuppressionRepository
 } from "./repositories";

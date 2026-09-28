@@ -65,7 +65,8 @@ function resolveCharacter(
   );
 }
 
-function colourClass(className: string | null): string | null {
+/** The class-colour modifier for a class name, or null for one without a colour. */
+export function classColourModifier(className: string | null): string | null {
   const normalized = className
     ?.trim()
     .toLowerCase()
@@ -126,7 +127,7 @@ export function DossierCharacterName({
           all.findIndex((other) => sameCharacter(other, alias)) === index
       )
     : [];
-  const modifier = colourClass(resolved.className);
+  const modifier = classColourModifier(resolved.className);
   const className = [
     modifier
       ? `dossier-character-name dossier-character-name--${modifier}`
@@ -225,7 +226,7 @@ export function DossierCharacterLabels({
     <>
       {characters.map((character, index) => {
         const resolved = resolveCharacter(character, dossierCharacters);
-        const modifier = colourClass(resolved.className);
+        const modifier = classColourModifier(resolved.className);
         return (
           <Fragment
             key={`${character.region}/${character.realm}/${character.name}`}

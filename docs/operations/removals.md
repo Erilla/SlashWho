@@ -2,6 +2,8 @@
 
 Removal means internal suppression from future discovery and dossier reads. It does not delete immutable snapshots or rewrite historical membership.
 
+A removed character is also hidden from other characters' dossiers: they no longer appear on any Raider.IO kill roster. Their roster rows are kept, and filtered out whenever a dossier is read, so the roster's player and role counts still include them. When the suppression expires, they appear on those rosters again.
+
 ## Connecting the maintainer shell
 
 `ops:removals` is a repository command that runs on the maintainer's machine, so it needs a `DATABASE_URL` that resolves from outside Railway's network.

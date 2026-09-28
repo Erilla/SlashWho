@@ -456,6 +456,13 @@
       "when": 1792011600016,
       "tag": "0065_guild_report_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1792011600017,
+      "tag": "0066_raiderio_logged_kills",
+      "breakpoints": true
     }
   ]
 }

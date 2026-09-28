@@ -1856,6 +1856,7 @@ describe("PostgreSQL repositories: character evidence", () => {
       tierBests: [],
       cuttingEdges: [],
       cuttingEdgesCollected: false,
+      raiderIoFirstKills: [],
       wipeCapable: true
     });
   });

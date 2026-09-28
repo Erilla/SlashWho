@@ -46,6 +46,7 @@ export async function resetRepositoryTables(pool: Pool): Promise<void> {
     discovery_runs,
     characters,
     suppressed_characters,
+    raiderio_logged_encounters,
     negative_character_cache,
     rate_limit_events,
     manual_dossier_connections,

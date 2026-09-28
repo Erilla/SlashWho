@@ -201,6 +201,31 @@ describe("raiderIoVerifiedKills", () => {
       )
     ).rejects.toBe(reason);
   });
+
+  it("hands back every first kill and the raids its tiers answer for (#732)", async () => {
+    const midnightFalls: HistoricMythicKill = {
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      firstDefeated: "2026-07-20T17:25:57.000Z",
+      guild: null,
+      loggedEncounterId: 700_001
+    };
+    const result = await raiderIoVerifiedKills(
+      {
+        getHistoricMythicKills: async () => ({
+          kind: "evidence",
+          kills: [midnightFalls]
+        })
+      },
+      key,
+      { storedKills: [], killScanFloor: "2026-09-20T00:00:00.000Z" }
+    );
+
+    // No guild, so never a place to search -- and still a first kill.
+    expect(result.kills).toEqual([]);
+    expect(result.firstKills).toEqual([midnightFalls]);
+    expect(result.askedRaidSlugs).toEqual(["tier-mn-1"]);
+  });
 });
 
 describe("historicTierOrdinalsFrom", () => {

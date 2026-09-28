@@ -265,6 +265,7 @@ describe("recordPayload", () => {
     expect(recording.body).toEqual({
       characterDetails: {
         character: {
+          id: 1,
           name: "Alfa",
           level: 90,
           class: { name: "Mage" },
@@ -404,6 +405,178 @@ describe("recordPayload", () => {
   });
 });
 
+describe("Raider.IO kill logs", () => {
+  // Inline test input shaped like the live response of 2026-09-28. Every
+  // identity in it is fake; the point is what the recorder keeps.
+  const encounterBody = () => ({
+    killDetails: {
+      kill: {
+        pulledAt: "2026-07-20T17:17:29.977Z",
+        defeatedAt: "2026-07-20T17:25:57.301Z",
+        durationMs: 507_324,
+        isSuccess: true,
+        itemLevelEquippedAvg: 290.312,
+        itemLevelEquippedMax: 293.062,
+        itemLevelEquippedMin: 284.938
+      },
+      log: {
+        id: "reallogid",
+        sources: [
+          {
+            name: "Uploader#12345",
+            characterName: "Realname",
+            anonymized: false
+          }
+        ],
+        deaths: { count: 2 },
+        vantus: { spell: 1, count: 16 }
+      },
+      raid: { slug: "tier-mn-1", difficulty: "mythic", name: "Midnight" },
+      boss: { slug: "midnight-falls", name: "Midnight Falls" },
+      guild: {
+        id: 1,
+        name: "Realguild",
+        realm: { slug: "twisting-nether", name: "Twisting Nether" },
+        region: { slug: "eu" }
+      },
+      guildPrivacy: {
+        raidComps: true,
+        raidPulls: true,
+        shareRaidUntil: "2026-10-20T00:00:00.000Z"
+      },
+      roster: [
+        {
+          character: {
+            id: 424_242,
+            name: "Realname",
+            class: { id: 12, name: "Demon Hunter" },
+            spec: { name: "Havoc", role: "dps" },
+            itemLevelEquipped: 290.5,
+            realm: { slug: "draenor" },
+            region: { slug: "eu" }
+          },
+          vantus: true
+        }
+      ]
+    }
+  });
+
+  it("keeps the fields the parser reads and never an uploader", () => {
+    const recording = record(encounterBody(), "raiderio.logged-encounter");
+    expect(recording.body).toEqual({
+      killDetails: {
+        kill: {
+          pulledAt: "2020-01-02T00:00:00.000Z",
+          defeatedAt: "2020-01-03T00:00:00.000Z",
+          durationMs: 507_324,
+          isSuccess: true,
+          itemLevelEquippedAvg: 290.312,
+          itemLevelEquippedMax: 293.062,
+          itemLevelEquippedMin: 284.938
+        },
+        log: { deaths: { count: 2 }, vantus: { count: 16 } },
+        raid: { slug: "tier-mn-1", difficulty: "mythic" },
+        boss: { slug: "midnight-falls" },
+        guild: {
+          name: "Fixture Guild Alfa",
+          realm: { slug: "twisting-nether" },
+          region: { slug: "eu" }
+        },
+        guildPrivacy: {
+          raidComps: true,
+          shareRaidUntil: "2020-01-04T00:00:00.000Z"
+        },
+        roster: [
+          {
+            character: {
+              id: 1,
+              name: "Alfa",
+              class: { name: "Demon Hunter" },
+              spec: { name: "Havoc", role: "dps" },
+              itemLevelEquipped: 290.5,
+              realm: { slug: "draenor" },
+              region: { slug: "eu" }
+            }
+          }
+        ]
+      }
+    });
+    expect(recording.ignored).toContain("killDetails.log.sources");
+    expect(JSON.stringify(recording)).not.toContain("Uploader");
+    expect(verifyRecording(recording)).toEqual([]);
+  });
+
+  it("maps one real id to one synthetic id across a session", () => {
+    const recording = record(
+      {
+        characterRaidProgress: {
+          raidProgress: [
+            {
+              raid: "tier-mn-1",
+              encountersDefeated: {
+                mythic: [
+                  {
+                    slug: "midnight-falls",
+                    firstDefeated: "2026-07-20T17:25:57.000Z",
+                    loggedEncounterId: 700_001
+                  },
+                  {
+                    slug: "chimaerus-the-undreamt-god",
+                    firstDefeated: "2026-07-13T20:00:00.000Z",
+                    loggedEncounterId: 700_002
+                  },
+                  {
+                    slug: "belo-ren-child-of-al-ar",
+                    firstDefeated: "2026-07-20T16:00:00.000Z",
+                    loggedEncounterId: 700_001
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "raiderio.raid-progress"
+    );
+    const mythic = (
+      recording.body as {
+        characterRaidProgress: {
+          raidProgress: {
+            encountersDefeated: { mythic: { loggedEncounterId: number }[] };
+          }[];
+        };
+      }
+    ).characterRaidProgress.raidProgress[0]!.encountersDefeated.mythic;
+    expect(mythic.map((kill) => kill.loggedEncounterId)).toEqual([1, 2, 1]);
+    expect(verifyRecording(recording)).toEqual([]);
+  });
+
+  it("refuses a real id or a real instant", () => {
+    const recording = structuredClone(
+      record(encounterBody(), "raiderio.logged-encounter")
+    ) as Recording & {
+      body: {
+        killDetails: {
+          kill: { pulledAt: string };
+          roster: { character: { id: number } }[];
+        };
+      };
+    };
+    recording.body.killDetails.kill.pulledAt = "2026-07-20T17:17:29.977Z";
+    recording.body.killDetails.roster[0]!.character.id = 424_242;
+    expect(verifyRecording(recording)).toEqual([
+      {
+        path: "body.killDetails.kill.pulledAt",
+        problem: "timestamp is not synthetic"
+      },
+      {
+        path: "body.killDetails.roster[].character.id",
+        problem: "id is not a synthetic sequence number"
+      }
+    ]);
+  });
+});
+
 /**
  * Every hand-built provider fixture, and what it claims to be. `upstream`
  * fixtures are checked against the recordings: any field, or any null or empty
@@ -524,6 +697,10 @@ const handBuiltFixtures: Readonly<Record<string, Registration>> = {
     conformance: "upstream",
     endpoint: "raiderio.view-characters"
   },
+  "raiderio/logged-encounter-private-roster.json": {
+    conformance: "upstream",
+    endpoint: "raiderio.logged-encounter"
+  },
   "raiderio/missing-character.json": {
     conformance: "synthetic",
     reason:
@@ -531,7 +708,7 @@ const handBuiltFixtures: Readonly<Record<string, Registration>> = {
   },
   "raiderio/raid-progress-rate-limited.json": {
     conformance: "synthetic",
-    reason: "raid-progress is not yet a recorded endpoint"
+    reason: "a 429 has not been recorded; body is a placeholder marker"
   },
   "raiderio/raid-progress-schema-drift.json": {
     conformance: "synthetic",
@@ -539,7 +716,8 @@ const handBuiltFixtures: Readonly<Record<string, Registration>> = {
   },
   "raiderio/raid-progress-valid.json": {
     conformance: "synthetic",
-    reason: "raid-progress is not yet a recorded endpoint"
+    reason:
+      "carries a second tier's body in an envelope field recordings have no place for, and fields the allow-list drops; the recorded shape is recorded/raiderio/raid-progress-logged-first-kill.json"
   },
   "raiderio/rate-limited.json": {
     conformance: "synthetic",

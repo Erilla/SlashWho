@@ -10,6 +10,7 @@ export type EvidencePhaseId =
   | "warcraft_logs_fight_parses"
   | "warcraft_logs_ranking_identities"
   | "raiderio_rankings"
+  | "raiderio_logged_encounters"
   | "blizzard_achievements"
   | "publication";
 
@@ -88,7 +89,9 @@ export const evidencePhasePlans = {
     blizzard: boolean;
   }): EvidencePhasePlan {
     return [
-      ...(input.raiderIo ? (["raiderio_rankings"] as const) : []),
+      ...(input.raiderIo
+        ? (["raiderio_rankings", "raiderio_logged_encounters"] as const)
+        : []),
       ...(input.blizzard ? (["blizzard_achievements"] as const) : []),
       "publication"
     ];
@@ -110,7 +113,9 @@ export const evidencePhasePlans = {
             "warcraft_logs_ranking_identities"
           ] as const)
         : []),
-      ...(input.raiderIo ? (["raiderio_rankings"] as const) : []),
+      ...(input.raiderIo
+        ? (["raiderio_rankings", "raiderio_logged_encounters"] as const)
+        : []),
       ...(input.blizzard ? (["blizzard_achievements"] as const) : []),
       "publication"
     ];

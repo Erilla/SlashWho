@@ -1717,3 +1717,142 @@ it("shows only the visible characters' evidence and says the view is filtered", 
   await userEvent.click(screen.getByRole("button", { name: "Show all" }));
   expect(onShowAllCharacters).toHaveBeenCalledOnce();
 });
+
+it("shows a kill with no public logs as such, and builds its roster only once asked (#732)", () => {
+  const roster = {
+    state: "available" as const,
+    playerCount: 2,
+    roleCounts: { tank: 1, healer: 0, dps: 1 },
+    itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+    pulledAt: "2026-07-20T17:17:29.977Z",
+    durationMs: 507_324,
+    deathCount: 2,
+    vantusCount: 16,
+    members: [
+      {
+        name: "Bravo",
+        realm: "twisting-nether",
+        region: "eu",
+        className: "Warrior",
+        specName: "Protection",
+        role: "tank" as const,
+        itemLevel: 292.1,
+        isDossierCharacter: false
+      },
+      {
+        name: "Ryii",
+        realm: "silvermoon",
+        region: "eu",
+        className: "Mage",
+        specName: "Frost",
+        role: "dps" as const,
+        itemLevel: null,
+        isDossierCharacter: true
+      }
+    ]
+  };
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={[
+        {
+          raidId: "1308",
+          raidName: "March on Quel'Danas",
+          imageUrl: null,
+          cuttingEdge: null,
+          bosses: [
+            {
+              ...boss,
+              bossName: "Midnight Falls",
+              firstKill: {
+                ...boss.firstKill,
+                killedAt: "2026-07-20T17:25:57.301Z",
+                guild: {
+                  name: "Fixture Guild Alfa",
+                  region: "eu",
+                  realm: "twisting-nether"
+                },
+                reports: [],
+                roster
+              }
+            }
+          ]
+        }
+      ]}
+    />
+  );
+
+  const firstKillParses = screen.getAllByRole("region", {
+    name: "First kill parses"
+  })[0]!;
+  expect(
+    within(firstKillParses).getByText("No public logs found")
+  ).toBeVisible();
+  expect(
+    within(screen.getByRole("region", { name: "Best parses" })).getByText(
+      "No public logs found"
+    )
+  ).toBeVisible();
+
+  fireEvent.click(screen.getByText("View kill evidence"));
+  const evidence = screen.getByRole("region", { name: "Kill evidence" });
+  const reports = within(evidence).getByText("Reports", {
+    selector: "dt"
+  }).parentElement!;
+  expect(within(reports).getByText("No public logs found")).toBeVisible();
+
+  expect(
+    within(evidence).queryByRole("table", { name: "Raid roster" })
+  ).not.toBeInTheDocument();
+  fireEvent.click(within(evidence).getByText("View roster"));
+  const table = within(evidence).getByRole("table", { name: "Raid roster" });
+  expect(within(table).getAllByRole("row")).toHaveLength(3);
+  expect(within(table).getByText("Connected character")).toBeInTheDocument();
+});
+
+it("offers no roster disclosure for a kill Raider.IO never matched", () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={[
+        {
+          raidId: "1320",
+          raidName: "The Venomous Abyss",
+          imageUrl: null,
+          cuttingEdge: null,
+          bosses: [boss]
+        }
+      ]}
+    />
+  );
+  fireEvent.click(screen.getByText("View kill evidence"));
+  expect(screen.queryByText("View roster")).not.toBeInTheDocument();
+});
+
+it("says the roster is unavailable inside the disclosure", () => {
+  renderWithDossierCharacters(
+    <DossierRaidList
+      raids={[
+        {
+          raidId: "1308",
+          raidName: "March on Quel'Danas",
+          imageUrl: null,
+          cuttingEdge: null,
+          bosses: [
+            {
+              ...boss,
+              firstKill: {
+                ...boss.firstKill,
+                roster: { state: "unavailable", reason: "private" }
+              }
+            }
+          ]
+        }
+      ]}
+    />
+  );
+  fireEvent.click(screen.getByText("View kill evidence"));
+  fireEvent.click(screen.getByText("View roster"));
+  expect(screen.getByText("Roster unavailable")).toBeInTheDocument();
+  expect(
+    screen.getByText("The guild has hidden this raid's roster on Raider.IO.")
+  ).toBeInTheDocument();
+});

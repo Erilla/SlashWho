@@ -30,7 +30,8 @@ import {
   type DossierCuttingEdgeEvidence,
   type DossierWipeEvidence,
   type DossierTierBestParse,
-  type DossierLimitation
+  type DossierLimitation,
+  type DossierRaiderIoFirstKill
 } from "@slashwho/domain";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { RaiderIoGateway } from "@slashwho/raiderio";
@@ -65,6 +66,7 @@ import {
   searchDossierTier,
   type SearchDossierTierResult
 } from "./search-dossier-tier";
+import { dossierRaiderIoFirstKill } from "./raiderio-first-kill-evidence";
 import { groupBySharedWarcraftLogsId } from "./shared-warcraft-logs-identity";
 import {
   TIER_SEARCH_SPACING_MS,
@@ -249,6 +251,7 @@ type EvidenceResult = Readonly<{
   kills: readonly StoredRankKillEvidence[];
   wipes: readonly DossierWipeEvidence[];
   tierBests: readonly DossierTierBestParse[];
+  raiderIoFirstKills: readonly DossierRaiderIoFirstKill[];
   cuttingEdges: readonly DossierCuttingEdgeEvidence[] | null;
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
@@ -500,18 +503,27 @@ async function gatherCharacterEvidence(
       completed?.tierBests.map((tierBest) =>
         cachedTierBest(tierBest, attributed)
       ) ?? [],
+    raiderIoFirstKills:
+      completed?.raiderIoFirstKills?.map((kill) =>
+        dossierRaiderIoFirstKill(kill, attributed)
+      ) ?? [],
     cuttingEdges: completed?.cuttingEdgesCollected
       ? completed.cuttingEdges
       : null,
     // Negative conclusions rest on the history scan, which `limitationCode`
-    // reports. A run whose only shortfall is its parse budget scanned the whole
-    // history and publishes `partial` to say so, so requiring `complete` here
-    // would silently withdraw conclusions the evidence still supports.
+    // reports. A run whose only shortfall is its parse budget, or its
+    // Raider.IO logged-encounter reads (#732), scanned the whole history and
+    // publishes `partial` to say so, so requiring `complete` here would
+    // silently withdraw conclusions the evidence still supports. A run whose
+    // scan was skipped scanned nothing, so it never supports one, whatever
+    // else it names.
     warcraftLogsComplete:
       reservation.kind === "fresh" &&
       (completed?.run.status === "complete" ||
         (completed?.run.status === "partial" &&
-          completed.run.parseLimitationCode !== null)) &&
+          completed.run.killScanSkipped !== true &&
+          (completed.run.parseLimitationCode !== null ||
+            completed.run.raiderIoLimitationCode != null))) &&
       completed.run.limitationCode === null &&
       completed.wipeCapable,
     // Keyed on the run, not on `kind`: a refresh forces a collection past the
@@ -608,6 +620,12 @@ function mergeIdentityEvidence(
       (wipe) => `${wipe.bossId}\0${wipe.reportUrl}`
     ),
     tierBests: results.flatMap((item) => item.tierBests),
+    // Every name's collection is attributed to the subject, so one first kill
+    // per boss: the subject's own name first.
+    raiderIoFirstKills: uniqueBy(
+      results.flatMap((item) => item.raiderIoFirstKills),
+      (kill) => `${kill.raidSlug}\0${kill.bossSlug}`
+    ),
     cuttingEdges: own.cuttingEdges,
     warcraftLogsComplete: results.every((item) => item.warcraftLogsComplete),
     limitations: mergeLimitations(results.flatMap((item) => item.limitations)),
@@ -941,6 +959,7 @@ async function assembleDossier(options: {
       kills: ranked.kills,
       wipes: evidence.flatMap((item) => item.wipes),
       tierBests: evidence.flatMap((item) => item.tierBests),
+      raiderIoFirstKills: evidence.flatMap((item) => item.raiderIoFirstKills),
       completeWarcraftLogsCharacters: evidence.flatMap((item, index) =>
         item.warcraftLogsComplete ? [options.subjects[index]!.key] : []
       ),

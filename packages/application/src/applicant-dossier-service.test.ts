@@ -6,6 +6,7 @@ import type {
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
+  StoredCharacterRaiderIoFirstKill,
   StoredCharacterTierBestParse,
   StoredSnapshot
 } from "@slashwho/database";
@@ -85,6 +86,9 @@ function fixture(
     evidenceLimitationCode?: string | null;
     evidenceParseLimitationCode?: string | null;
     evidenceParseLimitationCodesSeen?: readonly string[];
+    evidenceRaiderIoLimitationCode?: string | null;
+    evidenceKillScanSkipped?: boolean;
+    raiderIoFirstKills?: readonly StoredCharacterRaiderIoFirstKill[];
     omittedInvalidTimestamp?: boolean;
     evidenceCompletedAt?: Date;
     /** When the last run said the next read may collect again. */
@@ -277,6 +281,14 @@ function fixture(
                   ? "request_cap"
                   : null,
             parseLimitationCode: options.evidenceParseLimitationCode ?? null,
+            ...(options.evidenceRaiderIoLimitationCode
+              ? {
+                  raiderIoLimitationCode: options.evidenceRaiderIoLimitationCode
+                }
+              : {}),
+            ...(options.evidenceKillScanSkipped
+              ? { killScanSkipped: true }
+              : {}),
             ...(options.evidenceParseLimitationCodesSeen
               ? {
                   parseLimitationCodesSeen:
@@ -296,6 +308,9 @@ function fixture(
           ],
           wipes: options.wipes ?? [],
           tierBests: options.tierBests ?? [],
+          ...(options.raiderIoFirstKills
+            ? { raiderIoFirstKills: options.raiderIoFirstKills }
+            : {}),
           cuttingEdges: options.storedCuttingEdges ?? [],
           cuttingEdgesCollected: options.cuttingEdgesCollected ?? false,
           wipeCapable: options.wipeCapable ?? true
@@ -786,6 +801,7 @@ describe("applicant dossier service", () => {
           "warcraft_logs_fight_parses",
           "warcraft_logs_ranking_identities",
           "raiderio_rankings",
+          "raiderio_logged_encounters",
           "blizzard_achievements",
           "publication"
         ]
@@ -977,6 +993,107 @@ describe("applicant dossier service", () => {
 
     expect(result.dossier.raids[0]?.bosses[0]).toMatchObject({
       state: "no_logs"
+    });
+  });
+
+  it("keeps no-log gaps for a run whose only shortfall is Raider.IO's logs (#732)", async () => {
+    const result = await fixture({
+      includeCachedKills: false,
+      evidenceStatus: "partial",
+      evidenceLimitationCode: null,
+      evidenceRaiderIoLimitationCode: "request_cap"
+    }).dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(result.dossier.raids[0]?.bosses[0]).toMatchObject({
+      state: "no_logs"
+    });
+  });
+
+  it.each([
+    [
+      "Raider.IO also fell short",
+      { evidenceRaiderIoLimitationCode: "request_cap" }
+    ],
+    [
+      "its parse budget ran out",
+      { evidenceParseLimitationCode: "parse_request_cap" }
+    ]
+  ])(
+    "keeps a skipped-scan run incomplete even when %s",
+    async (_name, shortfall) => {
+      // Break caught (#734 review): a light run publishes `partial` with its
+      // scan skipped; had a Raider.IO shortfall made it read as complete, the
+      // dossier would assert "No qualifying public logs found" from a history
+      // scan that never ran.
+      const result = await fixture({
+        includeCachedKills: false,
+        evidenceStatus: "partial",
+        evidenceLimitationCode: null,
+        evidenceKillScanSkipped: true,
+        ...shortfall
+      }).dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+      expect(result.dossier.raids[0]?.bosses[0]).toMatchObject({
+        state: "incomplete"
+      });
+    }
+  );
+
+  it("shows a stored Raider.IO-logged first kill as the boss's kill, with its roster", async () => {
+    const killGuild = {
+      name: "Fixture Guild Alfa",
+      realm: "twisting-nether",
+      region: "eu"
+    };
+    const result = await fixture({
+      includeCachedKills: false,
+      raiderIoFirstKills: [
+        {
+          raidSlug: "tier-mn-1",
+          bossSlug: "midnight-falls",
+          killedAt: "2026-07-20T17:25:57.301Z",
+          guild: killGuild,
+          loggedEncounterId: 700_001,
+          encounterState: "read",
+          encounterLimitationCode: null,
+          historicWorldRank: null,
+          historicRankCheckedAt: null,
+          encounter: {
+            loggedEncounterId: 700_001,
+            raidSlug: "tier-mn-1",
+            bossSlug: "midnight-falls",
+            pulledAt: "2026-07-20T17:17:29.977Z",
+            defeatedAt: "2026-07-20T17:25:57.301Z",
+            durationMs: 507_324,
+            guild: killGuild,
+            itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+            deathCount: 2,
+            vantusCount: 16,
+            shareRaidUntil: null,
+            rosterState: "private",
+            members: [],
+            roleCounts: { tank: 0, healer: 0, dps: 0 },
+            readAt: "2026-09-28T12:00:00.000Z"
+          }
+        }
+      ]
+    }).dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    const midnightFalls = result.dossier.raids
+      .flatMap((raid) => raid.bosses)
+      .find((boss) => boss.bossName === "Midnight Falls");
+    expect(midnightFalls).toMatchObject({
+      state: "kill",
+      firstKill: {
+        killedAt: "2026-07-20T17:25:57.301Z",
+        guild: killGuild,
+        reportUrl: null,
+        parses: [],
+        roster: { state: "unavailable", reason: "private" }
+      }
     });
   });
 

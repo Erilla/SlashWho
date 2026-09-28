@@ -14,6 +14,7 @@ import { formatUtcDate } from "../lib/date-format";
 import { reportKey, sortWipes } from "../lib/dossier-wipes";
 import { BossArtwork } from "./boss-artwork";
 import { DossierCharacterNames } from "./dossier-character-name";
+import { DossierKillRoster } from "./dossier-kill-roster";
 import { DossierParseList } from "./dossier-parse-list";
 import { DossierTierSearchControl } from "./dossier-tier-search-control";
 import { UpstreamIcon, UpstreamIconLink } from "./upstream-icon-link";
@@ -65,7 +66,9 @@ function ReportLinks({ evidence }: { evidence: KillBoss["firstKill"] }) {
           ? evidence.guild
           : null
     }));
-  if (reports.length === 0) return <>Report: —</>;
+  // Display text for an empty list: a kill with no public report, such as one
+  // known only from Raider.IO's logged encounter (#732). Never a count of 0.
+  if (reports.length === 0) return <>No public logs found</>;
   return <ReportControl evidenceState="kill" reports={reports} />;
 }
 
@@ -458,6 +461,8 @@ function LazyDetails({
   );
 }
 
+const NO_PUBLIC_LOGS = "No public logs found";
+
 function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
   const firstKills = [...(boss.firstKills ?? [boss.firstKill])].sort(
     (a, b) =>
@@ -509,11 +514,13 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
         </div>
       </div>
       <DossierParseList
+        emptyText={NO_PUBLIC_LOGS}
         label="First kill parses"
         loading={loading}
         parses={firstKill.parses}
       />
       <DossierParseList
+        emptyText={NO_PUBLIC_LOGS}
         label="Best parses"
         loading={loading}
         parses={boss.bestParses}
@@ -582,6 +589,7 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
                       <dt>Parses</dt>
                       <dd>
                         <DossierParseList
+                          emptyText={NO_PUBLIC_LOGS}
                           label={`${isChronologicalFirst ? "First kill" : "Kill"} parses`}
                           loading={loading}
                           parses={evidence.parses}
@@ -589,6 +597,19 @@ function KillEvidence({ boss, loading }: { boss: KillBoss; loading: boolean }) {
                         />
                       </dd>
                     </div>
+                    {evidence.roster ? (
+                      <div className="dossier-evidence-wide">
+                        <dt>Roster</dt>
+                        <dd>
+                          <LazyDetails summary="View roster">
+                            <DossierKillRoster
+                              guildRealm={evidence.guild?.realm ?? null}
+                              roster={evidence.roster}
+                            />
+                          </LazyDetails>
+                        </dd>
+                      </div>
+                    ) : null}
                   </dl>
                 </div>
               </div>

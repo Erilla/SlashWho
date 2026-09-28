@@ -9,11 +9,15 @@ export type {
   HistoricMythicKill,
   HistoricMythicKillOptions,
   HistoricMythicKillResult,
+  LoggedEncounter,
+  LoggedEncounterMember,
+  LoggedEncounterResult,
   MythicBossRanking,
   MythicBossRankingsOptions,
   MythicBossRankingsResult,
   RaiderIoCharacter,
   RaiderIoEvidenceLimitation,
   RaiderIoGateway,
-  RaiderIoProfile
+  RaiderIoProfile,
+  RaiderIoRosterRole
 } from "./types";

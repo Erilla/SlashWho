@@ -1,0 +1,74 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.raid-progress",
+  "recordedOn": "2026-09-28",
+  "status": 200,
+  "body": {
+    "characterRaidProgress": {
+      "raidProgress": [
+        {
+          "raid": "manaforge-omega",
+          "encountersDefeated": {
+            "mythic": [
+              {
+                "slug": "nexus-king-salhadaar",
+                "firstDefeated": "2020-01-02T00:00:00.000Z",
+                "loggedEncounterId": null,
+                "guild": {
+                  "name": "Fixture Guild Bravo",
+                  "realm": { "slug": "draenor" },
+                  "region": { "slug": "eu" }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "raid": "tier-mn-1",
+          "encountersDefeated": {
+            "mythic": [
+              {
+                "slug": "midnight-falls",
+                "firstDefeated": "2020-01-03T00:00:00.000Z",
+                "loggedEncounterId": 1,
+                "guild": {
+                  "name": "Fixture Guild Alfa",
+                  "realm": { "slug": "twisting-nether" },
+                  "region": { "slug": "eu" }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "ignored": [
+    "characterRaidProgress.raidProgress[].aotc",
+    "characterRaidProgress.raidProgress[].cuttingEdge",
+    "characterRaidProgress.raidProgress[].encountersDefeated.heroic",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].artifactTraits",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].bossIcon",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.displayName",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.faction",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.id",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.path",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.realm.id",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.realm.name",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.region.name",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.region.short_name",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guildId",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].itemLevel",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].lastDefeated",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].lastRaidWeek",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].numKills",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].raidWeek",
+    "characterRaidProgress.raidProgress[].encountersDefeated.normal",
+    "characterRaidProgress.raidProgress[].progress",
+    "characterRaidProgress.raidProgress[].raidWeekAotC",
+    "characterRaidProgress.raidProgress[].raidWeekCuttingEdge",
+    "characterRaidProgress.raidProgress[].tier",
+    "characterRaidProgress.raidProgress[].weekRanges",
+    "characterRaidProgress.tier"
+  ]
+}

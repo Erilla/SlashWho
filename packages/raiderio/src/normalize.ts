@@ -21,6 +21,7 @@ const upstreamGuildSchema = z.object({
 
 const upstreamCharacterSchema = z.object({
   name: z.string().min(1),
+  id: z.number().int().positive().optional(),
   level: z.number().int().nonnegative(),
   class: z.object({ name: z.string().min(1) }),
   realm: z.object({
@@ -190,6 +191,9 @@ export function normalizeCharacterResponse(
     ownerId: details.user?.name ?? null,
     profileGuess: customizations?.discord_profile?.trim() || null,
     declaredMain,
+    ...(details.character.id === undefined
+      ? {}
+      : { raiderIoCharacterId: details.character.id }),
     ...(omittedMembers ? { omittedMembers: true } : {})
   };
 }
