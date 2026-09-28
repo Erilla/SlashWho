@@ -51,11 +51,17 @@ describe("database migrations", () => {
       "applicant_suppression_history",
       "character_alias_recollections",
       "character_attendance_searches",
+      "character_connection_write_log",
+      "character_connection_writes",
+      "character_connections",
       "character_evidence_collections",
       "character_evidence_cutting_edges",
       "character_evidence_run_costs",
       "character_evidence_run_phases",
       "character_evidence_runs",
+      "character_group_members",
+      "character_groups",
+      "character_groups_maintenance",
       "character_historic_aliases",
       "character_mythic_kills",
       "character_mythic_wipes",
@@ -185,7 +191,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-36).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-37).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
@@ -222,8 +228,59 @@ describe("database migrations", () => {
       { idx: 63, tag: "0064_history_actor_requests" },
       { idx: 64, tag: "0065_guild_report_requests" },
       { idx: 65, tag: "0066_raiderio_logged_kills" },
-      { idx: 66, tag: "0067_raiderio_tier_reads" }
+      { idx: 66, tag: "0067_raiderio_tier_reads" },
+      { idx: 67, tag: "0068_character_groups" }
     ]);
+  });
+
+  it("backfills character groups from today's snapshots without touching them", async () => {
+    // Break caught: a backfill that rewrote snapshots, or grouped a
+    // snapshot member apart from its root, would fail P1 and P2 on deploy.
+    const { pool, stop } = await startPostgres();
+    try {
+      await runMigrationsThrough(pool, "0067_raiderio_tier_reads");
+      const root = await insertCharacter(pool, "eu", "draenor", "quellaria");
+      const alt = await insertCharacter(pool, "eu", "draenor", "eundariel");
+      const fp = await insertCharacter(pool, "eu", "draenor", "drecthyr");
+      const run = await insertCompletedRun(pool, root);
+      await insertSnapshot(pool, run, root, [
+        [root, "input"],
+        [alt, "declared_main"],
+        [fp, "fingerprint"]
+      ]);
+      await insertPublishedReservation(pool, run);
+      const before = await checksum(pool, [
+        "snapshots",
+        "snapshot_characters",
+        "discovery_runs",
+        "characters"
+      ]);
+
+      await runMigrations(pool);
+
+      expect(
+        await checksum(pool, [
+          "snapshots",
+          "snapshot_characters",
+          "discovery_runs",
+          "characters"
+        ])
+      ).toBe(before);
+      const groups = await pool.query<{ n: string }>(
+        `SELECT count(DISTINCT group_id)::text AS n FROM character_group_members WHERE character_id = ANY($1)`,
+        [[root, alt, fp]]
+      );
+      expect(groups.rows[0]!.n).toBe("1");
+      const ledger = await pool.query(
+        `SELECT family, decision, reason FROM character_connection_write_log ORDER BY family`
+      );
+      expect(ledger.rows).toEqual([
+        { family: "fingerprint", decision: "replaced", reason: "backfill" },
+        { family: "raiderio", decision: "replaced", reason: "backfill" }
+      ]);
+    } finally {
+      await stop();
+    }
   });
 
   it("serializes concurrent migration attempts with an advisory lock", async () => {
@@ -427,35 +484,7 @@ describe("database migrations", () => {
     await pool.query("CREATE SCHEMA public");
     await pool.query("DROP SCHEMA drizzle CASCADE");
 
-    const migrationSource = new URL(
-      "../../packages/database/drizzle/",
-      import.meta.url
-    );
-    const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
-    try {
-      mkdirSync(join(folder, "meta"));
-      for (const file of readdirSync(migrationSource).filter(
-        (name) => name.endsWith(".sql") && name.slice(0, 4) <= "0046"
-      )) {
-        copyFileSync(new URL(file, migrationSource), join(folder, file));
-      }
-      const journal = JSON.parse(
-        readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
-      ) as { entries: Array<{ idx: number }> };
-      journal.entries = journal.entries.filter(({ idx }) => idx <= 45);
-      writeFileSync(
-        join(folder, "meta", "_journal.json"),
-        JSON.stringify(journal)
-      );
-      process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
-      try {
-        await runMigrations(pool);
-      } finally {
-        delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
-      }
-    } finally {
-      rmSync(folder, { recursive: true, force: true });
-    }
+    await runMigrationsThrough(pool, "0046_ranked_backfill_cursor");
 
     const operator = await pool.query<{ id: string }>(
       `INSERT INTO operators
@@ -533,35 +562,7 @@ describe("database migrations", () => {
     await pool.query("CREATE SCHEMA public");
     await pool.query("DROP SCHEMA drizzle CASCADE");
 
-    const migrationSource = new URL(
-      "../../packages/database/drizzle/",
-      import.meta.url
-    );
-    const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
-    try {
-      mkdirSync(join(folder, "meta"));
-      for (const file of readdirSync(migrationSource).filter(
-        (name) => name.endsWith(".sql") && name.slice(0, 4) <= "0055"
-      )) {
-        copyFileSync(new URL(file, migrationSource), join(folder, file));
-      }
-      const journal = JSON.parse(
-        readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
-      ) as { entries: Array<{ idx: number }> };
-      journal.entries = journal.entries.filter(({ idx }) => idx <= 54);
-      writeFileSync(
-        join(folder, "meta", "_journal.json"),
-        JSON.stringify(journal)
-      );
-      process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
-      try {
-        await runMigrations(pool);
-      } finally {
-        delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
-      }
-    } finally {
-      rmSync(folder, { recursive: true, force: true });
-    }
+    await runMigrationsThrough(pool, "0055_dossier_searches");
 
     const account = await pool.query<{ id: string }>(
       `INSERT INTO accounts
@@ -605,37 +606,7 @@ describe("database migrations", () => {
     await pool.query("CREATE SCHEMA public");
     await pool.query("DROP SCHEMA drizzle CASCADE");
 
-    const migrationSource = new URL(
-      "../../packages/database/drizzle/",
-      import.meta.url
-    );
-    const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
-    try {
-      mkdirSync(join(folder, "meta"));
-      for (const file of readdirSync(migrationSource).filter(
-        (name) => name.endsWith(".sql") && name.slice(0, 4) <= "0057"
-      )) {
-        copyFileSync(new URL(file, migrationSource), join(folder, file));
-      }
-      const journal = JSON.parse(
-        readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
-      ) as { entries: Array<{ tag: string }> };
-      journal.entries = journal.entries.filter(
-        ({ tag }) => tag.slice(0, 4) <= "0057"
-      );
-      writeFileSync(
-        join(folder, "meta", "_journal.json"),
-        JSON.stringify(journal)
-      );
-      process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
-      try {
-        await runMigrations(pool);
-      } finally {
-        delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
-      }
-    } finally {
-      rmSync(folder, { recursive: true, force: true });
-    }
+    await runMigrationsThrough(pool, "0057_evidence_run_light_refresh");
 
     const index = () =>
       pool.query<{ indexdef: string }>(
@@ -657,3 +628,118 @@ describe("database migrations", () => {
     ]);
   });
 });
+
+/**
+ * Migrates an empty database up to and including the migration whose file
+ * name and journal tag start with `tag`'s first four digits, by copying only
+ * those files (and journal entries) into a throwaway migrations folder. Used
+ * to seed fixtures against a known-older schema before running the rest.
+ */
+async function runMigrationsThrough(pool: Pool, tag: string): Promise<void> {
+  const prefix = tag.slice(0, 4);
+  const migrationSource = new URL(
+    "../../packages/database/drizzle/",
+    import.meta.url
+  );
+  const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
+  try {
+    mkdirSync(join(folder, "meta"));
+    for (const file of readdirSync(migrationSource).filter(
+      (name) => name.endsWith(".sql") && name.slice(0, 4) <= prefix
+    )) {
+      copyFileSync(new URL(file, migrationSource), join(folder, file));
+    }
+    const journal = JSON.parse(
+      readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
+    ) as { entries: Array<{ tag: string }> };
+    journal.entries = journal.entries.filter(
+      ({ tag: entryTag }) => entryTag.slice(0, 4) <= prefix
+    );
+    writeFileSync(
+      join(folder, "meta", "_journal.json"),
+      JSON.stringify(journal)
+    );
+    process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
+    try {
+      await runMigrations(pool);
+    } finally {
+      delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
+    }
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
+async function insertCharacter(
+  pool: Pool,
+  region: string,
+  realm: string,
+  name: string
+): Promise<string> {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url)
+     VALUES ($1, $2, $3, $3, 'Mage', 80, 'https://raider.io/x') RETURNING id`,
+    [region, realm, name]
+  );
+  return result.rows[0]!.id;
+}
+
+async function insertCompletedRun(pool: Pool, rootId: string): Promise<string> {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO discovery_runs (root_region, root_realm_slug, root_normalized_name, root_character_id, status, caller_class, started_at, completed_at)
+     SELECT region, realm_slug, normalized_name, id, 'complete', 'anonymous', now() - interval '1 hour', now() FROM characters WHERE id = $1 RETURNING id`,
+    [rootId]
+  );
+  return result.rows[0]!.id;
+}
+
+async function insertSnapshot(
+  pool: Pool,
+  runId: string,
+  rootId: string,
+  members: [string, string][]
+): Promise<void> {
+  const snapshot = await pool.query<{ id: string }>(
+    `INSERT INTO snapshots (root_character_id, discovery_run_id, state, limitation_code, refreshed_at, character_count)
+     VALUES ($1, $2, 'complete', NULL, now(), $3) RETURNING id`,
+    [rootId, runId, members.length]
+  );
+  await pool.query(`UPDATE discovery_runs SET snapshot_id = $2 WHERE id = $1`, [
+    runId,
+    snapshot.rows[0]!.id
+  ]);
+  for (const [index, [characterId, source]] of members.entries()) {
+    await pool.query(
+      `INSERT INTO snapshot_characters (snapshot_id, character_id, display_order, discovery_source, display_name, class_name, level, raider_io_url)
+       VALUES ($1, $2, $3, $4, 'x', 'Mage', 80, 'https://raider.io/x')`,
+      [snapshot.rows[0]!.id, characterId, index, source]
+    );
+  }
+}
+
+async function insertPublishedReservation(
+  pool: Pool,
+  runId: string
+): Promise<void> {
+  const admission = await pool.query<{ id: string }>(
+    `INSERT INTO fingerprint_sweep_admissions (discovery_run_id, region, realm_slug, normalized_name, request_cap, hourly_budget, cadence_cutoff, status)
+     SELECT id, root_region, root_realm_slug, root_normalized_name, 300, 28800, now(), 'finished' FROM discovery_runs WHERE id = $1 RETURNING id`,
+    [runId]
+  );
+  await pool.query(
+    `INSERT INTO fingerprint_sweep_reservations (admission_id, request_cap, admitted_at, expires_at, released_at, finished_at, published)
+     VALUES ($1, 300, now() - interval '1 hour', now() + interval '1 hour', now(), now(), true)`,
+    [admission.rows[0]!.id]
+  );
+}
+
+async function checksum(pool: Pool, tables: string[]): Promise<string> {
+  const parts: string[] = [];
+  for (const table of tables) {
+    const result = await pool.query<{ digest: string }>(
+      `SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t::text), '')) AS digest FROM ${table} t`
+    );
+    parts.push(result.rows[0]!.digest);
+  }
+  return parts.join(":");
+}

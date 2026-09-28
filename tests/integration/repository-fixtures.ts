@@ -34,6 +34,10 @@ export async function resetRepositoryTables(pool: Pool): Promise<void> {
     character_alias_recollections,
     character_mythic_wipes,
     character_evidence_runs,
+    character_connection_write_log,
+    character_connection_writes,
+    character_connections,
+    character_groups,
     -- Keyed by character rather than by run, so nothing above cascades to
     -- it and a mark left by one test would be read by the next.
     character_terminal_tiers,
@@ -58,6 +62,9 @@ export async function resetRepositoryTables(pool: Pool): Promise<void> {
     account_request_attempts,
     accounts
     CASCADE`);
+  await pool.query(
+    `UPDATE character_groups_maintenance SET cursor_group_id = NULL, cycle_started_at = NULL, last_cycle_started_at = NULL, last_cycle_completed_at = NULL`
+  );
 }
 
 export async function eventually(
