@@ -604,6 +604,67 @@ export function lookupUniqueRaidBossByName(
   return encountersByBossName.get(normalizedName(bossName)) ?? null;
 }
 
+/**
+ * Warcraft Logs files some of a season's kills under a sibling raid's name. Its
+ * ranking zone 53, `The Venomous Abyss`, also holds The Tidebound Grotto's
+ * Nymrissa Wavecaller, and a fight's own game zone has placed Venomous Abyss
+ * bosses in The Tidebound Grotto. A boss the named raid does not hold is placed
+ * by its unique name, but only in a raid of the same tier, so a mislabelled
+ * zone can never move a kill into another tier (#729).
+ */
+export function lookupSiblingRaidBossByName(
+  raidName: string,
+  bossName: string
+): RaidCatalogueEncounter | null {
+  const raid = lookupRaidByName(raidName);
+  const encounter = lookupUniqueRaidBossByName(bossName);
+  if (raid === null || encounter === null || encounter.raidId === raid.raidId)
+    return null;
+  const tiers = tierIndexByRaidName();
+  const tier = tiers.get(normalizedName(raid.raidName));
+  return tier !== undefined &&
+    tier === tiers.get(normalizedName(encounter.raidName))
+    ? encounter
+    : null;
+}
+
+let tierIndexes: Map<string, number> | undefined;
+function tierIndexByRaidName(): Map<string, number> {
+  tierIndexes ??= new Map(
+    raidTiers().flatMap((tier, index) =>
+      tier.raidNames.map((name) => [normalizedName(name), index] as const)
+    )
+  );
+  return tierIndexes;
+}
+
+/**
+ * The encounter a kill, wipe or parse names, by whatever names it.
+ *
+ * Inside a named raid, the Journal's names and reviewed aliases come first,
+ * then a Journal id belonging to that raid, then Warcraft Logs' shortened
+ * legacy name, and last a same-tier sibling raid's boss. A zone that names no
+ * raid can only be placed by the Journal id or a catalogue-wide unique boss
+ * name.
+ */
+export function lookupRaidEncounterForEvidence(
+  evidence: RaidEvidenceIdentity
+): RaidCatalogueEncounter | null {
+  const raid = lookupRaidByName(evidence.raidName);
+  const journalEncounter =
+    evidence.journalBossId === null
+      ? null
+      : lookupJournalEncounter(evidence.journalBossId);
+  if (raid === null)
+    return journalEncounter ?? lookupUniqueRaidBossByName(evidence.bossName);
+  return (
+    lookupRaidBossByName(evidence.raidName, evidence.bossName) ??
+    (journalEncounter?.raidId === raid.raidId ? journalEncounter : null) ??
+    lookupRaidBossByLegacyName(raid.raidId, evidence.bossName) ??
+    lookupSiblingRaidBossByName(evidence.raidName, evidence.bossName)
+  );
+}
+
 export function lookupRaidByName(raidName: string): RaidCatalogueRaid | null {
   return raidsByName.get(normalizedName(raidName)) ?? null;
 }
@@ -716,19 +777,16 @@ export type RaidEvidenceIdentity = Readonly<{
  * displayed. Marking a tier terminal did not, so a raid the dossier could name
  * was one the scan could never conclude -- it pinned the scan floor for good
  * while appearing perfectly healthy on the page (#346). The two must agree,
- * which is why this is one function rather than two rules.
+ * which is why both resolve the boss through `lookupRaidEncounterForEvidence`.
+ * A boss the catalogue cannot place still leaves a named raid named.
  */
 export function lookupRaidForEvidence(
   evidence: RaidEvidenceIdentity
 ): RaidCatalogueRaid | null {
-  const named = lookupRaidByName(evidence.raidName);
-  if (named !== null) return named;
-  const encounter =
-    (evidence.journalBossId === null
-      ? null
-      : lookupJournalEncounter(evidence.journalBossId)) ??
-    lookupUniqueRaidBossByName(evidence.bossName);
-  return encounter === null ? null : lookupRaidByName(encounter.raidName);
+  const encounter = lookupRaidEncounterForEvidence(evidence);
+  return encounter === null
+    ? lookupRaidByName(evidence.raidName)
+    : lookupRaidByName(encounter.raidName);
 }
 
 /** The conclusion of the raid a kill belongs to, however it is named. */

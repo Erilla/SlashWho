@@ -466,6 +466,49 @@ describe("applicant dossier", () => {
     );
   });
 
+  it("shows a Tidebound Grotto kill Warcraft Logs filed under The Venomous Abyss", () => {
+    // Break caught: ranking zone 53 is named for The Venomous Abyss but also
+    // holds Nymrissa Wavecaller. The known raid name stopped the lookup before
+    // the boss's unique name was tried, so the kill was withheld as unmatched
+    // and the reviewer saw "could not match to a known raid boss" (#729).
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [
+        kill(root, {
+          raidId: "53",
+          raidName: "The Venomous Abyss",
+          bossId: "3379",
+          bossName: "Nymrissa Wavecaller",
+          journalBossId: null,
+          bossOrder: 3379,
+          killedAt: "2026-08-26T12:00:00.000Z",
+          reportUrl:
+            "https://www.warcraftlogs.com/reports/Aqc9zw1dg7jpmLkZ#fight=23"
+        })
+      ],
+      wipes: [],
+      completeWarcraftLogsCharacters: [root],
+      limitations: []
+    });
+
+    expect(dossier.limitations).not.toContainEqual(
+      expect.objectContaining({ code: "unmatched_encounter" })
+    );
+    const raid = dossier.raids.find((entry) => entry.raidId === "1317");
+    expect(raid?.raidName).toBe("The Tidebound Grotto");
+    expect(raid?.bosses[0]).toMatchObject({
+      state: "kill",
+      bossId: "2849",
+      bossName: "Nymrissa Wavecaller"
+    });
+    expect(
+      dossier.raids
+        .find((entry) => entry.raidId === "1320")
+        ?.bosses.some((boss) => boss.bossName === "Nymrissa Wavecaller")
+    ).toBe(false);
+  });
+
   it("aggregates the full catalogue with kill, wipe, no-log, and incomplete precedence", () => {
     // Break caught: missing kills must neither erase concrete wipes nor turn a
     // partial linked-character scan into negative evidence.

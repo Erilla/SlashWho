@@ -26,8 +26,11 @@ import { decodedHydratedReport } from "./reports";
  * one `VS / DR / MQD` zone -- is walked only when one of its encounters is the
  * raid's boss, and then only for those encounters, so a Voidspire walk does not
  * spend its cap hydrating Dreamrift fights the decoder would discard. A zone
- * that names a different raid is never taken on the strength of its bosses:
- * older single-raid tiers keep exactly the zones they had.
+ * that names a different raid is treated the same way, because Warcraft Logs
+ * also ranks a season under one raid's name: zone 53, `The Venomous Abyss`,
+ * holds The Tidebound Grotto's boss too (#729). Its bosses place a kill only
+ * within the named raid's own tier, so older single-raid tiers keep exactly
+ * the zones they had.
  */
 export function historicZoneIds(
   value: unknown,
@@ -48,7 +51,7 @@ export function historicZoneIds(
     if (!id || !name) return null;
     const named = lookupRaidByName(name);
     let filter: number[] | null = null;
-    if (named === null) {
+    if (named?.raidId !== journalRaidId) {
       const members = raidEncountersInZone(
         zone?.encounters,
         name,
@@ -57,7 +60,7 @@ export function historicZoneIds(
       if (!members) return null;
       if (members.length === 0) continue;
       filter = members;
-    } else if (named.raidId !== journalRaidId) continue;
+    }
     if (!Array.isArray(zone?.partitions)) return null;
     const partitions = zone.partitions.length ? zone.partitions : [{ id: -1 }];
     for (const value of partitions) {
