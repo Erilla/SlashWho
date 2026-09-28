@@ -4,7 +4,7 @@
 
 **Goal:** Make every Raider.IO Mythic first kill that has a Raider.IO logged encounter into dossier evidence, with the encounter's kill guild and roster, and give Warcraft Logs kills that match one the same roster.
 
-**Architecture:** The Raider.IO client keeps `loggedEncounterId` from `raid-progress` and gains `getLoggedEncounter`. A new `raiderio_logged_encounters` evidence phase reads each first kill's encounter once (50 reads a run, 4 at a time), stores it in shared immutable tables, and publishes per-run `character_raiderio_first_kills` rows in the same transaction as the other evidence. The domain merges those rows into kill events (2-hour match to Warcraft Logs kills), the contract carries an optional `roster` on each first kill, and the web kill card shows "No public logs found" and a lazy "View roster" disclosure.
+**Architecture:** The Raider.IO client keeps `loggedEncounterId` from `raid-progress` and gains `getLoggedEncounter`. A new `raiderio_logged_encounters` evidence phase reads each first kill's encounter (50 reads a run, 4 at a time) and stores the answer in a shared table: a kill with a visible roster is kept as first read, a hidden roster is read again after 7 days, and a permanent refusal (`not_found`, `private`, `schema_drift`) is stored as an unavailable row and asked again after 30 days. Each run publishes `character_raiderio_first_kills` rows in the same transaction as its other evidence. The dossier read leaves suppressed raiders off a roster, the domain merges the rows into kill events (2-hour match to Warcraft Logs kills), the contract carries an optional `roster` on each first kill, and the web kill card shows "No public logs found" and a lazy "View roster" disclosure.
 
 **Tech Stack:** TypeScript, zod 4, PostgreSQL through `pg` with hand-written drizzle migrations, vitest (unit and Testcontainers integration projects), React with Testing Library, pnpm workspaces through Corepack.
 
@@ -17,11 +17,15 @@
 - Never parse or store `killDetails.log.sources` (uploader account names can be BattleTags or Discord handles). Never store a raw Raider.IO response or a raw request URL.
 - Only these logged-encounter fields are kept: `kill` (`pulledAt`, `defeatedAt`, `durationMs`, `isSuccess`, item-level average/min/max), `boss.slug`, `raid.slug`, `raid.difficulty`, `guild` (name, realm slug, region slug) or `null`, `guildPrivacy.raidComps`, `log.deaths.count`, `log.vantus.count`, and per roster entry `character.id`, `name`, `realm.slug`, `region.slug`, `class.name`, `spec.name`, `spec.role`, `itemLevelEquipped`.
 - Raider.IO first kills only. Never read later kills, Heroic or Normal.
-- At most 50 logged-encounter reads per run (`request_cap` beyond that), 4 at a time; a thrown read abandons the queue and marks the phase `limited`.
-- A logged encounter never changes: an id already stored in `raiderio_logged_encounters` is never read again.
-- Matching tolerance is `STORED_KILL_MATCH_MS` (2 hours), the constant that already exists in `packages/application/src/verified-kills.ts:21`.
+- At most 50 logged-encounter reads per run (`request_cap` beyond that), 4 at a time; a thrown read abandons the queue and marks the phase `limited`. Re-reads count against the same 50 and queue behind first reads.
+- No worker-wide Raider.IO limiter is added. The per-run bounds stand: 50 encounter reads, 50 rank requests and at most one `getCharacter`; a 429 limits the phase.
+- What is stored and when it is read again: a read with a visible roster is never read again; a read whose roster was private is read again once its `read_at` is more than 7 days old; a permanent answer (`not_found`, a 403 `private`, `schema_drift`) is an unavailable row with its code and `read_at`, read again once more than 30 days old. A stored read is never replaced by an unavailable answer.
+- A `request_cap` from this phase never schedules a `capRetryMs` re-run. The backlog drains through ordinary runs, 50 at a time.
+- A roster member under an active `suppressed_characters` row is left off the roster every dossier read shows. The rows stay stored; the player and role counts stay Raider.IO's.
+- Matching tolerance is `STORED_KILL_MATCH_MS` (2 hours), the constant that already exists in `packages/application/src/verified-kills.ts:21`. The match rule and the "empty roster is private" rule are each written once, in `@slashwho/domain`, and imported everywhere else.
 - Migration number `0066`; renumber (file, journal `idx`, `when`, and `tests/integration/migrations.test.ts`) if another lands first.
 - A Raider.IO first kill never replaces or removes a Warcraft Logs kill. A partial or targeted publish carries every stored Raider.IO first kill forward; a limited `raiderio_logged_encounters` phase makes the run partial.
+- Tests and fixtures use synthetic identities only: characters `Alfa`, `Bravo`, `Charlie`; guild `Fixture Guild Alfa`; Raider.IO character ids `424_242`/`424_243`; logged-encounter ids `700_001`-`700_003`. The owner's own characters (`Ryii`) may appear as elsewhere in the suite.
 - "No public logs found" is display text for an empty list, never numeric zero. An unavailable roster is its own state, never "not present". A pug kill shows "—".
 - Assembled dossier responses stay `Cache-Control: no-store` (nothing here touches the route).
 - No live Raider.IO or Warcraft Logs traffic in any test. Fixtures are sanitised and small.
@@ -31,23 +35,35 @@
 - A Raider.IO kill list that fails (private profile, 429) on a character that already has stored Raider.IO first kills: the kills must survive the run unchanged, not vanish from a complete publish. Pinned in Task 5 ("carries stored first kills forward when Raider.IO cannot answer").
 - A logged encounter whose `roster` is an empty array while `raidComps` is `true`: the panel must say "Roster unavailable", never render an empty table. Pinned in Task 2 ("treats an empty roster as unavailable, never as nobody").
 - A roster member with no `itemLevelEquipped`: shown as "—", never `0`. Pinned in Task 2 (parser keeps `null`) and Task 7 (table shows "—").
-- A logged encounter answering 404 forever (a deleted log): the run must not stay `partial` on every future run. Permanent answers (`not_found`, `private`, `schema_drift`) mark that kill's encounter unavailable without limiting the phase. Pinned in Task 5 ("does not hold the run partial for a permanent answer").
+- A logged encounter answering 404 forever (a deleted log): the run must not stay `partial`, and later runs must not ask again. The permanent answer is stored as an unavailable row and asked again only after 30 days. Pinned in Task 5 ("does not hold the run partial for a permanent answer" and "asks once about a deleted log across two runs").
+- A character with more than 50 unread logged encounters (the rollout backlog): the run is `partial` with `request_cap`, but no cap retry is scheduled; the next ordinary run reads the next 50. Pinned in Task 5 ("drains a capped backlog on ordinary runs, never on a cap retry").
+- A raider on the roster who has since been removed (`suppressed_characters`): never shown on anyone's dossier, while the counts stay Raider.IO's. Pinned in Task 4 ("leaves a suppressed raider off the roster a dossier reads, and still counts them") and Task 6 ("counts every raider Raider.IO listed, shown or not").
+- A roster first read as private: read again once its `read_at` is more than 7 days old; a visible roster is never read again. Pinned in Task 5 ("reads a hidden roster again after a week, and a visible one never").
+- A run whose Warcraft Logs kill scan was skipped and whose Raider.IO phase also fell short: it must stay Warcraft Logs-incomplete, so no "No qualifying public logs found" rests on a scan that never ran. Pinned in Task 6 ("keeps a skipped-scan run incomplete even when Raider.IO also fell short").
 - A Raider.IO kill 2 h 1 min from the Warcraft Logs kill of the same boss on the same UTC date: it is not a match, but the dossier's existing same-region, same-date grouping still shows one event for the night, dated by the earlier kill, with the Warcraft Logs reports and parses and the Raider.IO roster. Pinned in Task 6 ("keeps a kill just outside the tolerance in the same-date event, dated by the earlier").
+- Grong: Raider.IO ranks both faction versions as one boss (`grong`). A Raider.IO Grong kill must be placed, and must match either version's Warcraft Logs kill. Pinned in Task 3 ("shows Raider.IO's one Grong under the Grong the Journal lists first" and "matches Raider.IO's Grong to either faction's Warcraft Logs kill").
 
 ## Decisions this plan makes that the spec did not settle
 
 1. **Where the character's Raider.IO id comes from.** Nothing in a run knows it: `RaiderIoCharacter` (`packages/raiderio/src/types.ts:3-20`) has no id and `normalize.ts` drops `characterDetails.character.id`. The client now keeps it as `raiderIoCharacterId`, and the phase makes one `getCharacter` read, only when some encounter with a visible roster has not yet been accepted for this character. Steady-state runs still make no request.
 2. **Presence can fail.** A kill whose roster is visible but does not hold the character's id is not published. If the id cannot be learned, those kills are withheld this run and the phase is `limited` (so the run is partial and nothing stored is dropped).
-3. **Which answers limit the phase.** Only retryable ones (`request_cap`, `rate_limited`, `unavailable`). `not_found`, `private` and `schema_drift` record that kill's encounter as unavailable with the code but do not make the run partial, or a deleted log would hold the character partial forever.
-4. **A logged encounter that is not a successful Mythic kill, or names another boss,** is `schema_drift`.
-5. **Empty roster.** A roster that is missing _or empty_ is `private`, so no empty table is ever drawn.
+3. **Which answers limit the phase.** Only retryable ones (`request_cap`, `rate_limited`, `unavailable`). `not_found`, a 403 `private` and `schema_drift` are permanent: the answer is stored in `raiderio_logged_encounters` as an unavailable row (`unavailable_code`, `read_at`), the kill is published unavailable with the code, and the run is not made partial. The row stops the id being read again for 30 days, so permanent answers never fill the cap on later runs.
+4. **A logged encounter that is not a successful Mythic kill, or names another boss,** is `schema_drift`, a permanent answer.
+5. **Empty roster.** A roster that is missing _or empty_ is `private`, so no empty table is ever drawn. The rule is `isRosterShown` in `packages/domain/src/logged-encounter.ts`, written once: the client applies it to each response, and the dossier applies it again only to the roster left once suppressed raiders are taken off.
 6. **Complete-publish carry-forward.** The spec says "plus kills in terminal tiers", but terminal tiers are keyed by Warcraft Logs zone id (`character_terminal_tiers.raid_id`) and a Raider.IO first kill carries only Raider.IO slugs. The implementable equivalent is used: a complete publish keeps what the run found again plus every stored first kill in a Raider.IO raid the run did not ask about (tiers left out by `historicTierOrdinalsFrom`, which are exactly those closed below the terminal floor). A run that did not read the kill list at all publishes no Raider.IO section, and storage carries everything forward.
-7. **The run-level reason for a Raider.IO-only partial.** `character_evidence_runs_completion_limitations_check` (`packages/database/src/schema.ts:961-964`) and the publish guard (`packages/database/src/evidence/repository.ts:746-757`) reject a partial with no reason. A new `raiderio_limitation_code` column is the fourth reason, and the dossier still treats such a run as Warcraft Logs-complete so its "no logs" bosses do not flip to "Evidence incomplete".
-8. **Guild for an unread encounter.** `character_raiderio_first_kills` also keeps Raider.IO's own `raid-progress` guild attribution (nullable), used for display and world rank only while the encounter has not been read.
-9. **Rank lookups for unmatched kills** run inside the new phase with their own 50-request bound and 4-way pool, and never limit the phase: a missing rank is looked up again on the next run, exactly as `raiderio_rankings` treats a stored null.
-10. **Where Method's 20 Jul rank is pinned.** The domain only carries a stored rank; the rank is computed at collection time, so the by-name test lives in the application (Task 5), not the domain.
+7. **The run-level reason for a Raider.IO-only partial.** `character_evidence_runs_completion_limitations_check` (`packages/database/src/schema.ts:956-964`) and the publish guard (`packages/database/src/evidence/repository.ts:734-757`) reject a partial with no reason. A new `raiderio_limitation_code` column is the fourth reason. The dossier treats a Raider.IO-only partial as Warcraft Logs-complete only when the run's kill scan ran: `kill_scan_skipped` is now loaded onto the run (`killScanSkipped`), and a skipped-scan partial stays incomplete whatever else it names. That also closes the same gap in the existing parse-budget branch.
+8. **Guild for an unread encounter.** `character_raiderio_first_kills` also keeps Raider.IO's own `raid-progress` guild attribution (nullable). It is used for display only, while the encounter has not been read; it is never used for a world rank.
+9. **Rank lookups** run inside the new phase with their own 50-request bound and 4-way pool, and never limit the phase. Only a kill whose logged encounter was read is ranked, because only it can stand as a kill event of its own; a kill with no logged encounter, or one not yet read, costs no rank request. A rank once checked is kept with its `historic_rank_checked_at`, a null rank included, so a checked kill is never asked about again.
+10. **Where the later-kill rank rule is pinned.** The domain only carries a stored rank; the rank is computed at collection time, so the test lives in the application (Task 5), not the domain. It uses a synthetic guild with the problem's dates (a guild's first kill on 8 Apr ranked #3, a 20 Jul kill with the same guild unranked).
 11. **Character key on `character_raiderio_first_kills`.** Like `character_mythic_kills`, the row is keyed by `evidence_run_id`; the character is the run's.
 12. **Recorded fixtures.** The recorded-payload gate (`scripts/recorded-payloads.mts`) has no `raid-progress` or logged-encounter endpoint, no ISO-timestamp kind and no id kind, and it refuses any path off its allow-list, so a recording cannot hold `log.sources`. Task 1 adds both endpoints and two leaf kinds; the "sources is dropped" test injects `log.sources` into the fixture body at test time.
+13. **Re-read intervals.** `RAIDER_IO_PRIVATE_ROSTER_REREAD_MS` (7 days) and `RAIDER_IO_UNAVAILABLE_ENCOUNTER_REREAD_MS` (30 days) live in the application. Re-reads queue behind first reads. A re-read the cap leaves out keeps its stored answer and does not limit the phase, since nothing is missing. A re-read that answers permanently leaves a stored private read as it is and only refreshes its `read_at`: a stored read is never unread. Storage enforces the same thing, since an available row is never overwritten and an unavailable answer never overwrites a read.
+14. **Suppression filtering.** `raiderio_logged_encounter_members` gains `normalized_name`, written from `name` as every character key is normalised. Roster members' realm slugs are folded to the Blizzard form (lower case, accents dropped) by the client, as `parseCharacterPath` (`packages/domain/src/character-key.ts`) folds them, so a member's key is spelled as a suppression's is. The kill guild's realm is only lower-cased, because it goes back to Raider.IO in a rank request. The dossier's load (`loadPublishedRaiderIoFirstKills`) then leaves out members under an active suppression with the same `NOT EXISTS` that `packages/database/src/snapshots.ts:74-81` uses, and adds `roleCounts` over every stored member. The phase's own read (`raiderIoLoggedEncounters`) stays unfiltered, because the presence check needs the whole roster and never shows it. The rows are kept on removal (user decision, 2026-09-28).
+15. **No cap retry.** `retryAfterMs` ignores a Raider.IO `request_cap`, so the rollout backlog never turns into full evidence runs that spend Warcraft Logs points to read Raider.IO. `rate_limited` and `unavailable` still schedule their ordinary retry.
+16. **Run cost.** `character_evidence_run_costs` gains `raiderio_logged_encounter_requests` in the same migration, fed by the `raiderIoLoggedEncounterRequests` counter. The one `getCharacter` read is a Raider.IO character read, so it is counted under the existing `raiderIoHistoricRequests` counter, never under the encounter counter.
+17. **Grong.** Raider.IO's slug overrides map several Journal encounters to one Raider.IO boss (`2325` and `2340` both to `grong`). The reverse lookup returns the first the Journal lists (`2325`) when every match is in the same raid and carries that override. The match rule compares Raider.IO slugs, so a Raider.IO Grong kill matches either faction's Warcraft Logs kill.
+18. **Withheld Raider.IO kills.** An out-of-window Raider.IO kill is withheld under source `raiderio`. When it matches a Warcraft Logs kill that was itself withheld, it is not tallied again: one kill, counted once.
+19. **One limitation mapper.** `historicKillLimitation`, `bossRankingLimitation` and the new logged-encounter case collapse into one `raiderIoLimitation` in `packages/raiderio/src/client.ts`.
 
 ---
 
@@ -64,11 +80,12 @@
 **Raider.IO client (Task 2)**
 
 - Modify `packages/raiderio/src/types.ts`, `client.ts`, `normalize.ts`, `index.ts`, `client.test.ts`.
+- Create `packages/domain/src/logged-encounter.ts` (`isRosterShown`) and `logged-encounter.test.ts`; modify `packages/domain/src/index.ts`.
 
 **Domain catalogue (Task 3)**
 
-- Create `packages/domain/src/kill-matching.ts` — `STORED_KILL_MATCH_MS`.
-- Modify `packages/domain/src/raid-catalogue.ts` — `lookupRaidEncounterByRaiderIoSlugs`.
+- Create `packages/domain/src/kill-matching.ts` — `STORED_KILL_MATCH_MS` and `matchesRaiderIoKill`, the one match rule — and `kill-matching.test.ts`.
+- Modify `packages/domain/src/raid-catalogue.ts` — `lookupRaidEncounterByRaiderIoSlugs`, which places Grong.
 - Modify `packages/domain/src/index.ts`, `packages/domain/src/raid-catalogue.test.ts`, `packages/application/src/verified-kills.ts`.
 
 **Database (Task 4)**
@@ -76,8 +93,8 @@
 - Create `packages/database/drizzle/0066_raiderio_logged_kills.sql`.
 - Modify `packages/database/drizzle/meta/_journal.json`, `packages/database/src/schema.ts`, `repositories.ts`, `mappers.ts`, `index.ts`.
 - Create `packages/database/src/evidence/raiderio-first-kills.ts` — load/save SQL for the three tables.
-- Modify `packages/database/src/evidence/merge.ts`, `merge.test.ts`, `load.ts`, `repository.ts`.
-- Create `tests/integration/repositories-raiderio-first-kills.test.ts`.
+- Modify `packages/database/src/evidence/merge.ts`, `merge.test.ts`, `load.ts`, `repository.ts` (publish guard, first-kill insert, run-cost column).
+- Create `tests/integration/repositories-raiderio-first-kills.test.ts`, including suppression, re-read storage and run-cost tests.
 - Modify `tests/integration/migrations.test.ts`, `tests/integration/repository-fixtures.ts`.
 
 **Application phase (Task 5)**
@@ -91,7 +108,7 @@
 - Modify `packages/domain/src/applicant-dossier.ts`, `applicant-dossier.test.ts`, `index.ts`.
 - Modify `packages/contracts/src/dossier.ts`, `index.ts`, `contracts.test.ts`.
 - Create `packages/application/src/raiderio-first-kill-evidence.ts` and its test.
-- Modify `packages/application/src/applicant-dossier-service.ts`.
+- Modify `packages/application/src/applicant-dossier-service.ts`, `applicant-dossier-service.test.ts`.
 
 **Web (Task 7)**
 
@@ -112,8 +129,8 @@ The committed-recording gate (`scripts/recorded-payloads.test.mts`, part of `tes
 
 **Files:**
 
-- Modify: `scripts/recorded-payloads.mts` (types at lines 14-45, `PlaceholderBook` at 356-389, `raiderio.character` policy at 212-247, `recordLeaf` at 405-457, `verifyLeaf` at 555-587)
-- Modify: `scripts/recorded-payloads.test.mts` (the `recordPayload` "drops every field" test at ~290, `handBuiltFixtures` at ~470-560)
+- Modify: `scripts/recorded-payloads.mts` (types at lines 16-40, `raiderio.character` policy at 212-246, `PlaceholderBook` at 406, `recordLeaf` at 451, `verifyLeaf` at 589)
+- Modify: `scripts/recorded-payloads.test.mts` (the `recordPayload` "drops every field" test at 243, `handBuiltFixtures` at 447-595)
 - Create: `tests/fixtures/recorded/raiderio/raid-progress-logged-first-kill.json`
 - Create: `tests/fixtures/recorded/raiderio/logged-encounter-guild-kill.json`
 - Create: `tests/fixtures/recorded/raiderio/logged-encounter-no-guild.json`
@@ -186,7 +203,7 @@ describe("Raider.IO kill logs", () => {
       roster: [
         {
           character: {
-            id: 250_442_362,
+            id: 424_242,
             name: "Realname",
             class: { id: 12, name: "Demon Hunter" },
             spec: { name: "Havoc", role: "dps" },
@@ -254,17 +271,17 @@ describe("Raider.IO kill logs", () => {
                   {
                     slug: "midnight-falls",
                     firstDefeated: "2026-07-20T17:25:57.000Z",
-                    loggedEncounterId: 10_095_623
+                    loggedEncounterId: 700_001
                   },
                   {
                     slug: "chimaerus-the-undreamt-god",
                     firstDefeated: "2026-07-13T20:00:00.000Z",
-                    loggedEncounterId: 3_284_157
+                    loggedEncounterId: 700_002
                   },
                   {
                     slug: "belo-ren-child-of-al-ar",
                     firstDefeated: "2026-07-20T16:00:00.000Z",
-                    loggedEncounterId: 10_095_623
+                    loggedEncounterId: 700_001
                   }
                 ]
               }
@@ -299,7 +316,7 @@ describe("Raider.IO kill logs", () => {
       };
     };
     recording.body.killDetails.kill.pulledAt = "2026-07-20T17:17:29.977Z";
-    recording.body.killDetails.roster[0]!.character.id = 250_442_362;
+    recording.body.killDetails.roster[0]!.character.id = 424_242;
     expect(verifyRecording(recording)).toEqual([
       {
         path: "body.killDetails.kill.pulledAt",
@@ -629,19 +646,39 @@ In `verifyLeaf`, add two cases:
     }
   },
   "ignored": [
+    "characterRaidProgress.raidProgress[].aotc",
+    "characterRaidProgress.raidProgress[].cuttingEdge",
+    "characterRaidProgress.raidProgress[].encountersDefeated.heroic",
     "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].artifactTraits",
     "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].bossIcon",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.displayName",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.faction",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.id",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.path",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.realm.id",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.realm.name",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.region.name",
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guild.region.short_name",
     "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].guildId",
     "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].itemLevel",
     "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].lastDefeated",
     "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].lastRaidWeek",
     "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].numKills",
-    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].raidWeek"
+    "characterRaidProgress.raidProgress[].encountersDefeated.mythic[].raidWeek",
+    "characterRaidProgress.raidProgress[].encountersDefeated.normal",
+    "characterRaidProgress.raidProgress[].progress",
+    "characterRaidProgress.raidProgress[].raidWeekAotC",
+    "characterRaidProgress.raidProgress[].raidWeekCuttingEdge",
+    "characterRaidProgress.raidProgress[].tier",
+    "characterRaidProgress.raidProgress[].weekRanges",
+    "characterRaidProgress.tier"
   ]
 }
 ```
 
-`tests/fixtures/recorded/raiderio/logged-encounter-guild-kill.json` — the Method Midnight Falls kill, roster cut to five, the connected character first:
+The `ignored` list is the drift baseline, so it names every key the real response carries that the allow-list drops: the same keys `tests/fixtures/raiderio/raid-progress-valid.json` carries (`characterRaidProgress.tier`; per raid `aotc`, `cuttingEdge`, `tier`, `progress`, `weekRanges`, `raidWeekAotC`, `raidWeekCuttingEdge`, the `normal` and `heroic` lists; per kill the guild's `id`, `displayName`, `faction`, `path`, `realm.id`, `realm.name`, `region.name` and `region.short_name`), sorted as the recorder sorts them.
+
+`tests/fixtures/recorded/raiderio/logged-encounter-guild-kill.json` — a guild's Midnight Falls kill, every identity replaced by the recorder's placeholders, roster cut to five, the connected character first:
 
 ```json
 {
@@ -969,14 +1006,18 @@ git commit -m "test(fixtures): record Raider.IO kill lists and logged encounters
 **Files:**
 
 - Modify: `packages/raiderio/src/types.ts` (`RaiderIoCharacter` at 3-20, `HistoricMythicKill` at 42-47, `RaiderIoGateway` at 99-122)
-- Modify: `packages/raiderio/src/client.ts` (`historicRaidProgressResponseSchema` at 96-120, `normalizeHistoricRaidProgress` at 188-212, the returned gateway at 630-636)
+- Modify: `packages/raiderio/src/client.ts` (`historicRaidProgressResponseSchema` at 96-120, `normalizeHistoricRaidProgress` at 188-212, `historicKillLimitation`/`bossRankingLimitation` at 214-258 and their callers at 522, 603, 626, the returned gateway at 630-636)
 - Modify: `packages/raiderio/src/normalize.ts` (`upstreamCharacterSchema` at 22-32, `normalizeCharacterResponse` at 172-196)
 - Modify: `packages/raiderio/src/index.ts`
+- Create: `packages/domain/src/logged-encounter.ts`
+- Test: `packages/domain/src/logged-encounter.test.ts`
+- Modify: `packages/domain/src/index.ts`
 - Test: `packages/raiderio/src/client.test.ts`
 
 **Interfaces:**
 
 - Consumes: fixtures from Task 1.
+- Produces, from `@slashwho/domain`: `isRosterShown(raidComps: boolean | null | undefined, members: readonly unknown[]): boolean`, the one "empty roster is private" rule (Task 6 imports it too).
 - Produces (all exported from `@slashwho/raiderio`):
 
 ```ts
@@ -1100,12 +1141,10 @@ describe("Raider.IO logged encounters", () => {
       readRecorded("logged-encounter-guild-kill")
     );
 
-    const result = await client.getLoggedEncounter("tier-mn-1", 10_095_623);
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
 
     // Not an /api/v1 path, so the access key is never attached.
-    expect(requested).toEqual([
-      "/api/raid/logged-encounters/tier-mn-1/10095623"
-    ]);
+    expect(requested).toEqual(["/api/raid/logged-encounters/tier-mn-1/700001"]);
     expect(result).toEqual({
       kind: "encounter",
       raidSlug: "tier-mn-1",
@@ -1196,7 +1235,7 @@ describe("Raider.IO logged encounters", () => {
       }
     );
 
-    const result = await client.getLoggedEncounter("tier-mn-1", 10_095_623);
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
 
     expect(result.kind).toBe("encounter");
     expect(JSON.stringify(result)).not.toMatch(/Uploader|avatar|sources/);
@@ -1207,7 +1246,7 @@ describe("Raider.IO logged encounters", () => {
       readRecorded("logged-encounter-no-guild")
     );
 
-    const result = await client.getLoggedEncounter("tier-mn-1", 3_284_157);
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_002);
 
     expect(result).toMatchObject({
       kind: "encounter",
@@ -1223,7 +1262,7 @@ describe("Raider.IO logged encounters", () => {
     );
 
     await expect(
-      client.getLoggedEncounter("tier-mn-1", 10_095_623)
+      client.getLoggedEncounter("tier-mn-1", 700_001)
     ).resolves.toMatchObject({
       kind: "encounter",
       defeatedAt: "2020-01-03T00:00:00.000Z",
@@ -1249,12 +1288,30 @@ describe("Raider.IO logged encounters", () => {
         edit
       );
       await expect(
-        client.getLoggedEncounter("tier-mn-1", 10_095_623)
+        client.getLoggedEncounter("tier-mn-1", 700_001)
       ).resolves.toMatchObject({
         roster: { state: "unavailable", reason: "private" }
       });
     }
   );
+
+  it("spells a raider's realm as a character key spells it", async () => {
+    // Break caught: a removal is keyed by the Blizzard realm slug. Kept with
+    // Raider.IO's accents, a removed raider on an accented realm would never
+    // match their suppression and would still be shown on other dossiers.
+    const { client } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      (body) => {
+        (
+          details(body).roster![0]!.character.realm as Record<string, unknown>
+        ).slug = "Aggra-Português";
+      }
+    );
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
+    if (result.kind !== "encounter" || result.roster.state !== "available")
+      throw new Error("expected_available_roster");
+    expect(result.roster.members[0]!.realm).toBe("aggra-portugues");
+  });
 
   it("keeps a missing item level as null, never zero", async () => {
     const { client } = loggedEncounterClient(
@@ -1263,7 +1320,7 @@ describe("Raider.IO logged encounters", () => {
         delete details(body).roster![0]!.character.itemLevelEquipped;
       }
     );
-    const result = await client.getLoggedEncounter("tier-mn-1", 10_095_623);
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
     if (result.kind !== "encounter" || result.roster.state !== "available")
       throw new Error("expected_available_roster");
     expect(result.roster.members[0]!.itemLevel).toBeNull();
@@ -1293,7 +1350,7 @@ describe("Raider.IO logged encounters", () => {
       edit
     );
     await expect(
-      client.getLoggedEncounter("tier-mn-1", 10_095_623)
+      client.getLoggedEncounter("tier-mn-1", 700_001)
     ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
   });
 
@@ -1317,7 +1374,7 @@ describe("Raider.IO logged encounters", () => {
       timeoutMs: 50
     });
     await expect(
-      client.getLoggedEncounter("tier-mn-1", 10_095_623)
+      client.getLoggedEncounter("tier-mn-1", 700_001)
     ).resolves.toEqual(expected);
   });
 
@@ -1336,7 +1393,7 @@ describe("Raider.IO logged encounters", () => {
       code: "schema_drift"
     });
     await expect(
-      client.getLoggedEncounter("../tier", 10_095_623)
+      client.getLoggedEncounter("../tier", 700_001)
     ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
     expect(calls).toBe(0);
   });
@@ -1346,7 +1403,7 @@ describe("Raider.IO logged encounters", () => {
       readRecorded("logged-encounter-guild-kill")
     );
     let physical = 0;
-    await client.getLoggedEncounter("tier-mn-1", 10_095_623, undefined, () => {
+    await client.getLoggedEncounter("tier-mn-1", 700_001, undefined, () => {
       physical += 1;
     });
     expect(physical).toBe(1);
@@ -1427,8 +1484,8 @@ describe("Raider.IO kill list logged encounters", () => {
           );
           const body =
             url.searchParams.get("tier") === "35"
-              ? kill("2026-07-20T17:25:57.000Z", 10_095_623)
-              : kill("2026-07-27T18:00:00.000Z", 10_200_000);
+              ? kill("2026-07-20T17:25:57.000Z", 700_001)
+              : kill("2026-07-27T18:00:00.000Z", 700_003);
           return new Response(JSON.stringify(body), { status: 200 });
         },
         baseUrl: "https://fixtures.invalid",
@@ -1442,7 +1499,7 @@ describe("Raider.IO kill list logged encounters", () => {
         kills: [
           expect.objectContaining({
             firstDefeated: "2026-07-20T17:25:57.000Z",
-            loggedEncounterId: 10_095_623
+            loggedEncounterId: 700_001
           })
         ]
       });
@@ -1458,7 +1515,7 @@ describe("Raider.IO character id", () => {
           JSON.stringify({
             characterDetails: {
               character: {
-                id: 250_442_362,
+                id: 424_242,
                 name: "Sentinel",
                 level: 90,
                 class: { name: "Demon Hunter" },
@@ -1474,7 +1531,7 @@ describe("Raider.IO character id", () => {
     });
 
     await expect(client.getCharacter(sentinel)).resolves.toMatchObject({
-      raiderIoCharacterId: 250_442_362
+      raiderIoCharacterId: 424_242
     });
   });
 
@@ -1489,10 +1546,29 @@ describe("Raider.IO character id", () => {
 });
 ```
 
+Create `packages/domain/src/logged-encounter.test.ts`:
+
+```ts
+import { expect, it } from "vitest";
+
+import { isRosterShown } from "./logged-encounter";
+
+it.each([
+  ["a visible roster", true, [{}], true],
+  ["a roster whose privacy Raider.IO did not state", undefined, [{}], true],
+  ["a guild with no privacy block (a pug)", null, [{}], true],
+  ["a hidden composition", false, [{}], false],
+  ["an empty roster", true, [], false]
+] as const)("shows %s: %s", (_name, raidComps, members, shown) => {
+  // An empty roster reads as "nobody was there", which Raider.IO never means.
+  expect(isRosterShown(raidComps, members)).toBe(shown);
+});
+```
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `corepack pnpm exec vitest run --project unit packages/raiderio/src/client.test.ts`
-Expected: FAIL — `client.getLoggedEncounter is not a function`, `loggedEncounterId` missing from historic kills, and `raiderIoCharacterId` missing.
+Run: `corepack pnpm exec vitest run --project unit packages/raiderio/src/client.test.ts packages/domain/src/logged-encounter.test.ts`
+Expected: FAIL — `client.getLoggedEncounter is not a function`, `loggedEncounterId` missing from historic kills, `raiderIoCharacterId` missing, and `./logged-encounter` does not exist.
 
 - [ ] **Step 3: Add the types**
 
@@ -1583,7 +1659,7 @@ export type LoggedEncounterResult =
 Add to `RaiderIoGateway`, after `getMythicBossRankings`:
 
 ```ts
-  /** One logged encounter, read once: a logged encounter never changes. */
+  /** One logged encounter. The phase decides when one is read again (#732). */
   getLoggedEncounter(
     raidSlug: string,
     loggedEncounterId: number,
@@ -1593,6 +1669,31 @@ Add to `RaiderIoGateway`, after `getMythicBossRankings`:
 ```
 
 - [ ] **Step 4: Read the id and the encounter**
+
+Create `packages/domain/src/logged-encounter.ts`, the one place the rule is written:
+
+```ts
+/**
+ * Whether a Raider.IO logged encounter's roster can be shown (#732). A hidden
+ * composition, a missing roster and an empty one all mean the same to a
+ * reader: nobody can be shown, which is never "nobody was there". Decided
+ * here once. The Raider.IO client applies it to each response, and the
+ * dossier applies it again to the roster left once suppressed raiders are
+ * taken off.
+ */
+export function isRosterShown(
+  raidComps: boolean | null | undefined,
+  members: readonly unknown[]
+): boolean {
+  return raidComps !== false && members.length > 0;
+}
+```
+
+In `packages/domain/src/index.ts`, add:
+
+```ts
+export { isRosterShown } from "./logged-encounter";
+```
 
 In `packages/raiderio/src/client.ts`, add `loggedEncounterId` to the Mythic entry of `historicRaidProgressResponseSchema`:
 
@@ -1612,7 +1713,7 @@ In `normalizeHistoricRaidProgress`, add to the pushed kill:
 
 The earliest-kill merge (lines 517-532) already keeps whole kill objects, so the id travels with the kill it keeps; the test above pins that.
 
-Import the new types at the top of `client.ts` (`LoggedEncounter`, `LoggedEncounterResult`) alongside the existing `./types` import, and add after `guildEncountersSchema`:
+Import the new types at the top of `client.ts` (`LoggedEncounter`, `LoggedEncounterResult`, `RaiderIoEvidenceLimitation`) alongside the existing `./types` import, change the first import to `import { isRosterShown, isValidCharacterKey, type CharacterKey } from "@slashwho/domain";`, and add after `guildEncountersSchema`:
 
 ```ts
 // Recorded 2026-09-28. Only these fields are read. `log.sources` names the
@@ -1667,6 +1768,15 @@ const loggedEncounterResponseSchema = z.object({
 
 const lowerCase = (value: string) => value.toLocaleLowerCase("en-US");
 
+/**
+ * A roster member's realm as every character key spells it: lower case with
+ * the accents dropped, as `parseCharacterPath` folds a Raider.IO URL
+ * ("aggra-português" is "aggra-portugues"). A suppression is keyed the same
+ * way, so a removed raider is recognised on another character's roster.
+ */
+const memberRealm = (value: string) =>
+  lowerCase(value).normalize("NFD").replace(/\p{M}/gu, "");
+
 function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
   const { killDetails } = loggedEncounterResponseSchema.parse(value);
   // A first kill's log is a successful Mythic pull. Anything else is not the
@@ -1675,10 +1785,7 @@ function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
     throw new Error("logged_encounter_not_a_mythic_kill");
   }
   const roster = killDetails.roster ?? [];
-  // A hidden composition, a missing roster and an empty one all mean the
-  // same to a reader: nobody can be shown, which is not "nobody was there".
-  const hidden =
-    killDetails.guildPrivacy?.raidComps === false || roster.length === 0;
+  const hidden = !isRosterShown(killDetails.guildPrivacy?.raidComps, roster);
   return {
     kind: "encounter",
     raidSlug: killDetails.raid.slug,
@@ -1707,7 +1814,7 @@ function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
           members: roster.map(({ character }) => ({
             raiderIoCharacterId: character.id,
             name: character.name,
-            realm: lowerCase(character.realm.slug),
+            realm: memberRealm(character.realm.slug),
             region: lowerCase(character.region.slug),
             className: character.class.name,
             specName: character.spec.name,
@@ -1717,10 +1824,22 @@ function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
         }
   };
 }
+```
 
-function loggedEncounterLimitation(
-  error: unknown
-): Extract<LoggedEncounterResult, { kind: "limitation" }> {
+Replace `historicKillLimitation` and `bossRankingLimitation` (`client.ts:214-258`, the same switch written twice) with one mapper, which the new method uses too:
+
+```ts
+type RaiderIoLimitationResult = Readonly<{
+  kind: "limitation";
+  code: RaiderIoEvidenceLimitation;
+  retryAfterMs?: number;
+}>;
+
+/**
+ * An upstream failure as a limitation, for every evidence method: the kill
+ * list, the boss rankings and a logged encounter answer failures alike.
+ */
+function raiderIoLimitation(error: unknown): RaiderIoLimitationResult {
   if (!isUpstreamFailure(error)) {
     return { kind: "limitation", code: "unavailable" };
   }
@@ -1742,6 +1861,8 @@ function loggedEncounterLimitation(
   }
 }
 ```
+
+and change its three existing callers (`return historicKillLimitation(outcome.error);` at line 522, `return bossRankingLimitation(error);` at 603 and 626) to `return raiderIoLimitation(...)` with the same argument. `RaiderIoLimitationResult` is assignable to the limitation member of `HistoricMythicKillResult`, `MythicBossRankingsResult` and `LoggedEncounterResult` alike. The existing limitation tests of both older methods keep passing unchanged, and that is what pins the merge.
 
 Inside `createRaiderIoClient`, after `getMythicBossRankings`, add:
 
@@ -1775,7 +1896,7 @@ async function getLoggedEncounter(
     );
   } catch (error) {
     if (signal?.aborted) throw signal.reason;
-    return loggedEncounterLimitation(error);
+    return raiderIoLimitation(error);
   }
 }
 ```
@@ -1807,10 +1928,10 @@ In `packages/raiderio/src/index.ts`, add to the type exports:
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `corepack pnpm exec vitest run --project unit packages/raiderio/src`
+Run: `corepack pnpm exec vitest run --project unit packages/raiderio/src packages/domain/src/logged-encounter.test.ts`
 Expected: PASS.
 
-Run: `corepack pnpm --filter @slashwho/raiderio typecheck`
+Run: `corepack pnpm --filter @slashwho/raiderio typecheck && corepack pnpm --filter @slashwho/domain typecheck`
 Expected: exits 0.
 
 Run: `corepack pnpm typecheck`
@@ -1819,18 +1940,19 @@ Expected: FAIL only where a hand-written `RaiderIoGateway` fake is now missing `
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/raiderio tests/e2e/support
+git add packages/raiderio packages/domain/src/logged-encounter.ts packages/domain/src/logged-encounter.test.ts packages/domain/src/index.ts tests/e2e/support
 git commit -m "feat(raiderio): keep logged encounter ids and read a logged encounter (#732)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 3: Domain catalogue: shared match tolerance and Raider.IO slug lookup
+### Task 3: Domain catalogue: shared match tolerance, the one match rule, and Raider.IO slug lookup
 
 **Files:**
 
 - Create: `packages/domain/src/kill-matching.ts`
-- Modify: `packages/domain/src/raid-catalogue.ts` (after `lookupRaiderIoBoss`, line 918)
+- Test: `packages/domain/src/kill-matching.test.ts`
+- Modify: `packages/domain/src/raid-catalogue.ts` (after `lookupRaiderIoBoss`, which ends at line 918; the Grong overrides are at 359-361)
 - Modify: `packages/domain/src/index.ts`
 - Modify: `packages/application/src/verified-kills.ts:13-21`
 - Test: `packages/domain/src/raid-catalogue.test.ts`
@@ -1840,11 +1962,12 @@ git commit -m "feat(raiderio): keep logged encounter ids and read a logged encou
 - Consumes: nothing.
 - Produces (exported from `@slashwho/domain`):
   - `STORED_KILL_MATCH_MS: number` (2 hours).
-  - `lookupRaidEncounterByRaiderIoSlugs(raidSlug: string, bossSlug: string): RaidCatalogueEncounter | null`.
+  - `lookupRaidEncounterByRaiderIoSlugs(raidSlug: string, bossSlug: string): RaidCatalogueEncounter | null`. When several encounters of one raid share an override slug (Grong), it returns the first the Journal lists.
+  - `matchesRaiderIoKill(raiderIo: Readonly<{ raidSlug: string; bossSlug: string; killedAt: string }>, warcraftLogs: Readonly<{ raidName: string; bossName?: string; killedAt: string }>): boolean`, the one rule for "this Raider.IO first kill is that Warcraft Logs kill". Task 5 and Task 6 both import it.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `packages/domain/src/raid-catalogue.test.ts` (add `lookupRaidEncounterByRaiderIoSlugs` and `STORED_KILL_MATCH_MS` to its imports from `"./raid-catalogue"` and `"./kill-matching"`):
+Append to `packages/domain/src/raid-catalogue.test.ts` (add `lookupRaidEncounterByRaiderIoSlugs` to its import from `"./raid-catalogue"`; `supportedRaidCatalogue` and `lookupRaiderIoBoss` are already imported there):
 
 ```ts
 it.each([
@@ -1885,19 +2008,39 @@ it.each([
   }
 );
 
-it("round-trips every catalogued encounter Raider.IO names", () => {
+it("places every catalogued encounter Raider.IO names under a boss with the same slugs", () => {
   // Pinned against the forward lookup, so the two can never disagree about
-  // which boss a Raider.IO kill is shown under.
+  // which boss a Raider.IO kill is shown under. Where Raider.IO ranks two
+  // Journal encounters as one boss, both place under the same one.
   for (const raid of supportedRaidCatalogue()) {
     for (const encounter of raid.encounters) {
       const slugs = lookupRaiderIoBoss(encounter.raidName, encounter.bossName);
       if (!slugs) continue;
-      expect(
-        lookupRaidEncounterByRaiderIoSlugs(slugs.raidSlug, slugs.bossSlug)
-          ?.bossId
-      ).toBe(encounter.bossId);
+      const placed = lookupRaidEncounterByRaiderIoSlugs(
+        slugs.raidSlug,
+        slugs.bossSlug
+      );
+      expect(placed, `${encounter.raidName} / ${encounter.bossName}`).not.toBe(
+        null
+      );
+      expect(lookupRaiderIoBoss(placed!.raidName, placed!.bossName)).toEqual(
+        slugs
+      );
+      expect(placed!.raidId).toBe(encounter.raidId);
     }
   }
+});
+
+it("shows Raider.IO's one Grong under the Grong the Journal lists first", () => {
+  // Break caught: both faction versions override to `grong`, so a lookup
+  // that demanded exactly one match placed neither, and a Raider.IO Grong
+  // kill was dropped from the dossier without a word.
+  expect(
+    lookupRaidEncounterByRaiderIoSlugs("battle-of-dazaralor", "grong")
+  ).toMatchObject({ bossId: "2325", bossName: "Grong, the Jungle Lord" });
+  expect(
+    lookupRaiderIoBoss("Battle of Dazar'alor", "Grong, the Revenant")
+  ).toEqual({ raidSlug: "battle-of-dazaralor", bossSlug: "grong" });
 });
 
 it("places nothing it cannot name exactly", () => {
@@ -1908,24 +2051,140 @@ it("places nothing it cannot name exactly", () => {
     lookupRaidEncounterByRaiderIoSlugs("not-a-raid", "midnight-falls")
   ).toBeNull();
 });
+```
 
-it("matches stored kills within two hours of Raider.IO's time", () => {
-  expect(STORED_KILL_MATCH_MS).toBe(7_200_000);
+Create `packages/domain/src/kill-matching.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+
+import { matchesRaiderIoKill, STORED_KILL_MATCH_MS } from "./kill-matching";
+
+describe("matchesRaiderIoKill", () => {
+  const midnightFalls = {
+    raidSlug: "tier-mn-1",
+    bossSlug: "midnight-falls",
+    killedAt: "2026-07-20T17:25:57.301Z"
+  };
+
+  it("matches stored kills within two hours of Raider.IO's time", () => {
+    expect(STORED_KILL_MATCH_MS).toBe(7_200_000);
+  });
+
+  it.each([
+    ["an hour later", "2026-07-20T18:25:57.301Z", true],
+    ["exactly two hours later", "2026-07-20T19:25:57.301Z", true],
+    ["two hours and a second later", "2026-07-20T19:25:58.301Z", false],
+    ["an hour earlier", "2026-07-20T16:25:57.301Z", true]
+  ])("matches a Warcraft Logs kill %s: %s", (_name, killedAt, matches) => {
+    expect(
+      matchesRaiderIoKill(midnightFalls, {
+        raidName: "March on Quel'Danas",
+        bossName: "Midnight Falls",
+        killedAt
+      })
+    ).toBe(matches);
+  });
+
+  it("matches the boss by Raider.IO's slugs, whatever zone Warcraft Logs filed it under", () => {
+    expect(
+      matchesRaiderIoKill(midnightFalls, {
+        raidName: "VS / DR / MQD",
+        bossName: "Midnight Falls",
+        killedAt: "2026-07-20T18:00:00.000Z"
+      })
+    ).toBe(true);
+    expect(
+      matchesRaiderIoKill(midnightFalls, {
+        raidName: "March on Quel'Danas",
+        bossName: "Belo'ren, Child of Al'ar",
+        killedAt: "2026-07-20T17:25:57.301Z"
+      })
+    ).toBe(false);
+  });
+
+  it("never matches a kill it cannot name", () => {
+    expect(
+      matchesRaiderIoKill(midnightFalls, {
+        raidName: "March on Quel'Danas",
+        killedAt: "2026-07-20T17:25:57.301Z"
+      })
+    ).toBe(false);
+  });
+
+  it.each(["Grong, the Jungle Lord", "Grong, the Revenant"])(
+    "matches Raider.IO's Grong to either faction's Warcraft Logs kill (%s)",
+    (bossName) => {
+      expect(
+        matchesRaiderIoKill(
+          {
+            raidSlug: "battle-of-dazaralor",
+            bossSlug: "grong",
+            killedAt: "2019-02-12T20:00:00.000Z"
+          },
+          {
+            raidName: "Battle of Dazar'alor",
+            bossName,
+            killedAt: "2019-02-12T20:30:00.000Z"
+          }
+        )
+      ).toBe(true);
+    }
+  );
 });
 ```
 
-(`supportedRaidCatalogue` and `lookupRaiderIoBoss` are already imported by that file; add them if not.)
-
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `corepack pnpm exec vitest run --project unit packages/domain/src/raid-catalogue.test.ts`
+Run: `corepack pnpm exec vitest run --project unit packages/domain/src/raid-catalogue.test.ts packages/domain/src/kill-matching.test.ts`
 Expected: FAIL — `lookupRaidEncounterByRaiderIoSlugs` is not exported and `./kill-matching` does not exist.
 
 - [ ] **Step 3: Implement**
 
-Create `packages/domain/src/kill-matching.ts` (the comment moves here from `verified-kills.ts`):
+In `packages/domain/src/raid-catalogue.ts`, after `lookupRaiderIoBoss`:
 
 ```ts
+/**
+ * The encounter Raider.IO names by its own raid and boss slugs: the reverse of
+ * `lookupRaiderIoBoss`, for evidence that arrives from Raider.IO rather than
+ * from a Warcraft Logs zone (#732).
+ *
+ * Raider.IO ranks some bosses the Journal lists twice as one: both faction
+ * versions of Grong override to `grong`. Such a kill is shown under the one
+ * the Journal lists first. Two encounters that only happen to slug alike, or
+ * that sit in different raids of one Raider.IO tier, stay ambiguous and place
+ * nothing.
+ */
+export function lookupRaidEncounterByRaiderIoSlugs(
+  raidSlug: string,
+  bossSlug: string
+): RaidCatalogueEncounter | null {
+  const matches = [...encounters.values()]
+    .filter(
+      (encounter) =>
+        raiderIoRaidSlugs.get(encounter.raidId) === raidSlug &&
+        (encounter.raiderIoBossSlug ?? raiderIoBossSlug(encounter.bossName)) ===
+          bossSlug
+    )
+    .sort((a, b) => a.bossOrder - b.bossOrder);
+  const first = matches[0];
+  if (!first) return null;
+  if (matches.length === 1) return first;
+  return matches.every(
+    (encounter) =>
+      encounter.raidId === first.raidId &&
+      encounter.raiderIoBossSlug === bossSlug
+  )
+    ? first
+    : null;
+}
+```
+
+Create `packages/domain/src/kill-matching.ts` (the tolerance's comment moves here from `verified-kills.ts`):
+
+```ts
+import { lookupRaiderIoBoss } from "./raid-catalogue";
+
 /**
  * How far a Warcraft Logs kill may sit from Raider.IO's first-defeated time
  * and still be the same kill. Wider than the minutes the two usually differ
@@ -1938,35 +2197,42 @@ Create `packages/domain/src/kill-matching.ts` (the comment moves here from `veri
  * logged encounter's roster to the Warcraft Logs kill it matches (#732).
  */
 export const STORED_KILL_MATCH_MS = 2 * 60 * 60 * 1_000;
-```
 
-In `packages/domain/src/raid-catalogue.ts`, after `lookupRaiderIoBoss`:
-
-```ts
 /**
- * The encounter Raider.IO names by its own raid and boss slugs: the reverse of
- * `lookupRaiderIoBoss`, for evidence that arrives from Raider.IO rather than
- * from a Warcraft Logs zone (#732). Null unless exactly one catalogued
- * encounter carries both slugs.
+ * Whether a Raider.IO first kill is this Warcraft Logs kill (#732): the same
+ * boss, named by Raider.IO's own slugs, within `STORED_KILL_MATCH_MS`. The
+ * one place the rule is written. Collection uses it to leave a matched kill's
+ * rank to the Warcraft Logs lookup, and the dossier uses it to lend the
+ * matched kill a roster, so the two can never disagree about a kill.
+ *
+ * Comparing slugs rather than catalogue ids is what lets Raider.IO's one
+ * Grong match either faction's Warcraft Logs kill. Who killed it is the
+ * caller's to compare: collection holds one character, and the dossier many.
  */
-export function lookupRaidEncounterByRaiderIoSlugs(
-  raidSlug: string,
-  bossSlug: string
-): RaidCatalogueEncounter | null {
-  const matches = [...encounters.values()].filter(
-    (encounter) =>
-      raiderIoRaidSlugs.get(encounter.raidId) === raidSlug &&
-      (encounter.raiderIoBossSlug ?? raiderIoBossSlug(encounter.bossName)) ===
-        bossSlug
+export function matchesRaiderIoKill(
+  raiderIo: Readonly<{ raidSlug: string; bossSlug: string; killedAt: string }>,
+  warcraftLogs: Readonly<{
+    raidName: string;
+    bossName?: string;
+    killedAt: string;
+  }>
+): boolean {
+  if (warcraftLogs.bossName === undefined) return false;
+  const boss = lookupRaiderIoBoss(warcraftLogs.raidName, warcraftLogs.bossName);
+  return (
+    boss?.raidSlug === raiderIo.raidSlug &&
+    boss.bossSlug === raiderIo.bossSlug &&
+    Math.abs(
+      Date.parse(warcraftLogs.killedAt) - Date.parse(raiderIo.killedAt)
+    ) <= STORED_KILL_MATCH_MS
   );
-  return matches.length === 1 ? matches[0]! : null;
 }
 ```
 
 In `packages/domain/src/index.ts`, add `lookupRaidEncounterByRaiderIoSlugs` to the `./raid-catalogue` export list, and:
 
 ```ts
-export { STORED_KILL_MATCH_MS } from "./kill-matching";
+export { matchesRaiderIoKill, STORED_KILL_MATCH_MS } from "./kill-matching";
 ```
 
 In `packages/application/src/verified-kills.ts`, delete the local `STORED_KILL_MATCH_MS` constant and its comment (lines 13-21) and import it:
@@ -1982,19 +2248,19 @@ import {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `corepack pnpm exec vitest run --project unit packages/domain/src/raid-catalogue.test.ts packages/application/src/verified-kills.test.ts`
-Expected: PASS.
+Run: `corepack pnpm exec vitest run --project unit packages/domain/src packages/application/src/verified-kills.test.ts`
+Expected: PASS, the whole domain suite included (the existing Grong tests at `raid-catalogue.test.ts:280-296` keep both Grongs apart for Warcraft Logs; nothing here changes the forward lookups).
 
 Run: `corepack pnpm --filter @slashwho/domain typecheck && corepack pnpm --filter @slashwho/application typecheck`
 Expected: exits 0.
 
-If the round-trip test fails for some encounter, the reverse lookup found two encounters for one slug pair: print them, and do not loosen the test — report the collision.
+If the placement test fails for some other encounter, two encounters share a slug pair without an override: print them, and do not loosen the test. Report the collision.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/domain/src packages/application/src/verified-kills.ts
-git commit -m "feat(domain): place Raider.IO slugs in the catalogue and share the kill match tolerance (#732)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git commit -m "feat(domain): place Raider.IO slugs in the catalogue and share the kill match rule (#732)" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2005,13 +2271,13 @@ git commit -m "feat(domain): place Raider.IO slugs in the catalogue and share th
 
 - Create: `packages/database/drizzle/0066_raiderio_logged_kills.sql`
 - Modify: `packages/database/drizzle/meta/_journal.json` (append after idx 64)
-- Modify: `packages/database/src/schema.ts` (imports at 1-18; `characterEvidenceRuns` at 829-966; after `characterMythicWipes`)
-- Modify: `packages/database/src/repositories.ts` (`CharacterEvidenceRun` 291-328, `CompletedCharacterEvidence` 515-526, `StagedEvidenceCollection` 707-760, `EvidenceRepository.publish` 982-1030)
-- Modify: `packages/database/src/mappers.ts` (`EvidenceRunRow` 194-222, `evidenceRunModeSql` 374-376, `mapEvidenceRun` 412-445)
+- Modify: `packages/database/src/schema.ts` (imports at 1-18; `characterEvidenceRuns` at 829-966; `characterEvidenceRunCosts`, `raiderIoRankingsRequests` at 1172; after `characterMythicWipes`)
+- Modify: `packages/database/src/repositories.ts` (`CharacterEvidenceRun` 291-328, `CompletedCharacterEvidence` 515-526, `StagedEvidenceCollection` 707-760, `EvidenceRunCost.requests` 800-822, `EvidenceRepository.publish` 982-1030)
+- Modify: `packages/database/src/mappers.ts` (`EvidenceRunRow` 194-222, `evidenceRunModeSql` 376-378, `mapEvidenceRun` 411-445)
 - Create: `packages/database/src/evidence/raiderio-first-kills.ts`
 - Modify: `packages/database/src/evidence/merge.ts`, `merge.test.ts`
 - Modify: `packages/database/src/evidence/load.ts:28-115`
-- Modify: `packages/database/src/evidence/repository.ts` (publish guard 746-757, inserts after 1004, `UPDATE character_evidence_runs` 1025-1086, new methods)
+- Modify: `packages/database/src/evidence/repository.ts` (publish guard 734-757, inserts after 1004, `UPDATE character_evidence_runs` 1025-1086, `recordRunCost` 1879-2005, new methods)
 - Modify: `packages/database/src/index.ts`
 - Create: `tests/integration/repositories-raiderio-first-kills.test.ts`
 - Modify: `tests/integration/migrations.test.ts` (table list 41-83, journal slice 172-221), `tests/integration/repository-fixtures.ts:31-58`
@@ -2031,23 +2297,33 @@ export interface RaiderIoLoggedEncounterInput { loggedEncounterId: number; raidS
   itemLevel: { average: number; min: number; max: number }; deathCount: number; vantusCount: number;
   rosterState: "available" | "private"; members: readonly RaiderIoLoggedEncounterMemberInput[]; }
 export interface StoredRaiderIoLoggedEncounter extends RaiderIoLoggedEncounterInput { readAt: string; }
+export type RaiderIoLoggedEncounterUnavailableCode = "not_found" | "private" | "schema_drift";
+export interface RaiderIoLoggedEncounterUnavailableInput { loggedEncounterId: number; code: RaiderIoLoggedEncounterUnavailableCode; }
+export interface StoredRaiderIoLoggedEncounterUnavailable extends RaiderIoLoggedEncounterUnavailableInput { readAt: string; }
+export type RaiderIoLoggedEncounterAnswers = Readonly<{ encounters: readonly RaiderIoLoggedEncounterInput[];
+  unavailable: readonly RaiderIoLoggedEncounterUnavailableInput[]; }>;
+export type StoredRaiderIoLoggedEncounterAnswers = Readonly<{ encounters: readonly StoredRaiderIoLoggedEncounter[];
+  unavailable: readonly StoredRaiderIoLoggedEncounterUnavailable[]; }>;
+export interface PublishedRaiderIoLoggedEncounter extends StoredRaiderIoLoggedEncounter {
+  roleCounts: Readonly<Record<RaiderIoLoggedEncounterRole, number>>; } // members: suppressed raiders left out
 export interface CharacterRaiderIoFirstKillInput { raidSlug: string; bossSlug: string; killedAt: string;
   guild: { name: string; realm: string; region: string } | null; loggedEncounterId: number | null;
   encounterState: "read" | "unavailable"; encounterLimitationCode: string | null;
   historicWorldRank: number | null; historicRankCheckedAt: string | null; }
 export interface StoredCharacterRaiderIoFirstKill extends CharacterRaiderIoFirstKillInput {
-  encounter: StoredRaiderIoLoggedEncounter | null; }
+  encounter: PublishedRaiderIoLoggedEncounter | null; }
 export type RaiderIoFirstKillsPublication = Readonly<{ kills: readonly CharacterRaiderIoFirstKillInput[];
   askedRaidSlugs: readonly string[]; limitationCode: string | null; }>;
 // EvidenceRepository gains (optional):
-saveRaiderIoLoggedEncounters?(encounters: readonly RaiderIoLoggedEncounterInput[], readAt: Date): Promise<void>;
-raiderIoLoggedEncounters?(ids: readonly number[]): Promise<readonly StoredRaiderIoLoggedEncounter[]>;
+saveRaiderIoLoggedEncounters?(answers: RaiderIoLoggedEncounterAnswers, readAt: Date): Promise<void>;
+raiderIoLoggedEncounters?(ids: readonly number[]): Promise<StoredRaiderIoLoggedEncounterAnswers>;
 storedRaiderIoFirstKills?(key: CharacterKey): Promise<readonly CharacterRaiderIoFirstKillInput[]>;
 // publish input gains: raiderIoFirstKills?: RaiderIoFirstKillsPublication;
 // StagedEvidenceCollection gains: raiderIoFirstKills?: RaiderIoFirstKillsPublication;
 // CompletedCharacterEvidence gains: raiderIoFirstKills?: readonly StoredCharacterRaiderIoFirstKill[];
-// CharacterEvidenceRun gains: raiderIoLimitationCode?: string | null;
-// merge.ts: export function mergeRaiderIoFirstKills(stored, input, state, targeted): CharacterRaiderIoFirstKillInput[]
+// CharacterEvidenceRun gains: raiderIoLimitationCode?: string | null; killScanSkipped?: boolean;
+// EvidenceRunCost.requests gains: raiderIoLoggedEncounters?: number;
+// merge.ts, also exported from the package index: export function mergeRaiderIoFirstKills(stored, input, state, targeted): CharacterRaiderIoFirstKillInput[]
 ```
 
 - [ ] **Step 1: Write the failing merge tests**
@@ -2065,8 +2341,12 @@ describe("mergeRaiderIoFirstKills", () => {
       raidSlug,
       bossSlug,
       killedAt: "2026-07-20T17:25:57.301Z",
-      guild: { name: "Method", realm: "twisting-nether", region: "eu" },
-      loggedEncounterId: 10_095_623,
+      guild: {
+        name: "Fixture Guild Alfa",
+        realm: "twisting-nether",
+        region: "eu"
+      },
+      loggedEncounterId: 700_001,
       encounterState: "read",
       encounterLimitationCode: null,
       historicWorldRank: null,
@@ -2199,6 +2479,7 @@ export type RaiderIoLoggedEncounterRole = "tank" | "healer" | "dps";
 export interface RaiderIoLoggedEncounterMemberInput {
   raiderIoCharacterId: number;
   name: string;
+  /** The Blizzard realm slug: lower case, accents dropped, as a character key. */
   realm: string;
   region: string;
   className: string;
@@ -2209,9 +2490,10 @@ export interface RaiderIoLoggedEncounterMemberInput {
 }
 
 /**
- * Raider.IO's parsed combat log of one Mythic kill. Immutable and shared: a
- * logged encounter never changes, so it is stored once for every character
- * and run that names it. Never its uploaders, never the response.
+ * Raider.IO's parsed combat log of one Mythic kill. Shared: stored once for
+ * every character and run that names it. A visible roster is kept as first
+ * read; a private one may be replaced by a later read. Never its uploaders,
+ * never the response.
  */
 export interface RaiderIoLoggedEncounterInput {
   loggedEncounterId: number;
@@ -2231,8 +2513,47 @@ export interface RaiderIoLoggedEncounterInput {
 }
 
 export interface StoredRaiderIoLoggedEncounter extends RaiderIoLoggedEncounterInput {
-  /** ISO 8601 of the one read that stored it. */
+  /** ISO 8601 of the read that stored this answer. */
   readAt: string;
+}
+
+/** Raider.IO's permanent refusals of a logged encounter: a deleted log, a 403, or a log of another kill. */
+export type RaiderIoLoggedEncounterUnavailableCode =
+  "not_found" | "private" | "schema_drift";
+
+/**
+ * A logged encounter Raider.IO answered for permanently without one. Stored
+ * so later runs do not ask again until it is due a re-read, and never over a
+ * read encounter.
+ */
+export interface RaiderIoLoggedEncounterUnavailableInput {
+  loggedEncounterId: number;
+  code: RaiderIoLoggedEncounterUnavailableCode;
+}
+
+export interface StoredRaiderIoLoggedEncounterUnavailable extends RaiderIoLoggedEncounterUnavailableInput {
+  readAt: string;
+}
+
+/** What one run learned about logged encounters, to store in one call. */
+export type RaiderIoLoggedEncounterAnswers = Readonly<{
+  encounters: readonly RaiderIoLoggedEncounterInput[];
+  unavailable: readonly RaiderIoLoggedEncounterUnavailableInput[];
+}>;
+
+/** The stored answers among some ids: read encounters and permanent refusals. */
+export type StoredRaiderIoLoggedEncounterAnswers = Readonly<{
+  encounters: readonly StoredRaiderIoLoggedEncounter[];
+  unavailable: readonly StoredRaiderIoLoggedEncounterUnavailable[];
+}>;
+
+/**
+ * A stored encounter as a dossier may show it. `members` leaves out every
+ * raider under an active suppression, so a removed character never appears on
+ * anyone's dossier; `roleCounts` counts everyone Raider.IO listed.
+ */
+export interface PublishedRaiderIoLoggedEncounter extends StoredRaiderIoLoggedEncounter {
+  roleCounts: Readonly<Record<RaiderIoLoggedEncounterRole, number>>;
 }
 
 /**
@@ -2252,12 +2573,13 @@ export interface CharacterRaiderIoFirstKillInput {
   encounterState: "read" | "unavailable";
   encounterLimitationCode: string | null;
   historicWorldRank: number | null;
+  /** When the rank was last looked up; set with a null rank too, so a checked kill is not asked about again. */
   historicRankCheckedAt: string | null;
 }
 
 export interface StoredCharacterRaiderIoFirstKill extends CharacterRaiderIoFirstKillInput {
-  /** The stored encounter a `read` row names; null otherwise. */
-  encounter: StoredRaiderIoLoggedEncounter | null;
+  /** The stored encounter a `read` row names, as a dossier may show it; null otherwise. */
+  encounter: PublishedRaiderIoLoggedEncounter | null;
 }
 
 /** What one run hands storage about the character's Raider.IO first kills. */
@@ -2279,6 +2601,12 @@ Add to `CharacterEvidenceRun`:
 ```ts
   /** Why this run's Raider.IO logged-encounter reads fell short (#732). Absent when they did not. */
   raiderIoLimitationCode?: string | null;
+  /**
+   * The run published without scanning the Warcraft Logs kill history, as a
+   * light or targeted run does. Absent when it scanned. A negative conclusion
+   * never rests on such a run.
+   */
+  killScanSkipped?: boolean;
 ```
 
 Add to `CompletedCharacterEvidence`:
@@ -2295,6 +2623,13 @@ Add to `StagedEvidenceCollection` (after `cuttingEdges`):
   raiderIoFirstKills?: RaiderIoFirstKillsPublication;
 ```
 
+Add to `EvidenceRunCost`'s `requests`, after `raiderIoRankings?`:
+
+```ts
+    /** Raider.IO logged-encounter reads (#732). Absent is zero. */
+    raiderIoLoggedEncounters?: number;
+```
+
 Add to the `publish` input of `EvidenceRepository` (after `cuttingEdges`):
 
 ```ts
@@ -2309,25 +2644,30 @@ and three methods to `EvidenceRepository` (after `publish`):
 
 ```ts
   /**
-   * Stores logged encounters once each. Outside any snapshot transaction on
-   * purpose: an encounter never changes, and a reader reaches one only
-   * through a published run's first kills.
+   * Stores what a run learned about logged encounters. Outside any snapshot
+   * transaction on purpose: a reader reaches an encounter only through a
+   * published run's first kills. A visible roster is never overwritten, and
+   * a permanent refusal never overwrites a read.
    */
   saveRaiderIoLoggedEncounters?(
-    encounters: readonly RaiderIoLoggedEncounterInput[],
+    answers: RaiderIoLoggedEncounterAnswers,
     readAt: Date
   ): Promise<void>;
-  /** The stored encounters among these ids, with their rosters. */
+  /** The stored answers among these ids, each read encounter with its whole roster. */
   raiderIoLoggedEncounters?(
     ids: readonly number[]
-  ): Promise<readonly StoredRaiderIoLoggedEncounter[]>;
+  ): Promise<StoredRaiderIoLoggedEncounterAnswers>;
   /** The first kills of the character's newest publication. */
   storedRaiderIoFirstKills?(
     key: CharacterKey
   ): Promise<readonly CharacterRaiderIoFirstKillInput[]>;
 ```
 
-In `packages/database/src/index.ts`, add to the type export list: `CharacterRaiderIoFirstKillInput`, `RaiderIoFirstKillsPublication`, `RaiderIoLoggedEncounterInput`, `RaiderIoLoggedEncounterMemberInput`, `RaiderIoLoggedEncounterRole`, `StoredCharacterRaiderIoFirstKill`, `StoredRaiderIoLoggedEncounter`.
+In `packages/database/src/index.ts`, add to the type export list: `CharacterRaiderIoFirstKillInput`, `PublishedRaiderIoLoggedEncounter`, `RaiderIoFirstKillsPublication`, `RaiderIoLoggedEncounterAnswers`, `RaiderIoLoggedEncounterInput`, `RaiderIoLoggedEncounterMemberInput`, `RaiderIoLoggedEncounterRole`, `RaiderIoLoggedEncounterUnavailableCode`, `RaiderIoLoggedEncounterUnavailableInput`, `StoredCharacterRaiderIoFirstKill`, `StoredRaiderIoLoggedEncounter`, `StoredRaiderIoLoggedEncounterAnswers`, `StoredRaiderIoLoggedEncounterUnavailable`. Add the value export (a pure function, so the application's handler test can apply the rule storage applies):
+
+```ts
+export { mergeRaiderIoFirstKills } from "./evidence/merge";
+```
 
 - [ ] **Step 4: Implement the merge**
 
@@ -2415,38 +2755,50 @@ Create `packages/database/drizzle/0066_raiderio_logged_kills.sql`:
 ```sql
 -- Raider.IO-logged first kills (#732).
 --
--- A logged encounter never changes, so it is stored once and shared by every
--- character and run that names it. It is written outside the snapshot
--- transaction; a reader reaches one only through a published run's first
--- kills, which are written in the same transaction as the run's other
--- evidence. The uploaders (`log.sources`) and the raw response are never
--- stored.
+-- A logged encounter is stored once and shared by every character and run
+-- that names it. It is written outside the snapshot transaction; a reader
+-- reaches one only through a published run's first kills, which are written
+-- in the same transaction as the run's other evidence. The uploaders
+-- (`log.sources`) and the raw response are never stored.
+--
+-- A row is one of two answers. A read carries the kill: a visible roster is
+-- kept as first read, and a private one may be replaced by a later read. An
+-- unavailable row is a permanent refusal (a deleted log, a 403, or a log of
+-- another kill) with only its code, so later runs do not ask again until it
+-- is due a re-read. `read_at` dates either answer.
 CREATE TABLE "raiderio_logged_encounters" (
 	"logged_encounter_id" bigint PRIMARY KEY NOT NULL,
-	"raid_slug" text NOT NULL,
-	"boss_slug" text NOT NULL,
-	"pulled_at" timestamp with time zone NOT NULL,
-	"defeated_at" timestamp with time zone NOT NULL,
-	"duration_ms" integer NOT NULL,
+	"unavailable_code" text,
+	"raid_slug" text,
+	"boss_slug" text,
+	"pulled_at" timestamp with time zone,
+	"defeated_at" timestamp with time zone,
+	"duration_ms" integer,
 	"guild_name" text,
 	"guild_realm" text,
 	"guild_region" text,
-	"item_level_average" double precision NOT NULL,
-	"item_level_min" double precision NOT NULL,
-	"item_level_max" double precision NOT NULL,
-	"death_count" integer NOT NULL,
-	"vantus_count" integer NOT NULL,
-	"roster_state" text NOT NULL,
+	"item_level_average" double precision,
+	"item_level_min" double precision,
+	"item_level_max" double precision,
+	"death_count" integer,
+	"vantus_count" integer,
+	"roster_state" text,
 	"read_at" timestamp with time zone NOT NULL,
-	CONSTRAINT "raiderio_logged_encounters_roster_state_check" CHECK ("roster_state" IN ('available', 'private')),
+	CONSTRAINT "raiderio_logged_encounters_answer_check" CHECK (("unavailable_code" IS NULL AND "raid_slug" IS NOT NULL AND "boss_slug" IS NOT NULL AND "pulled_at" IS NOT NULL AND "defeated_at" IS NOT NULL AND "duration_ms" IS NOT NULL AND "item_level_average" IS NOT NULL AND "item_level_min" IS NOT NULL AND "item_level_max" IS NOT NULL AND "death_count" IS NOT NULL AND "vantus_count" IS NOT NULL AND "roster_state" IS NOT NULL) OR ("unavailable_code" IN ('not_found', 'private', 'schema_drift') AND "raid_slug" IS NULL AND "boss_slug" IS NULL AND "pulled_at" IS NULL AND "defeated_at" IS NULL AND "duration_ms" IS NULL AND "guild_name" IS NULL AND "item_level_average" IS NULL AND "item_level_min" IS NULL AND "item_level_max" IS NULL AND "death_count" IS NULL AND "vantus_count" IS NULL AND "roster_state" IS NULL)),
+	CONSTRAINT "raiderio_logged_encounters_roster_state_check" CHECK ("roster_state" IS NULL OR "roster_state" IN ('available', 'private')),
 	CONSTRAINT "raiderio_logged_encounters_guild_identity_check" CHECK (("guild_name" IS NULL AND "guild_realm" IS NULL AND "guild_region" IS NULL) OR ("guild_name" IS NOT NULL AND "guild_realm" IS NOT NULL AND "guild_region" IS NOT NULL)),
 	CONSTRAINT "raiderio_logged_encounters_counts_check" CHECK ("duration_ms" >= 0 AND "death_count" >= 0 AND "vantus_count" >= 0)
 );
 --> statement-breakpoint
+-- One row per raider. `realm` is the Blizzard realm slug and
+-- `normalized_name` the lower-cased name, so a member is keyed exactly as a
+-- `suppressed_characters` row is, and a removed raider is left off every
+-- dossier's roster when it is read. The rows are kept on removal.
 CREATE TABLE "raiderio_logged_encounter_members" (
 	"logged_encounter_id" bigint NOT NULL,
 	"raiderio_character_id" bigint NOT NULL,
 	"name" text NOT NULL,
+	"normalized_name" text NOT NULL,
 	"realm" text NOT NULL,
 	"region" text NOT NULL,
 	"class_name" text NOT NULL,
@@ -2490,6 +2842,10 @@ ALTER TABLE "character_evidence_runs"
 --> statement-breakpoint
 ALTER TABLE "character_evidence_runs"
   ADD CONSTRAINT "character_evidence_runs_completion_limitations_check" CHECK (("character_evidence_runs"."status" = 'complete' AND "character_evidence_runs"."limitation_code" IS NULL) OR ("character_evidence_runs"."status" = 'partial' AND ("character_evidence_runs"."limitation_code" IS NOT NULL OR "character_evidence_runs"."parse_limitation_code" IS NOT NULL OR "character_evidence_runs"."kill_scan_skipped" OR "character_evidence_runs"."raiderio_limitation_code" IS NOT NULL)) OR "character_evidence_runs"."status" NOT IN ('complete', 'partial'));
+--> statement-breakpoint
+-- What the new phase costs, beside the other Raider.IO requests (#298).
+ALTER TABLE "character_evidence_run_costs"
+  ADD COLUMN "raiderio_logged_encounter_requests" integer DEFAULT 0 NOT NULL;
 ```
 
 Append to `packages/database/drizzle/meta/_journal.json` `entries` (the previous `when` is 1792011600016, later than now, so `when` is previous + 1):
@@ -2514,19 +2870,32 @@ Add `bigint` to the `drizzle-orm/pg-core` import. In `characterEvidenceRuns`, af
     raiderIoLimitationCode: text("raiderio_limitation_code"),
 ```
 
-and replace the completion check's SQL with:
+and replace the completion check's second argument (the `sql` template inside `check("character_evidence_runs_completion_limitations_check", ...)`) with:
 
+<!-- prettier-ignore -->
 ```ts
-sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL OR ${table.killScanSkipped} OR ${table.raiderIoLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`;
+      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL OR ${table.killScanSkipped} OR ${table.raiderIoLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`
 ```
 
-(and add "or its Raider.IO logged-encounter reads" to the comment above it). After `characterMythicWipes`, add:
+(and add "or its Raider.IO logged-encounter reads" to the comment above it). In `characterEvidenceRunCosts`, after `raiderIoRankingsRequests`:
+
+```ts
+    /** Raider.IO logged-encounter reads (#732). Zero on a run that read none. */
+    raiderIoLoggedEncounterRequests: integer(
+      "raiderio_logged_encounter_requests"
+    )
+      .default(0)
+      .notNull(),
+```
+
+and extend the comment above `raiderIoHistoricRequests` with: "`raiderio_historic_requests` also counts the one character profile read the logged-encounter phase may make to learn the character's Raider.IO id (#732)." After `characterMythicWipes`, add:
 
 ```ts
 /**
- * Raider.IO's parsed combat log of one Mythic kill (#732). Immutable and
- * shared across characters and runs; a reader reaches it only through a
- * published run's `character_raiderio_first_kills`.
+ * Raider.IO's answer about one logged encounter (#732): a read kill, or a
+ * permanent refusal with only its code. Shared across characters and runs; a
+ * reader reaches it only through a published run's
+ * `character_raiderio_first_kills`.
  */
 export const raiderIoLoggedEncounters = pgTable(
   "raiderio_logged_encounters",
@@ -2534,26 +2903,31 @@ export const raiderIoLoggedEncounters = pgTable(
     loggedEncounterId: bigint("logged_encounter_id", { mode: "number" })
       .primaryKey()
       .notNull(),
-    raidSlug: text("raid_slug").notNull(),
-    bossSlug: text("boss_slug").notNull(),
-    pulledAt: timestamp("pulled_at", { withTimezone: true }).notNull(),
-    defeatedAt: timestamp("defeated_at", { withTimezone: true }).notNull(),
-    durationMs: integer("duration_ms").notNull(),
+    unavailableCode: text("unavailable_code"),
+    raidSlug: text("raid_slug"),
+    bossSlug: text("boss_slug"),
+    pulledAt: timestamp("pulled_at", { withTimezone: true }),
+    defeatedAt: timestamp("defeated_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
     guildName: text("guild_name"),
     guildRealm: text("guild_realm"),
     guildRegion: text("guild_region"),
-    itemLevelAverage: doublePrecision("item_level_average").notNull(),
-    itemLevelMin: doublePrecision("item_level_min").notNull(),
-    itemLevelMax: doublePrecision("item_level_max").notNull(),
-    deathCount: integer("death_count").notNull(),
-    vantusCount: integer("vantus_count").notNull(),
-    rosterState: text("roster_state").notNull(),
+    itemLevelAverage: doublePrecision("item_level_average"),
+    itemLevelMin: doublePrecision("item_level_min"),
+    itemLevelMax: doublePrecision("item_level_max"),
+    deathCount: integer("death_count"),
+    vantusCount: integer("vantus_count"),
+    rosterState: text("roster_state"),
     readAt: timestamp("read_at", { withTimezone: true }).notNull()
   },
   (table) => [
     check(
+      "raiderio_logged_encounters_answer_check",
+      sql`(${table.unavailableCode} IS NULL AND ${table.raidSlug} IS NOT NULL AND ${table.bossSlug} IS NOT NULL AND ${table.pulledAt} IS NOT NULL AND ${table.defeatedAt} IS NOT NULL AND ${table.durationMs} IS NOT NULL AND ${table.itemLevelAverage} IS NOT NULL AND ${table.itemLevelMin} IS NOT NULL AND ${table.itemLevelMax} IS NOT NULL AND ${table.deathCount} IS NOT NULL AND ${table.vantusCount} IS NOT NULL AND ${table.rosterState} IS NOT NULL) OR (${table.unavailableCode} IN ('not_found', 'private', 'schema_drift') AND ${table.raidSlug} IS NULL AND ${table.bossSlug} IS NULL AND ${table.pulledAt} IS NULL AND ${table.defeatedAt} IS NULL AND ${table.durationMs} IS NULL AND ${table.guildName} IS NULL AND ${table.itemLevelAverage} IS NULL AND ${table.itemLevelMin} IS NULL AND ${table.itemLevelMax} IS NULL AND ${table.deathCount} IS NULL AND ${table.vantusCount} IS NULL AND ${table.rosterState} IS NULL)`
+    ),
+    check(
       "raiderio_logged_encounters_roster_state_check",
-      sql`${table.rosterState} IN ('available', 'private')`
+      sql`${table.rosterState} IS NULL OR ${table.rosterState} IN ('available', 'private')`
     ),
     check(
       "raiderio_logged_encounters_guild_identity_check",
@@ -2578,6 +2952,8 @@ export const raiderIoLoggedEncounterMembers = pgTable(
       mode: "number"
     }).notNull(),
     name: text("name").notNull(),
+    // Keyed as `suppressed_characters` is, so a removed raider is left off.
+    normalizedName: text("normalized_name").notNull(),
     realm: text("realm").notNull(),
     region: text("region").notNull(),
     className: text("class_name").notNull(),
@@ -2639,18 +3015,19 @@ export const characterRaiderIoFirstKills = pgTable(
 );
 ```
 
-- [ ] **Step 8: Carry the run's Raider.IO limitation through the mapper**
+- [ ] **Step 8: Carry the run's Raider.IO limitation and skipped scan through the mapper**
 
 In `packages/database/src/mappers.ts`, add to `EvidenceRunRow`:
 
 ```ts
   raiderio_limitation_code?: string | null;
+  kill_scan_skipped?: boolean;
 ```
 
-change `evidenceRunModeSql` to select it:
+change `evidenceRunModeSql` to select both:
 
 ```ts
-return `${alias}.mode, ${alias}.origin, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh, ${alias}.raiderio_limitation_code`;
+return `${alias}.mode, ${alias}.origin, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh, ${alias}.raiderio_limitation_code, ${alias}.kill_scan_skipped`;
 ```
 
 and add to `mapEvidenceRun`, after the `lightRefresh` spread:
@@ -2659,6 +3036,7 @@ and add to `mapEvidenceRun`, after the `lightRefresh` spread:
     ...(row.raiderio_limitation_code
       ? { raiderIoLimitationCode: row.raiderio_limitation_code }
       : {}),
+    ...(row.kill_scan_skipped ? { killScanSkipped: true } : {}),
 ```
 
 - [ ] **Step 9: Write the storage module**
@@ -2671,10 +3049,13 @@ import type { Pool } from "pg";
 
 import type {
   CharacterRaiderIoFirstKillInput,
-  RaiderIoLoggedEncounterInput,
+  PublishedRaiderIoLoggedEncounter,
+  RaiderIoLoggedEncounterAnswers,
   RaiderIoLoggedEncounterRole,
+  RaiderIoLoggedEncounterUnavailableCode,
   StoredCharacterRaiderIoFirstKill,
-  StoredRaiderIoLoggedEncounter
+  StoredRaiderIoLoggedEncounter,
+  StoredRaiderIoLoggedEncounterAnswers
 } from "../repositories";
 import { withTransaction, type Queryable } from "../sql";
 import { insertEvidenceRows } from "./rows";
@@ -2694,22 +3075,25 @@ type FirstKillRow = {
   historic_rank_checked_at: Date | null;
 };
 
+// A read row carries every kill column and an unavailable row only its code;
+// `raiderio_logged_encounters_answer_check` guarantees one or the other.
 type EncounterRow = {
   logged_encounter_id: string;
-  raid_slug: string;
-  boss_slug: string;
-  pulled_at: Date;
-  defeated_at: Date;
-  duration_ms: number;
+  unavailable_code: RaiderIoLoggedEncounterUnavailableCode | null;
+  raid_slug: string | null;
+  boss_slug: string | null;
+  pulled_at: Date | null;
+  defeated_at: Date | null;
+  duration_ms: number | null;
   guild_name: string | null;
   guild_realm: string | null;
   guild_region: string | null;
-  item_level_average: number;
-  item_level_min: number;
-  item_level_max: number;
-  death_count: number;
-  vantus_count: number;
-  roster_state: "available" | "private";
+  item_level_average: number | null;
+  item_level_min: number | null;
+  item_level_max: number | null;
+  death_count: number | null;
+  vantus_count: number | null;
+  roster_state: "available" | "private" | null;
   read_at: Date;
 };
 
@@ -2725,6 +3109,12 @@ type MemberRow = {
   item_level: number | null;
 };
 
+type RoleCountRow = {
+  logged_encounter_id: string;
+  role: RaiderIoLoggedEncounterRole;
+  count: number;
+};
+
 function guildOf(
   name: string | null,
   realm: string | null,
@@ -2733,6 +3123,12 @@ function guildOf(
   return name === null || realm === null || region === null
     ? null
     : { name, realm, region };
+}
+
+function required<T>(value: T | null): T {
+  // The answer check makes every kill column of a read row NOT NULL.
+  if (value === null) throw new Error("raiderio_logged_encounter_row_invalid");
+  return value;
 }
 
 function mapFirstKill(row: FirstKillRow): CharacterRaiderIoFirstKillInput {
@@ -2789,53 +3185,82 @@ export async function loadLatestRaiderIoFirstKills(
   return runId === undefined ? [] : loadRunRaiderIoFirstKills(client, runId);
 }
 
-export async function loadRaiderIoLoggedEncounters(
+async function selectEncounterRows(
   client: Queryable,
   ids: readonly number[]
-): Promise<StoredRaiderIoLoggedEncounter[]> {
-  if (ids.length === 0) return [];
-  const encounters = await client.query<EncounterRow>(
-    `SELECT logged_encounter_id, raid_slug, boss_slug, pulled_at, defeated_at,
-            duration_ms, guild_name, guild_realm, guild_region,
-            item_level_average, item_level_min, item_level_max, death_count,
-            vantus_count, roster_state, read_at
+): Promise<EncounterRow[]> {
+  const result = await client.query<EncounterRow>(
+    `SELECT logged_encounter_id, unavailable_code, raid_slug, boss_slug,
+            pulled_at, defeated_at, duration_ms, guild_name, guild_realm,
+            guild_region, item_level_average, item_level_min, item_level_max,
+            death_count, vantus_count, roster_state, read_at
        FROM raiderio_logged_encounters
       WHERE logged_encounter_id = ANY($1::bigint[])
       ORDER BY logged_encounter_id`,
     [ids]
   );
-  const members = await client.query<MemberRow>(
-    `SELECT logged_encounter_id, raiderio_character_id, name, realm, region,
-            class_name, spec_name, role, item_level
-       FROM raiderio_logged_encounter_members
-      WHERE logged_encounter_id = ANY($1::bigint[])
-      ORDER BY logged_encounter_id, raiderio_character_id`,
-    [ids]
+  return result.rows;
+}
+
+/**
+ * The roster rows of these encounters. With `shownOnly`, a raider under an
+ * active suppression is left out by the same test `snapshots.ts` applies to
+ * a dossier's own characters, so a removed character never appears on anyone
+ * else's dossier. The rows themselves are kept.
+ */
+async function selectMemberRows(
+  client: Queryable,
+  ids: readonly number[],
+  shownOnly: boolean
+): Promise<Map<string, MemberRow[]>> {
+  const result = await client.query<MemberRow>(
+    `SELECT member.logged_encounter_id, member.raiderio_character_id,
+            member.name, member.realm, member.region, member.class_name,
+            member.spec_name, member.role, member.item_level
+       FROM raiderio_logged_encounter_members member
+      WHERE member.logged_encounter_id = ANY($1::bigint[])
+        AND (NOT $2::boolean OR NOT EXISTS (
+          SELECT 1
+            FROM suppressed_characters suppression
+           WHERE suppression.region = member.region
+             AND suppression.realm_slug = member.realm
+             AND suppression.normalized_name = member.normalized_name
+             AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+        ))
+      ORDER BY member.logged_encounter_id, member.raiderio_character_id`,
+    [ids, shownOnly]
   );
   const byEncounter = new Map<string, MemberRow[]>();
-  for (const member of members.rows) {
+  for (const member of result.rows) {
     byEncounter.set(member.logged_encounter_id, [
       ...(byEncounter.get(member.logged_encounter_id) ?? []),
       member
     ]);
   }
-  return encounters.rows.map((row) => ({
+  return byEncounter;
+}
+
+function mapEncounter(
+  row: EncounterRow,
+  members: readonly MemberRow[]
+): StoredRaiderIoLoggedEncounter {
+  return {
     loggedEncounterId: Number(row.logged_encounter_id),
-    raidSlug: row.raid_slug,
-    bossSlug: row.boss_slug,
-    pulledAt: row.pulled_at.toISOString(),
-    defeatedAt: row.defeated_at.toISOString(),
-    durationMs: row.duration_ms,
+    raidSlug: required(row.raid_slug),
+    bossSlug: required(row.boss_slug),
+    pulledAt: required(row.pulled_at).toISOString(),
+    defeatedAt: required(row.defeated_at).toISOString(),
+    durationMs: required(row.duration_ms),
     guild: guildOf(row.guild_name, row.guild_realm, row.guild_region),
     itemLevel: {
-      average: row.item_level_average,
-      min: row.item_level_min,
-      max: row.item_level_max
+      average: required(row.item_level_average),
+      min: required(row.item_level_min),
+      max: required(row.item_level_max)
     },
-    deathCount: row.death_count,
-    vantusCount: row.vantus_count,
-    rosterState: row.roster_state,
-    members: (byEncounter.get(row.logged_encounter_id) ?? []).map((member) => ({
+    deathCount: required(row.death_count),
+    vantusCount: required(row.vantus_count),
+    rosterState: required(row.roster_state),
+    members: members.map((member) => ({
       raiderIoCharacterId: Number(member.raiderio_character_id),
       name: member.name,
       realm: member.realm,
@@ -2846,10 +3271,85 @@ export async function loadRaiderIoLoggedEncounters(
       itemLevel: member.item_level
     })),
     readAt: row.read_at.toISOString()
+  };
+}
+
+/**
+ * The stored answers among these ids, for collection: each read encounter
+ * with its whole roster (the presence check needs every raider and shows
+ * none), and each permanent refusal with its code.
+ */
+export async function loadRaiderIoLoggedEncounters(
+  client: Queryable,
+  ids: readonly number[]
+): Promise<StoredRaiderIoLoggedEncounterAnswers> {
+  if (ids.length === 0) return { encounters: [], unavailable: [] };
+  const rows = await selectEncounterRows(client, ids);
+  const members = await selectMemberRows(client, ids, false);
+  return {
+    encounters: rows
+      .filter((row) => row.unavailable_code === null)
+      .map((row) =>
+        mapEncounter(row, members.get(row.logged_encounter_id) ?? [])
+      ),
+    unavailable: rows.flatMap((row) =>
+      row.unavailable_code === null
+        ? []
+        : [
+            {
+              loggedEncounterId: Number(row.logged_encounter_id),
+              code: row.unavailable_code,
+              readAt: row.read_at.toISOString()
+            }
+          ]
+    )
+  };
+}
+
+/**
+ * The read encounters among these ids as a dossier may show them: suppressed
+ * raiders left off, and every raider Raider.IO listed still counted by role.
+ */
+async function loadShownRaiderIoLoggedEncounters(
+  client: Queryable,
+  ids: readonly number[]
+): Promise<PublishedRaiderIoLoggedEncounter[]> {
+  if (ids.length === 0) return [];
+  const rows = (await selectEncounterRows(client, ids)).filter(
+    (row) => row.unavailable_code === null
+  );
+  const members = await selectMemberRows(client, ids, true);
+  const counted = await client.query<RoleCountRow>(
+    `SELECT logged_encounter_id, role, count(*)::int AS count
+       FROM raiderio_logged_encounter_members
+      WHERE logged_encounter_id = ANY($1::bigint[])
+      GROUP BY logged_encounter_id, role`,
+    [ids]
+  );
+  const roleCounts = new Map<
+    string,
+    Record<RaiderIoLoggedEncounterRole, number>
+  >();
+  for (const row of counted.rows) {
+    const counts = roleCounts.get(row.logged_encounter_id) ?? {
+      tank: 0,
+      healer: 0,
+      dps: 0
+    };
+    counts[row.role] = row.count;
+    roleCounts.set(row.logged_encounter_id, counts);
+  }
+  return rows.map((row) => ({
+    ...mapEncounter(row, members.get(row.logged_encounter_id) ?? []),
+    roleCounts: roleCounts.get(row.logged_encounter_id) ?? {
+      tank: 0,
+      healer: 0,
+      dps: 0
+    }
   }));
 }
 
-/** One run's first kills, each with the stored encounter it names. */
+/** One run's first kills, each with the stored encounter it names, as a dossier may show it. */
 export async function loadPublishedRaiderIoFirstKills(
   client: Queryable,
   runId: string
@@ -2861,7 +3361,7 @@ export async function loadPublishedRaiderIoFirstKills(
       : []
   );
   const encounters = new Map(
-    (await loadRaiderIoLoggedEncounters(client, readIds)).map(
+    (await loadShownRaiderIoLoggedEncounters(client, readIds)).map(
       (encounter) => [encounter.loggedEncounterId, encounter] as const
     )
   );
@@ -2875,27 +3375,47 @@ export async function loadPublishedRaiderIoFirstKills(
 }
 
 /**
- * Stores each encounter once. One already held keeps the roster it was first
- * read with: a logged encounter never changes, and a second read is never
- * made on purpose.
+ * Stores what one run learned, in one transaction. A visible roster is kept
+ * as first read: the kill and who was in it never change. A private roster
+ * or a permanent refusal is replaced by a later read. A permanent refusal
+ * replaces only another refusal, never a read: a later failure does not
+ * unread a kill.
  */
 export async function storeRaiderIoLoggedEncounters(
   pool: Pool,
-  encounters: readonly RaiderIoLoggedEncounterInput[],
+  answers: RaiderIoLoggedEncounterAnswers,
   readAt: Date
 ): Promise<void> {
-  if (encounters.length === 0) return;
+  if (answers.encounters.length === 0 && answers.unavailable.length === 0)
+    return;
   await withTransaction(pool, async (client) => {
-    for (const encounter of encounters) {
-      const inserted = await client.query(
+    for (const encounter of answers.encounters) {
+      const written = await client.query(
         `INSERT INTO raiderio_logged_encounters (
-           logged_encounter_id, raid_slug, boss_slug, pulled_at, defeated_at,
-           duration_ms, guild_name, guild_realm, guild_region,
-           item_level_average, item_level_min, item_level_max, death_count,
-           vantus_count, roster_state, read_at
-         ) VALUES ($1::bigint, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                   $13, $14, $15, $16)
-         ON CONFLICT (logged_encounter_id) DO NOTHING`,
+           logged_encounter_id, unavailable_code, raid_slug, boss_slug,
+           pulled_at, defeated_at, duration_ms, guild_name, guild_realm,
+           guild_region, item_level_average, item_level_min, item_level_max,
+           death_count, vantus_count, roster_state, read_at
+         ) VALUES ($1::bigint, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                   $12, $13, $14, $15, $16)
+         ON CONFLICT (logged_encounter_id) DO UPDATE SET
+           unavailable_code = NULL,
+           raid_slug = EXCLUDED.raid_slug,
+           boss_slug = EXCLUDED.boss_slug,
+           pulled_at = EXCLUDED.pulled_at,
+           defeated_at = EXCLUDED.defeated_at,
+           duration_ms = EXCLUDED.duration_ms,
+           guild_name = EXCLUDED.guild_name,
+           guild_realm = EXCLUDED.guild_realm,
+           guild_region = EXCLUDED.guild_region,
+           item_level_average = EXCLUDED.item_level_average,
+           item_level_min = EXCLUDED.item_level_min,
+           item_level_max = EXCLUDED.item_level_max,
+           death_count = EXCLUDED.death_count,
+           vantus_count = EXCLUDED.vantus_count,
+           roster_state = EXCLUDED.roster_state,
+           read_at = EXCLUDED.read_at
+         WHERE raiderio_logged_encounters.roster_state IS DISTINCT FROM 'available'`,
         [
           encounter.loggedEncounterId,
           encounter.raidSlug,
@@ -2915,24 +3435,33 @@ export async function storeRaiderIoLoggedEncounters(
           readAt
         ]
       );
-      if (inserted.rowCount !== 1 || encounter.members.length === 0) continue;
+      // A visible roster already held: nothing was written, nothing changes.
+      if (written.rowCount !== 1) continue;
+      await client.query(
+        `DELETE FROM raiderio_logged_encounter_members
+          WHERE logged_encounter_id = $1::bigint`,
+        [encounter.loggedEncounterId]
+      );
       const members = encounter.members;
+      if (members.length === 0) continue;
       await client.query(
         `INSERT INTO raiderio_logged_encounter_members (
-           logged_encounter_id, raiderio_character_id, name, realm, region,
-           class_name, spec_name, role, item_level
+           logged_encounter_id, raiderio_character_id, name, normalized_name,
+           realm, region, class_name, spec_name, role, item_level
          )
          SELECT $1::bigint, item.*
            FROM unnest($2::bigint[], $3::text[], $4::text[], $5::text[],
-                       $6::text[], $7::text[], $8::text[],
-                       $9::double precision[])
-             AS item(raiderio_character_id, name, realm, region, class_name,
-                     spec_name, role, item_level)
+                       $6::text[], $7::text[], $8::text[], $9::text[],
+                       $10::double precision[])
+             AS item(raiderio_character_id, name, normalized_name, realm,
+                     region, class_name, spec_name, role, item_level)
          ON CONFLICT DO NOTHING`,
         [
           encounter.loggedEncounterId,
           members.map((member) => member.raiderIoCharacterId),
           members.map((member) => member.name),
+          // As every character key and every suppression is normalised.
+          members.map((member) => member.name.toLocaleLowerCase("en-US")),
           members.map((member) => member.realm),
           members.map((member) => member.region),
           members.map((member) => member.className),
@@ -2940,6 +3469,18 @@ export async function storeRaiderIoLoggedEncounters(
           members.map((member) => member.role),
           members.map((member) => member.itemLevel)
         ]
+      );
+    }
+    for (const answer of answers.unavailable) {
+      await client.query(
+        `INSERT INTO raiderio_logged_encounters (
+           logged_encounter_id, unavailable_code, read_at
+         ) VALUES ($1::bigint, $2, $3)
+         ON CONFLICT (logged_encounter_id) DO UPDATE SET
+           unavailable_code = EXCLUDED.unavailable_code,
+           read_at = EXCLUDED.read_at
+         WHERE raiderio_logged_encounters.unavailable_code IS NOT NULL`,
+        [answer.loggedEncounterId, answer.code, readAt]
       );
     }
   });
@@ -2981,13 +3522,13 @@ export async function insertRaiderIoFirstKills(
 }
 ```
 
-- [ ] **Step 10: Wire it into loading and publishing**
+- [ ] **Step 10: Wire it into loading, publishing and the cost row**
 
 In `packages/database/src/evidence/load.ts`, import `loadPublishedRaiderIoFirstKills` from `./raiderio-first-kills` and add to the object `loadCompletedEvidence` returns, after `tierBests`:
 
 ```ts
     // From the snapshot run, like the kills: the first kills are part of what
-    // the newest publication shows.
+    // the newest publication shows, read with today's suppressions.
     raiderIoFirstKills: await loadPublishedRaiderIoFirstKills(
       client,
       snapshot.id
@@ -3041,17 +3582,25 @@ In the `UPDATE character_evidence_runs` statement, add after `publication_scope 
                  raiderio_limitation_code = $19,
 ```
 
-and append to its parameter array, after `targeted ? "tier" : "full"`:
+and append to its parameter array, after its last element `targeted ? "tier" : "full"` (which now needs a trailing comma):
 
+<!-- prettier-ignore -->
 ```ts
-input.raiderIoFirstKills?.limitationCode ?? null;
+              input.raiderIoFirstKills?.limitationCode ?? null
+```
+
+In `recordRunCost`, add `raiderio_logged_encounter_requests` after `guild_report_requests` in the column list, `$45` after `$44` in `VALUES`, `raiderio_logged_encounter_requests = EXCLUDED.raiderio_logged_encounter_requests` after `guild_report_requests = EXCLUDED.guild_report_requests` in `ON CONFLICT ... DO UPDATE SET` (with the comma that the new last line needs), and, in the parameter array, after its last element `cost.requests.guildReports ?? 0` (which now needs a trailing comma):
+
+<!-- prettier-ignore -->
+```ts
+            cost.requests.raiderIoLoggedEncounters ?? 0
 ```
 
 Add three methods to the `evidence` object, after `getCompleted`:
 
 ```ts
-      async saveRaiderIoLoggedEncounters(encounters, readAt) {
-        await storeRaiderIoLoggedEncounters(pool, encounters, readAt);
+      async saveRaiderIoLoggedEncounters(answers, readAt) {
+        await storeRaiderIoLoggedEncounters(pool, answers, readAt);
       },
 
       async raiderIoLoggedEncounters(ids) {
@@ -3065,7 +3614,7 @@ Add three methods to the `evidence` object, after `getCompleted`:
 
 - [ ] **Step 11: Write the failing integration tests**
 
-In `tests/integration/repository-fixtures.ts`, add `raiderio_logged_encounters,` to the `TRUNCATE TABLE` list (the members table and the first kills cascade).
+In `tests/integration/repository-fixtures.ts`, add `raiderio_logged_encounters,` to the `TRUNCATE TABLE` list (the members table and the first kills cascade; `suppressed_characters` is already there).
 
 In `tests/integration/migrations.test.ts`, insert into the expected table list, keeping it sorted:
 
@@ -3084,8 +3633,9 @@ In `tests/integration/migrations.test.ts`, insert into the expected table list, 
 
 and change the journal check to the last 35 entries, appending the new one:
 
+<!-- prettier-ignore -->
 ```ts
-journal.entries.slice(-35).map(({ idx, tag }) => ({ idx, tag }));
+      journal.entries.slice(-35).map(({ idx, tag }) => ({ idx, tag }))
 ```
 
 ```ts
@@ -3101,7 +3651,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type {
   CharacterRaiderIoFirstKillInput,
-  RaiderIoLoggedEncounterInput
+  EvidenceRunCost,
+  RaiderIoLoggedEncounterInput,
+  RaiderIoLoggedEncounterMemberInput
 } from "../../packages/database/src";
 import {
   mythicKill,
@@ -3111,40 +3663,45 @@ import {
 } from "./repository-fixtures";
 import type { TestRepositories } from "./test-repositories";
 
+// Synthetic identities throughout: this repository is public.
+const killGuild = {
+  name: "Fixture Guild Alfa",
+  realm: "twisting-nether",
+  region: "eu"
+};
+const alfa: RaiderIoLoggedEncounterMemberInput = {
+  raiderIoCharacterId: 424_242,
+  name: "Alfa",
+  realm: "draenor",
+  region: "eu",
+  className: "Demon Hunter",
+  specName: "Havoc",
+  role: "dps",
+  itemLevel: null
+};
+const bravo: RaiderIoLoggedEncounterMemberInput = {
+  raiderIoCharacterId: 424_243,
+  name: "Bravo",
+  realm: "twisting-nether",
+  region: "eu",
+  className: "Warrior",
+  specName: "Protection",
+  role: "tank",
+  itemLevel: 292.1
+};
 const encounter: RaiderIoLoggedEncounterInput = {
-  loggedEncounterId: 10_095_623,
+  loggedEncounterId: 700_001,
   raidSlug: "tier-mn-1",
   bossSlug: "midnight-falls",
   pulledAt: "2026-07-20T17:17:29.977Z",
   defeatedAt: "2026-07-20T17:25:57.301Z",
   durationMs: 507_324,
-  guild: { name: "Method", realm: "twisting-nether", region: "eu" },
+  guild: killGuild,
   itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
   deathCount: 2,
   vantusCount: 16,
   rosterState: "available",
-  members: [
-    {
-      raiderIoCharacterId: 1_000,
-      name: "Tankname",
-      realm: "twisting-nether",
-      region: "eu",
-      className: "Warrior",
-      specName: "Protection",
-      role: "tank",
-      itemLevel: 292.1
-    },
-    {
-      raiderIoCharacterId: 250_442_362,
-      name: "Eundariel",
-      realm: "draenor",
-      region: "eu",
-      className: "Demon Hunter",
-      specName: "Havoc",
-      role: "dps",
-      itemLevel: null
-    }
-  ]
+  members: [alfa, bravo]
 };
 
 function firstKill(
@@ -3154,8 +3711,8 @@ function firstKill(
     raidSlug: "tier-mn-1",
     bossSlug: "midnight-falls",
     killedAt: "2026-07-20T17:25:57.301Z",
-    guild: { name: "Method", realm: "twisting-nether", region: "eu" },
-    loggedEncounterId: 10_095_623,
+    guild: killGuild,
+    loggedEncounterId: 700_001,
     encounterState: "read",
     encounterLimitationCode: null,
     historicWorldRank: null,
@@ -3193,27 +3750,118 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
     return reservation.run.id;
   }
 
-  const readAt = new Date("2026-09-28T12:00:00.000Z");
+  const save = (
+    answers: Parameters<
+      NonNullable<TestRepositories["evidence"]["saveRaiderIoLoggedEncounters"]>
+    >[0],
+    at: string
+  ) =>
+    repositories.evidence.saveRaiderIoLoggedEncounters!(answers, new Date(at));
+  const stored = (ids: readonly number[]) =>
+    repositories.evidence.raiderIoLoggedEncounters!(ids);
 
-  it("stores a logged encounter once, however often it is read", async () => {
-    await repositories.evidence.saveRaiderIoLoggedEncounters!(
-      [encounter],
-      readAt
+  async function publishFirstKill(): Promise<void> {
+    const runId = await reserve("2026-09-28T12:00:00.000Z");
+    await repositories.evidence.publish(runId, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      raiderIoFirstKills: {
+        kills: [firstKill()],
+        askedRaidSlugs: ["tier-mn-1"],
+        limitationCode: null
+      },
+      completedAt: new Date("2026-09-28T12:05:00.000Z")
+    });
+  }
+
+  it("keeps a visible roster as first read, however often it is read", async () => {
+    await save(
+      { encounters: [encounter], unavailable: [] },
+      "2026-09-28T12:00:00.000Z"
     );
-    await repositories.evidence.saveRaiderIoLoggedEncounters!(
-      [{ ...encounter, deathCount: 99, members: [] }],
-      new Date("2026-09-29T12:00:00.000Z")
+    await save(
+      {
+        encounters: [{ ...encounter, deathCount: 99, members: [] }],
+        unavailable: []
+      },
+      "2026-09-29T12:00:00.000Z"
     );
 
-    expect(
-      await repositories.evidence.raiderIoLoggedEncounters!([10_095_623, 1])
-    ).toEqual([{ ...encounter, readAt: "2026-09-28T12:00:00.000Z" }]);
+    expect(await stored([700_001, 1])).toEqual({
+      encounters: [{ ...encounter, readAt: "2026-09-28T12:00:00.000Z" }],
+      unavailable: []
+    });
+  });
+
+  it("replaces a hidden roster with a later read, dated by that read", async () => {
+    await save(
+      {
+        encounters: [{ ...encounter, rosterState: "private", members: [] }],
+        unavailable: []
+      },
+      "2026-09-01T12:00:00.000Z"
+    );
+    await save(
+      { encounters: [encounter], unavailable: [] },
+      "2026-09-28T12:00:00.000Z"
+    );
+
+    expect(await stored([700_001])).toEqual({
+      encounters: [{ ...encounter, readAt: "2026-09-28T12:00:00.000Z" }],
+      unavailable: []
+    });
+  });
+
+  it("stores a permanent answer, and never lets one unread a kill", async () => {
+    await save(
+      {
+        encounters: [encounter],
+        unavailable: [{ loggedEncounterId: 700_002, code: "not_found" }]
+      },
+      "2026-09-01T12:00:00.000Z"
+    );
+    // A refusal refreshes a refusal, and never overwrites a read.
+    await save(
+      {
+        encounters: [],
+        unavailable: [
+          { loggedEncounterId: 700_001, code: "not_found" },
+          { loggedEncounterId: 700_002, code: "schema_drift" }
+        ]
+      },
+      "2026-09-28T12:00:00.000Z"
+    );
+
+    expect(await stored([700_001, 700_002])).toEqual({
+      encounters: [{ ...encounter, readAt: "2026-09-01T12:00:00.000Z" }],
+      unavailable: [
+        {
+          loggedEncounterId: 700_002,
+          code: "schema_drift",
+          readAt: "2026-09-28T12:00:00.000Z"
+        }
+      ]
+    });
+
+    // A later read replaces a refusal.
+    await save(
+      {
+        encounters: [{ ...encounter, loggedEncounterId: 700_002 }],
+        unavailable: []
+      },
+      "2026-10-30T12:00:00.000Z"
+    );
+    expect((await stored([700_002])).unavailable).toEqual([]);
   });
 
   it("publishes first kills with the snapshot and shows each with its encounter", async () => {
-    await repositories.evidence.saveRaiderIoLoggedEncounters!(
-      [encounter],
-      readAt
+    await save(
+      { encounters: [encounter], unavailable: [] },
+      "2026-09-28T12:00:00.000Z"
     );
     const runId = await reserve("2026-09-28T12:00:00.000Z");
     await repositories.evidence.publish(runId, {
@@ -3256,12 +3904,67 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
       },
       {
         ...firstKill(),
-        encounter: { ...encounter, readAt: "2026-09-28T12:00:00.000Z" }
+        encounter: {
+          ...encounter,
+          readAt: "2026-09-28T12:00:00.000Z",
+          roleCounts: { tank: 1, healer: 0, dps: 1 }
+        }
       }
     ]);
     expect(
       await repositories.evidence.storedRaiderIoFirstKills!(rootKey)
     ).toHaveLength(2);
+  });
+
+  it("leaves a suppressed raider off the roster a dossier reads, and still counts them", async () => {
+    // Break caught (#734 review): a removed character who raided with the
+    // kill guild would be named, with realm, class and item level, on the
+    // dossier of everyone who shared the kill.
+    await save(
+      { encounters: [encounter], unavailable: [] },
+      "2026-09-28T12:00:00.000Z"
+    );
+    await publishFirstKill();
+    await repositories.suppressions.suppress(
+      { region: "eu", realm: "twisting-nether", name: "bravo" },
+      "github-issue-1",
+      null
+    );
+
+    const completed = await repositories.evidence.getCompleted(rootKey);
+    expect(completed?.raiderIoFirstKills?.[0]?.encounter).toMatchObject({
+      members: [alfa],
+      roleCounts: { tank: 1, healer: 0, dps: 1 }
+    });
+    // Collection's presence check still sees the whole roster, and the row
+    // is kept: removal suppresses reads, it does not delete.
+    expect((await stored([700_001])).encounters[0]?.members).toEqual([
+      alfa,
+      bravo
+    ]);
+    const rows = await pool.query(
+      "SELECT count(*)::int AS count FROM raiderio_logged_encounter_members"
+    );
+    expect(rows.rows[0]).toEqual({ count: 2 });
+  });
+
+  it("shows the raider again once the suppression expires", async () => {
+    await save(
+      { encounters: [encounter], unavailable: [] },
+      "2026-09-28T12:00:00.000Z"
+    );
+    await publishFirstKill();
+    await repositories.suppressions.suppress(
+      { region: "eu", realm: "twisting-nether", name: "bravo" },
+      "github-issue-1",
+      new Date(Date.now() - 60_000)
+    );
+
+    const completed = await repositories.evidence.getCompleted(rootKey);
+    expect(completed?.raiderIoFirstKills?.[0]?.encounter?.members).toEqual([
+      alfa,
+      bravo
+    ]);
   });
 
   it("carries first kills forward through a run that did not read them, and drops them only where a complete run looked", async () => {
@@ -3353,6 +4056,25 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
       status: "partial",
       raiderIoLimitationCode: "request_cap"
     });
+    expect(completed?.run).not.toHaveProperty("killScanSkipped");
+  });
+
+  it("loads a skipped kill scan onto the run", async () => {
+    const runId = await reserve("2026-09-28T12:00:00.000Z");
+    await repositories.evidence.publish(runId, {
+      state: "partial",
+      limitationCode: null,
+      parseLimitationCode: null,
+      scanSkipped: true,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date("2026-09-28T12:05:00.000Z")
+    });
+
+    expect(
+      (await repositories.evidence.getCompleted(rootKey))?.run
+    ).toMatchObject({ status: "partial", killScanSkipped: true });
   });
 
   it("still refuses a partial run that names no shortfall at all", async () => {
@@ -3373,6 +4095,55 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
         completedAt: new Date("2026-09-28T12:05:00.000Z")
       })
     ).rejects.toThrow("character_evidence_publication_invalid");
+  });
+
+  it("records the logged-encounter reads on the run's cost row", async () => {
+    const runId = await reserve("2026-09-28T12:00:00.000Z");
+    const cost: EvidenceRunCost = {
+      runId,
+      attempt: 1,
+      outcome: "published",
+      credentials: "own",
+      limitationCode: null,
+      parseLimitationCode: null,
+      pointsSpent: 10,
+      pointsLimitPerHour: 18_000,
+      pointsRemainingBefore: 17_000,
+      pointsRemainingAfter: 16_990,
+      requestCapUsed: 300,
+      parseRequestCapUsed: 24,
+      requests: {
+        historyScan: 1,
+        guildAttendance: 0,
+        reportHydration: 0,
+        zoneRankings: 0,
+        fightParses: 0,
+        rankingIdentities: 0,
+        raiderIoHistoric: 18,
+        raiderIoLoggedEncounters: 7
+      },
+      recovery: {
+        raiderIoOutcome: "evidence",
+        raiderIoMs: 100,
+        verifiedKillsSearched: 0,
+        verifiedKillsSkippedEmpty: 0,
+        recoveredKills: 0
+      }
+    };
+
+    await repositories.evidence.recordRunCost(cost);
+
+    const rows = await pool.query(
+      `SELECT raiderio_historic_requests, raiderio_logged_encounter_requests
+         FROM character_evidence_run_costs WHERE run_id = $1`,
+      [runId]
+    );
+    expect(rows.rows).toEqual([
+      {
+        raiderio_historic_requests: 18,
+        raiderio_logged_encounter_requests: 7
+      }
+    ]);
   });
 
   it("never publishes a run's kills without its Raider.IO first kills", async () => {
@@ -3429,8 +4200,8 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
 
 - [ ] **Step 12: Run the integration tests (Docker must be running)**
 
-Run: `corepack pnpm exec vitest run --project integration tests/integration/repositories-raiderio-first-kills.test.ts tests/integration/migrations.test.ts`
-Expected: PASS. If they are reported as skipped, Docker is not running; start it and re-run — a skipped suite is not a pass.
+Run: `corepack pnpm exec vitest run --project integration tests/integration/repositories-raiderio-first-kills.test.ts tests/integration/migrations.test.ts tests/integration/repositories-evidence-searches.test.ts`
+Expected: PASS. If they are reported as skipped, Docker is not running; start it and re-run — a skipped suite is not a pass. (`repositories-evidence-searches.test.ts` pins the cost row's other columns, which the new column must leave alone.)
 
 Run: `corepack pnpm exec vitest run --project unit packages/database/src`
 Expected: PASS, including `migration-journal.test.ts`.
@@ -3456,13 +4227,13 @@ git commit -m "feat(database): store Raider.IO logged encounters and publish fir
 - Modify: `packages/application/src/verified-kills.ts` (`VerifiedKillsResult` 23-36, `raiderIoVerifiedKills` 45-75), `verified-kills.test.ts`
 - Modify: `packages/application/src/evidence-phase-ledger.ts:6-14, 86-117`
 - Modify: `packages/application/src/evidence-publication.ts` (`EvidencePublication` 25-77, `toStagedCollection` 89-128, `fromStagedCollection` 130-178)
-- Modify: `packages/application/src/applicant-evidence-job-handler.ts` (`ApplicantEvidenceStore` 190-340, `raiderio` option 358-359, after the `raiderio_rankings` block ending at 2230, `incomplete` at 2255-2263, `retryAfterMs` at 2250-2253, the main `stageAndPublish` at 2300-2356)
-- Modify: `packages/application/src/applicant-evidence-job-handler.test.ts`, `resume-waiting-evidence.test.ts:56-65, 108-117`, `applicant-dossier-service.test.ts:781-790`
+- Modify: `packages/application/src/applicant-evidence-job-handler.ts` (`ApplicantEvidenceStore` 190-340, `raiderio` option 358-359, the cost row's `requests` at 1221-1238, after the `raiderio_rankings` block ending at 2230, `retryAfterMs` at 2270-2273, `incomplete` at 2278-2282, the main `stageAndPublish` at 2300-2356)
+- Modify: `packages/application/src/applicant-evidence-job-handler.test.ts` (including the exact cost-row expectation at 2953-2966), `resume-waiting-evidence.test.ts:56-65, 108-117`, `applicant-dossier-service.test.ts:781-790`
 - Modify: `packages/contracts/src/dossier.ts:70-80`, `apps/web/src/components/collection-progress.tsx:20-29`
 
 **Interfaces:**
 
-- Consumes: `HistoricMythicKill.loggedEncounterId`, `RaiderIoGateway.getLoggedEncounter`, `RaiderIoCharacter.raiderIoCharacterId`, `LoggedEncounter` (Task 2); `lookupRaidEncounterByRaiderIoSlugs`, `STORED_KILL_MATCH_MS` (Task 3); `CharacterRaiderIoFirstKillInput`, `RaiderIoLoggedEncounterInput`, `StoredRaiderIoLoggedEncounter`, `RaiderIoFirstKillsPublication`, and the optional store methods `saveRaiderIoLoggedEncounters`, `raiderIoLoggedEncounters`, `storedRaiderIoFirstKills` (Task 4).
+- Consumes: `HistoricMythicKill.loggedEncounterId`, `RaiderIoGateway.getLoggedEncounter`, `RaiderIoCharacter.raiderIoCharacterId`, `LoggedEncounter` (Task 2); `lookupRaidEncounterByRaiderIoSlugs`, `matchesRaiderIoKill`, `STORED_KILL_MATCH_MS` (Task 3); `CharacterRaiderIoFirstKillInput`, `RaiderIoLoggedEncounterInput`, `RaiderIoLoggedEncounterAnswers`, `StoredRaiderIoLoggedEncounterAnswers`, `RaiderIoLoggedEncounterUnavailableCode`, `RaiderIoFirstKillsPublication`, `mergeRaiderIoFirstKills` (test only), `EvidenceRunCost.requests.raiderIoLoggedEncounters`, and the optional store methods `saveRaiderIoLoggedEncounters`, `raiderIoLoggedEncounters`, `storedRaiderIoFirstKills` (Task 4).
 - Produces:
 
 ```ts
@@ -3470,6 +4241,9 @@ git commit -m "feat(database): store Raider.IO logged encounters and publish fir
 export const MAX_RAIDER_IO_LOGGED_ENCOUNTER_READS_PER_RUN = 50;
 export const RAIDER_IO_LOGGED_ENCOUNTER_CONCURRENCY = 4;
 export const MAX_RAIDER_IO_FIRST_KILL_RANK_REQUESTS_PER_RUN = 50;
+export const RAIDER_IO_PRIVATE_ROSTER_REREAD_MS = 7 * 24 * 60 * 60 * 1_000;
+export const RAIDER_IO_UNAVAILABLE_ENCOUNTER_REREAD_MS =
+  30 * 24 * 60 * 60 * 1_000;
 export type RaiderIoFirstKillLimitation = Readonly<{
   code: RaiderIoEvidenceLimitation;
   retryAfterMs?: number;
@@ -3485,7 +4259,6 @@ export function collectRaiderIoFirstKills(
 export function rankRaiderIoFirstKills(
   input: RankInput
 ): Promise<readonly CharacterRaiderIoFirstKillInput[]>;
-export function matchesWarcraftLogsKill(kill, warcraftLogsKills): boolean;
 // verified-kills.ts: VerifiedKillsResult gains firstKills?, askedRaidSlugs?
 // evidence-phase-ledger.ts: EvidencePhaseId gains "raiderio_logged_encounters"
 // EvidencePublication and ApplicantEvidenceStore.publish gain raiderIoFirstKills?: RaiderIoFirstKillsPublication
@@ -3498,7 +4271,10 @@ Create `packages/application/src/raiderio-first-kills.test.ts`:
 ```ts
 import type {
   CharacterRaiderIoFirstKillInput,
-  StoredRaiderIoLoggedEncounter
+  RaiderIoLoggedEncounterAnswers,
+  StoredRaiderIoLoggedEncounter,
+  StoredRaiderIoLoggedEncounterAnswers,
+  StoredRaiderIoLoggedEncounterUnavailable
 } from "@slashwho/database";
 import type {
   HistoricMythicKill,
@@ -3515,12 +4291,17 @@ import {
   rankRaiderIoFirstKills
 } from "./raiderio-first-kills";
 
-const key = { region: "eu" as const, realm: "draenor", name: "eundariel" };
-const method = { name: "Method", realm: "twisting-nether", region: "eu" };
-const eundarielId = 250_442_362;
-const eundariel: LoggedEncounterMember = {
-  raiderIoCharacterId: eundarielId,
-  name: "Eundariel",
+// Synthetic identities throughout: this repository is public.
+const key = { region: "eu" as const, realm: "draenor", name: "alfa" };
+const killGuild = {
+  name: "Fixture Guild Alfa",
+  realm: "twisting-nether",
+  region: "eu"
+};
+const alfaId = 424_242;
+const alfa: LoggedEncounterMember = {
+  raiderIoCharacterId: alfaId,
+  name: "Alfa",
   realm: "draenor",
   region: "eu",
   className: "Demon Hunter",
@@ -3528,15 +4309,20 @@ const eundariel: LoggedEncounterMember = {
   role: "dps",
   itemLevel: 290.5
 };
-const methodTank: LoggedEncounterMember = {
-  raiderIoCharacterId: 1_000,
-  name: "Tankname",
+const bravo: LoggedEncounterMember = {
+  raiderIoCharacterId: 424_243,
+  name: "Bravo",
   realm: "twisting-nether",
   region: "eu",
   className: "Warrior",
   specName: "Protection",
   role: "tank",
   itemLevel: 292.1
+};
+const now = new Date("2026-09-28T12:00:00.000Z");
+const none: StoredRaiderIoLoggedEncounterAnswers = {
+  encounters: [],
+  unavailable: []
 };
 
 function kill(
@@ -3548,7 +4334,7 @@ function kill(
     raidSlug: "tier-mn-1",
     bossSlug,
     firstDefeated,
-    guild: method,
+    guild: killGuild,
     loggedEncounterId
   };
 }
@@ -3557,7 +4343,7 @@ function encounter(
   bossSlug: string,
   roster: LoggedEncounter["roster"] = {
     state: "available",
-    members: [methodTank, eundariel]
+    members: [bravo, alfa]
   }
 ): LoggedEncounter {
   return {
@@ -3568,14 +4354,35 @@ function encounter(
     defeatedAt: "2026-07-20T17:25:57.301Z",
     durationMs: 507_324,
     itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
-    guild: method,
+    guild: killGuild,
     deathCount: 2,
     vantusCount: 16,
     roster
   };
 }
 
-const midnightFalls = kill("midnight-falls", 10_095_623);
+function storedRead(
+  overrides: Partial<StoredRaiderIoLoggedEncounter> = {}
+): StoredRaiderIoLoggedEncounter {
+  return {
+    loggedEncounterId: 700_001,
+    raidSlug: "tier-mn-1",
+    bossSlug: "midnight-falls",
+    pulledAt: "2026-07-20T17:17:29.977Z",
+    defeatedAt: "2026-07-20T17:25:57.301Z",
+    durationMs: 507_324,
+    guild: killGuild,
+    itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+    deathCount: 2,
+    vantusCount: 16,
+    rosterState: "available",
+    members: [bravo, alfa],
+    readAt: "2026-09-01T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+const midnightFalls = kill("midnight-falls", 700_001);
 
 type Gateway = Pick<RaiderIoGateway, "getLoggedEncounter"> &
   Partial<Pick<RaiderIoGateway, "getCharacter">>;
@@ -3584,18 +4391,18 @@ function gateway(overrides: Partial<Gateway> = {}) {
   return {
     getLoggedEncounter: vi.fn<Gateway["getLoggedEncounter"]>(
       async (_raidSlug, id) =>
-        encounter(id === 10_095_623 ? "midnight-falls" : `boss-${String(id)}`)
+        encounter(id === 700_001 ? "midnight-falls" : `boss-${String(id)}`)
     ),
     getCharacter: vi.fn<NonNullable<Gateway["getCharacter"]>>(async () => ({
       key,
-      displayName: "Eundariel",
+      displayName: "Alfa",
       className: "Demon Hunter",
       level: 90,
       guild: null,
       ownerId: null,
       profileGuess: null,
       declaredMain: null,
-      raiderIoCharacterId: eundarielId
+      raiderIoCharacterId: alfaId
     })),
     ...overrides
   };
@@ -3610,19 +4417,47 @@ function collect(
     key,
     kills,
     published: [],
-    storedEncounters: async () => [],
-    saveEncounters: async () => undefined,
+    storedEncounters: async () => none,
+    saveAnswers: async () => undefined,
     raiderio,
     signal: new AbortController().signal,
+    now: () => now,
     ...overrides
   });
 }
 
+/** A store that keeps what it is given, so two runs can be played back to back. */
+function memoryStore() {
+  const encounters: StoredRaiderIoLoggedEncounter[] = [];
+  const unavailable: StoredRaiderIoLoggedEncounterUnavailable[] = [];
+  return {
+    storedEncounters: async (
+      ids: readonly number[]
+    ): Promise<StoredRaiderIoLoggedEncounterAnswers> => ({
+      encounters: encounters.filter((item) =>
+        ids.includes(item.loggedEncounterId)
+      ),
+      unavailable: unavailable.filter((item) =>
+        ids.includes(item.loggedEncounterId)
+      )
+    }),
+    saveAnswers: async (answers: RaiderIoLoggedEncounterAnswers) => {
+      const readAt = now.toISOString();
+      encounters.push(
+        ...answers.encounters.map((item) => ({ ...item, readAt }))
+      );
+      unavailable.push(
+        ...answers.unavailable.map((item) => ({ ...item, readAt }))
+      );
+    }
+  };
+}
+
 describe("collectRaiderIoFirstKills", () => {
   it("reads a first kill's logged encounter and publishes it read, at the log's own time", async () => {
-    const saved: unknown[] = [];
+    const saved: RaiderIoLoggedEncounterAnswers[] = [];
     const result = await collect([midnightFalls], gateway(), {
-      saveEncounters: async (encounters) => void saved.push(...encounters)
+      saveAnswers: async (answers) => void saved.push(answers)
     });
 
     expect(result.limitation).toBeNull();
@@ -3631,8 +4466,8 @@ describe("collectRaiderIoFirstKills", () => {
         raidSlug: "tier-mn-1",
         bossSlug: "midnight-falls",
         killedAt: "2026-07-20T17:25:57.301Z",
-        guild: method,
-        loggedEncounterId: 10_095_623,
+        guild: killGuild,
+        loggedEncounterId: 700_001,
         encounterState: "read",
         encounterLimitationCode: null,
         historicWorldRank: null,
@@ -3640,11 +4475,16 @@ describe("collectRaiderIoFirstKills", () => {
       }
     ]);
     expect(saved).toEqual([
-      expect.objectContaining({
-        loggedEncounterId: 10_095_623,
-        rosterState: "available",
-        members: [methodTank, eundariel]
-      })
+      {
+        encounters: [
+          expect.objectContaining({
+            loggedEncounterId: 700_001,
+            rosterState: "available",
+            members: [bravo, alfa]
+          })
+        ],
+        unavailable: []
+      }
     ]);
   });
 
@@ -3718,31 +4558,218 @@ describe("collectRaiderIoFirstKills", () => {
     expect(most).toBe(4);
   });
 
-  it("never reads an encounter already stored", async () => {
-    const stored: StoredRaiderIoLoggedEncounter = {
-      loggedEncounterId: 10_095_623,
-      raidSlug: "tier-mn-1",
-      bossSlug: "midnight-falls",
-      pulledAt: "2026-07-20T17:17:29.977Z",
-      defeatedAt: "2026-07-20T17:25:57.301Z",
-      durationMs: 507_324,
-      guild: method,
-      itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
-      deathCount: 2,
-      vantusCount: 16,
-      rosterState: "available",
-      members: [methodTank, eundariel],
-      readAt: "2026-09-01T00:00:00.000Z"
-    };
+  it("never reads a visible roster again", async () => {
     const raiderio = gateway();
 
     const result = await collect([midnightFalls], raiderio, {
-      storedEncounters: async (ids) =>
-        ids.includes(10_095_623) ? [stored] : []
+      storedEncounters: async () => ({
+        encounters: [storedRead({ readAt: "2025-09-28T12:00:00.000Z" })],
+        unavailable: []
+      })
     });
 
     expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
     expect(result.kills[0]).toMatchObject({ encounterState: "read" });
+  });
+
+  it.each([
+    [
+      "a hidden roster read 8 days ago",
+      "private",
+      "2026-09-20T11:00:00.000Z",
+      1
+    ],
+    [
+      "a hidden roster read 6 days ago",
+      "private",
+      "2026-09-22T12:00:00.000Z",
+      0
+    ],
+    [
+      "a visible roster read a year ago",
+      "available",
+      "2025-09-28T12:00:00.000Z",
+      0
+    ]
+  ] as const)(
+    "reads a hidden roster again after a week, and a visible one never: %s",
+    async (_name, rosterState, readAt, reads) => {
+      // Break caught (#734 review): a guild can open its roster after the
+      // kill, and a roster stored as hidden then stayed hidden for good.
+      const raiderio = gateway();
+
+      const result = await collect([midnightFalls], raiderio, {
+        storedEncounters: async () => ({
+          encounters: [
+            storedRead({
+              rosterState,
+              members: rosterState === "private" ? [] : [bravo, alfa],
+              readAt
+            })
+          ],
+          unavailable: []
+        })
+      });
+
+      expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(reads);
+      expect(result.kills[0]).toMatchObject({ encounterState: "read" });
+      expect(result.encounters.get(700_001)?.rosterState).toBe(
+        reads === 1 ? "available" : rosterState
+      );
+    }
+  );
+
+  it("keeps a hidden roster as read when the re-read is refused, and dates the attempt", async () => {
+    const saved: RaiderIoLoggedEncounterAnswers[] = [];
+    const hidden = storedRead({
+      rosterState: "private",
+      members: [],
+      readAt: "2026-09-01T00:00:00.000Z"
+    });
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async () => ({
+        kind: "limitation" as const,
+        code: "not_found" as const
+      }))
+    });
+
+    const result = await collect([midnightFalls], raiderio, {
+      storedEncounters: async () => ({ encounters: [hidden], unavailable: [] }),
+      saveAnswers: async (answers) => void saved.push(answers)
+    });
+
+    expect(result.limitation).toBeNull();
+    expect(result.kills[0]).toMatchObject({ encounterState: "read" });
+    // Saved again unchanged, so its `read_at` moves and it waits another week.
+    const { readAt, ...unchanged } = hidden;
+    void readAt;
+    expect(saved).toEqual([{ encounters: [unchanged], unavailable: [] }]);
+  });
+
+  it.each([
+    ["31 days ago", "2026-08-28T11:00:00.000Z", 1],
+    ["29 days ago", "2026-08-30T12:00:00.000Z", 0]
+  ])(
+    "asks again about a permanent answer only after 30 days: stored %s",
+    async (_name, readAt, reads) => {
+      const raiderio = gateway({
+        getLoggedEncounter: vi.fn(async () => ({
+          kind: "limitation" as const,
+          code: "not_found" as const
+        }))
+      });
+
+      const result = await collect([midnightFalls], raiderio, {
+        storedEncounters: async () => ({
+          encounters: [],
+          unavailable: [
+            { loggedEncounterId: 700_001, code: "not_found", readAt }
+          ]
+        })
+      });
+
+      expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(reads);
+      expect(result.kills[0]).toMatchObject({
+        encounterState: "unavailable",
+        encounterLimitationCode: "not_found"
+      });
+      expect(result.limitation).toBeNull();
+    }
+  );
+
+  it("asks once about a deleted log across two runs", async () => {
+    // Break caught (#734 review): only a successful read was stored, so a
+    // deleted log cost one request on every run for good.
+    const store = memoryStore();
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async () => ({
+        kind: "limitation" as const,
+        code: "not_found" as const
+      }))
+    });
+
+    await collect([midnightFalls], raiderio, store);
+    const second = await collect([midnightFalls], raiderio, store);
+
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(1);
+    expect(second.kills[0]).toMatchObject({
+      encounterState: "unavailable",
+      encounterLimitationCode: "not_found"
+    });
+    expect(second.limitation).toBeNull();
+  });
+
+  it("never spends the cap on permanent answers it already holds", async () => {
+    // Break caught (#734 review): 50 refusals at the front of the queue would
+    // take the whole cap every run and hold the character partial for good.
+    const kills = Array.from({ length: 60 }, (_, index) =>
+      kill(`boss-${String(index + 1)}`, index + 1)
+    );
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async (_raidSlug: string, id: number) =>
+        encounter(`boss-${String(id)}`, {
+          state: "unavailable",
+          reason: "private"
+        })
+      )
+    });
+
+    const result = await collect(kills, raiderio, {
+      storedEncounters: async () => ({
+        encounters: [],
+        unavailable: Array.from({ length: 50 }, (_, index) => ({
+          loggedEncounterId: index + 1,
+          code: "not_found" as const,
+          readAt: "2026-09-27T00:00:00.000Z"
+        }))
+      })
+    });
+
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(10);
+    expect(result.limitation).toBeNull();
+  });
+
+  it("reads every first read before any re-read, and a deferred re-read keeps its answer", async () => {
+    const kills = [
+      kill("midnight-falls", 700_001),
+      ...Array.from({ length: 50 }, (_, index) =>
+        kill(`boss-${String(index + 1)}`, index + 1)
+      )
+    ];
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async (_raidSlug: string, id: number) =>
+        encounter(`boss-${String(id)}`, {
+          state: "unavailable",
+          reason: "private"
+        })
+      )
+    });
+
+    const result = await collect(kills, raiderio, {
+      storedEncounters: async () => ({
+        encounters: [
+          storedRead({
+            rosterState: "private",
+            members: [],
+            readAt: "2026-09-01T00:00:00.000Z"
+          })
+        ],
+        unavailable: []
+      })
+    });
+
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(50);
+    expect(raiderio.getLoggedEncounter).not.toHaveBeenCalledWith(
+      "tier-mn-1",
+      700_001,
+      expect.anything(),
+      undefined
+    );
+    expect(result.kills[0]).toMatchObject({
+      loggedEncounterId: 700_001,
+      encounterState: "read"
+    });
+    expect(result.limitation).toBeNull();
   });
 
   it("counts the character present only by its own Raider.IO id on the roster", async () => {
@@ -3750,7 +4777,7 @@ describe("collectRaiderIoFirstKills", () => {
       getLoggedEncounter: vi.fn(async () =>
         encounter("midnight-falls", {
           state: "available",
-          members: [methodTank]
+          members: [bravo]
         })
       )
     });
@@ -3767,8 +4794,8 @@ describe("collectRaiderIoFirstKills", () => {
       raidSlug: "tier-mn-1",
       bossSlug: "midnight-falls",
       killedAt: "2026-07-20T17:25:57.301Z",
-      guild: method,
-      loggedEncounterId: 10_095_623,
+      guild: killGuild,
+      loggedEncounterId: 700_001,
       encounterState: "read",
       encounterLimitationCode: null,
       historicWorldRank: null,
@@ -3795,7 +4822,7 @@ describe("collectRaiderIoFirstKills", () => {
 
     expect(raiderio.getCharacter).not.toHaveBeenCalled();
     expect(result.kills[0]).toMatchObject({ encounterState: "read" });
-    expect(result.encounters.get(10_095_623)).toMatchObject({
+    expect(result.encounters.get(700_001)).toMatchObject({
       rosterState: "private",
       members: []
     });
@@ -3858,8 +4885,9 @@ describe("collectRaiderIoFirstKills", () => {
   });
 
   it.each(["not_found", "private", "schema_drift"] as const)(
-    "does not hold the run partial for a permanent answer (%s)",
+    "does not hold the run partial for a permanent answer (%s), and stores it",
     async (code) => {
+      const saved: RaiderIoLoggedEncounterAnswers[] = [];
       const raiderio = gateway({
         getLoggedEncounter: vi.fn(async () => ({
           kind: "limitation" as const,
@@ -3867,35 +4895,49 @@ describe("collectRaiderIoFirstKills", () => {
         }))
       });
 
-      const result = await collect([midnightFalls], raiderio);
+      const result = await collect([midnightFalls], raiderio, {
+        saveAnswers: async (answers) => void saved.push(answers)
+      });
 
       expect(result.limitation).toBeNull();
       expect(result.kills[0]).toMatchObject({
         encounterState: "unavailable",
         encounterLimitationCode: code
       });
+      expect(saved).toEqual([
+        {
+          encounters: [],
+          unavailable: [{ loggedEncounterId: 700_001, code }]
+        }
+      ]);
     }
   );
 
-  it("refuses an encounter that names another boss", async () => {
+  it("refuses an encounter that names another boss, and stores the refusal", async () => {
+    const saved: RaiderIoLoggedEncounterAnswers[] = [];
     const raiderio = gateway({
       getLoggedEncounter: vi.fn(async () =>
         encounter("chimaerus-the-undreamt-god")
       )
     });
 
-    const result = await collect([midnightFalls], raiderio);
+    const result = await collect([midnightFalls], raiderio, {
+      saveAnswers: async (answers) => void saved.push(answers)
+    });
 
     expect(result.kills[0]).toMatchObject({
       encounterState: "unavailable",
       encounterLimitationCode: "schema_drift"
     });
     expect(result.encounters.size).toBe(0);
+    expect(saved[0]?.unavailable).toEqual([
+      { loggedEncounterId: 700_001, code: "schema_drift" }
+    ]);
   });
 
   it("keeps a read nobody could store as unread", async () => {
     const result = await collect([midnightFalls], gateway(), {
-      saveEncounters: async () => {
+      saveAnswers: async () => {
         throw new Error("database_down");
       }
     });
@@ -3913,36 +4955,20 @@ describe("rankRaiderIoFirstKills", () => {
     raidSlug: "tier-mn-1",
     bossSlug: "midnight-falls",
     killedAt: "2026-07-20T17:25:57.301Z",
-    guild: method,
-    loggedEncounterId: 10_095_623,
+    guild: killGuild,
+    loggedEncounterId: 700_001,
     encounterState: "read",
     encounterLimitationCode: null,
     historicWorldRank: null,
     historicRankCheckedAt: null
   };
-  const encounters = new Map([
-    [
-      10_095_623,
-      {
-        loggedEncounterId: 10_095_623,
-        raidSlug: "tier-mn-1",
-        bossSlug: "midnight-falls",
-        pulledAt: "2026-07-20T17:17:29.977Z",
-        defeatedAt: "2026-07-20T17:25:57.301Z",
-        durationMs: 507_324,
-        guild: method,
-        itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
-        deathCount: 2,
-        vantusCount: 16,
-        rosterState: "available" as const,
-        members: [methodTank, eundariel]
-      }
-    ]
-  ]);
-  const methodRank = (firstDefeated: string): MythicBossRanking => ({
+  const { readAt, ...readEncounter } = storedRead();
+  void readAt;
+  const encounters = new Map([[700_001, readEncounter]]);
+  const guildRank = (firstDefeated: string): MythicBossRanking => ({
     bossSlug: "midnight-falls",
     rank: 3,
-    guildName: "Method",
+    guildName: "Fixture Guild Alfa",
     guildRealm: "twisting-nether",
     guildRegion: "eu",
     firstDefeated
@@ -3965,18 +4991,18 @@ describe("rankRaiderIoFirstKills", () => {
         published: [],
         raiderio: { getMythicBossRankings },
         signal: new AbortController().signal,
-        now: () => new Date("2026-09-28T12:00:00.000Z"),
+        now: () => now,
         ...overrides
       })
     };
   }
 
-  it("gives Method's 20 Jul Midnight Falls kill no world rank: Method's #3 is its 8 Apr kill", async () => {
-    // Pinned by name: Eundariel's kill with Method (#732). Method is world #3
-    // on Midnight Falls from 2026-04-08T14:54:22Z; a later kill with the same
-    // guild must never borrow it.
+  it("gives a later kill with a ranked guild no world rank: the guild's #3 is its own 8 Apr kill", async () => {
+    // The problem's dates (#732), with a synthetic guild: the guild is world
+    // #3 on Midnight Falls from 2026-04-08T14:54:22Z, and a 20 Jul kill with
+    // the same guild must never borrow it.
     const { getMythicBossRankings, result } = rank([
-      methodRank("2026-04-08T14:54:22.000Z")
+      guildRank("2026-04-08T14:54:22.000Z")
     ]);
 
     expect(await result).toEqual([
@@ -3990,7 +5016,7 @@ describe("rankRaiderIoFirstKills", () => {
       {
         raidSlug: "tier-mn-1",
         bossSlug: "midnight-falls",
-        guild: { name: "Method", realm: "twisting-nether", region: "eu" }
+        guild: killGuild
       },
       expect.any(AbortSignal),
       undefined
@@ -3998,7 +5024,7 @@ describe("rankRaiderIoFirstKills", () => {
   });
 
   it("ranks a guild's own first kill from the encounter guild's exact defeat", async () => {
-    const { result } = rank([methodRank("2026-07-20T17:25:57.000Z")]);
+    const { result } = rank([guildRank("2026-07-20T17:25:57.000Z")]);
     expect((await result)[0]?.historicWorldRank).toBe(3);
   });
 
@@ -4016,23 +5042,69 @@ describe("rankRaiderIoFirstKills", () => {
     expect(getMythicBossRankings).not.toHaveBeenCalled();
   });
 
-  it("asks nothing again once a rank is stored", async () => {
-    const { getMythicBossRankings, result } = rank([], {
-      published: [{ ...readKill, historicWorldRank: 3 }]
-    });
-    await result;
-    expect(getMythicBossRankings).not.toHaveBeenCalled();
-  });
+  it.each([3, null])(
+    "asks nothing again once a rank is checked, a null rank included (%s)",
+    async (checkedRank) => {
+      // Break caught (#734 pre-flight): a null rank was asked about again on
+      // every run, up to 50 requests a run spent on answers that never change.
+      const { getMythicBossRankings, result } = rank([], {
+        published: [
+          {
+            ...readKill,
+            historicWorldRank: checkedRank,
+            historicRankCheckedAt: "2026-09-01T00:00:00.000Z"
+          }
+        ]
+      });
+      expect(await result).toEqual([
+        {
+          ...readKill,
+          historicWorldRank: checkedRank,
+          historicRankCheckedAt: "2026-09-01T00:00:00.000Z"
+        }
+      ]);
+      expect(getMythicBossRankings).not.toHaveBeenCalled();
+    }
+  );
 
   it("asks nothing for a pug", async () => {
     const { getMythicBossRankings, result } = rank([], {
-      encounters: new Map([
-        [10_095_623, { ...encounters.get(10_095_623)!, guild: null }]
-      ])
+      encounters: new Map([[700_001, { ...readEncounter, guild: null }]])
     });
     expect(await result).toEqual([readKill]);
     expect(getMythicBossRankings).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "no logged encounter",
+      {
+        ...readKill,
+        loggedEncounterId: null,
+        encounterState: "unavailable" as const
+      }
+    ],
+    [
+      "a logged encounter not yet read",
+      {
+        ...readKill,
+        encounterState: "unavailable" as const,
+        encounterLimitationCode: "request_cap"
+      }
+    ]
+  ])(
+    "asks nothing for a kill with %s, which is never a kill event of its own",
+    async (_name, unread) => {
+      // Break caught (#734 pre-flight): ranked from Raider.IO's attribution,
+      // such kills cost rank requests the dossier could never show.
+      const { getMythicBossRankings, result } = rank([], {
+        kills: [unread],
+        encounters: new Map()
+      });
+      expect(await result).toEqual([unread]);
+      expect(getMythicBossRankings).not.toHaveBeenCalled();
+    }
+  );
 });
 ```
 
@@ -4048,13 +5120,16 @@ Create `packages/application/src/raiderio-first-kills.ts`:
 ```ts
 import type {
   CharacterRaiderIoFirstKillInput,
+  RaiderIoLoggedEncounterAnswers,
   RaiderIoLoggedEncounterInput,
-  StoredRaiderIoLoggedEncounter
+  RaiderIoLoggedEncounterUnavailableCode,
+  RaiderIoLoggedEncounterUnavailableInput,
+  StoredRaiderIoLoggedEncounter,
+  StoredRaiderIoLoggedEncounterAnswers
 } from "@slashwho/database";
 import {
   lookupRaidEncounterByRaiderIoSlugs,
-  lookupRaiderIoBoss,
-  STORED_KILL_MATCH_MS,
+  matchesRaiderIoKill,
   supportedRegions,
   type CharacterKey
 } from "@slashwho/domain";
@@ -4080,6 +5155,19 @@ export const RAIDER_IO_LOGGED_ENCOUNTER_CONCURRENCY = 4;
 /** World-rank lookups for first kills no Warcraft Logs kill matches. */
 export const MAX_RAIDER_IO_FIRST_KILL_RANK_REQUESTS_PER_RUN = 50;
 
+const dayMs = 24 * 60 * 60 * 1_000;
+/**
+ * A roster read as hidden is read again after a week: a guild can open its
+ * compositions after the kill. A visible roster is never read again, because
+ * the kill and who was in it do not change.
+ */
+export const RAIDER_IO_PRIVATE_ROSTER_REREAD_MS = 7 * dayMs;
+/**
+ * A permanent refusal is asked again after 30 days, in case the log was
+ * restored or re-uploaded. Until then it costs nothing and fills no cap.
+ */
+export const RAIDER_IO_UNAVAILABLE_ENCOUNTER_REREAD_MS = 30 * dayMs;
+
 export type RaiderIoFirstKillLimitation = Readonly<{
   code: RaiderIoEvidenceLimitation;
   retryAfterMs?: number;
@@ -4087,20 +5175,21 @@ export type RaiderIoFirstKillLimitation = Readonly<{
 
 export type RaiderIoFirstKillCollection = Readonly<{
   kills: readonly CharacterRaiderIoFirstKillInput[];
-  /** Every encounter the kills name that is now stored, read or held before. */
+  /** Every read encounter the kills name that is now stored, read or held before. */
   encounters: ReadonlyMap<number, RaiderIoLoggedEncounterInput>;
   /** Why the phase fell short, or null. Only work a retry can finish counts. */
   limitation: RaiderIoFirstKillLimitation | null;
 }>;
 
-// Work a later run can finish. A deleted log (`not_found`), a hidden one or
-// one that names another boss answers the same way every time, so it marks
-// that kill's encounter unavailable without holding the run partial forever.
-const RETRYABLE: ReadonlySet<RaiderIoEvidenceLimitation> = new Set([
-  "request_cap",
-  "rate_limited",
-  "unavailable"
-]);
+// A deleted log (`not_found`), a 403 (`private`) or one that names another
+// boss (`schema_drift`) answers the same way every time: it is stored as an
+// unavailable row and marks that kill's encounter unavailable, without
+// holding the run partial.
+function isPermanent(
+  code: RaiderIoEvidenceLimitation
+): code is RaiderIoLoggedEncounterUnavailableCode {
+  return code === "not_found" || code === "private" || code === "schema_drift";
+}
 
 type Guild = CharacterRaiderIoFirstKillInput["guild"];
 
@@ -4137,14 +5226,16 @@ function withoutReadAt(
 }
 
 /**
- * Reads the logged encounter of every Raider.IO first kill that has one, once
- * ever (#732), and says which kills are the character's.
+ * Reads the logged encounter of every Raider.IO first kill that has one
+ * (#732), and says which kills are the character's.
  *
- * An id already stored is never read again. Reads are bounded like
- * `raiderio_rankings`: at most 50 a run, four at a time, and a read that
- * throws abandons the rest. A kill counts as the character's only when the
- * roster holds the character's own Raider.IO id; where the roster is hidden,
- * Raider.IO's own attribution of the kill stands in for it.
+ * What is stored decides what is read. A visible roster is never read again;
+ * a hidden one is read again once a week old; a permanent refusal is asked
+ * again once 30 days old. First reads come before re-reads, and all of them
+ * share one bound, as `raiderio_rankings` does: 50 a run, four at a time, and
+ * a read that throws abandons the rest. A kill counts as the character's only
+ * when the roster holds the character's own Raider.IO id; where the roster is
+ * hidden, Raider.IO's own attribution of the kill stands in for it.
  */
 export async function collectRaiderIoFirstKills(
   input: Readonly<{
@@ -4154,14 +5245,16 @@ export async function collectRaiderIoFirstKills(
     published: readonly CharacterRaiderIoFirstKillInput[];
     storedEncounters: (
       ids: readonly number[]
-    ) => Promise<readonly StoredRaiderIoLoggedEncounter[]>;
-    saveEncounters: (
-      encounters: readonly RaiderIoLoggedEncounterInput[]
-    ) => Promise<void>;
+    ) => Promise<StoredRaiderIoLoggedEncounterAnswers>;
+    saveAnswers: (answers: RaiderIoLoggedEncounterAnswers) => Promise<void>;
     raiderio: Pick<RaiderIoGateway, "getLoggedEncounter"> &
       Partial<Pick<RaiderIoGateway, "getCharacter">>;
     signal: AbortSignal;
-    onPhysicalRequest?: () => void;
+    now: () => Date;
+    /** Called once per logged-encounter request actually sent. */
+    onEncounterRequest?: () => void;
+    /** Called once for the character read, if one is made. */
+    onCharacterRequest?: () => void;
   }>
 ): Promise<RaiderIoFirstKillCollection> {
   const killById = new Map<number, HistoricMythicKill>();
@@ -4170,35 +5263,88 @@ export async function collectRaiderIoFirstKills(
       killById.set(kill.loggedEncounterId, kill);
   }
   const ids = [...killById.keys()];
-  const encounters = new Map<number, RaiderIoLoggedEncounterInput>(
-    (ids.length === 0 ? [] : await input.storedEncounters(ids)).map(
-      (encounter) =>
-        [encounter.loggedEncounterId, withoutReadAt(encounter)] as const
-    )
+  const stored: StoredRaiderIoLoggedEncounterAnswers =
+    ids.length === 0
+      ? { encounters: [], unavailable: [] }
+      : await input.storedEncounters(ids);
+  const at = input.now().getTime();
+
+  const encounters = new Map<number, RaiderIoLoggedEncounterInput>();
+  const storedRead = new Map<number, RaiderIoLoggedEncounterInput>();
+  const storedUnavailable = new Map<
+    number,
+    RaiderIoLoggedEncounterUnavailableCode
+  >();
+  const due = new Set<number>();
+  for (const encounter of stored.encounters) {
+    const kept = withoutReadAt(encounter);
+    encounters.set(encounter.loggedEncounterId, kept);
+    storedRead.set(encounter.loggedEncounterId, kept);
+    if (
+      encounter.rosterState === "private" &&
+      at - Date.parse(encounter.readAt) > RAIDER_IO_PRIVATE_ROSTER_REREAD_MS
+    ) {
+      due.add(encounter.loggedEncounterId);
+    }
+  }
+  for (const answer of stored.unavailable) {
+    storedUnavailable.set(answer.loggedEncounterId, answer.code);
+    if (
+      at - Date.parse(answer.readAt) >
+      RAIDER_IO_UNAVAILABLE_ENCOUNTER_REREAD_MS
+    ) {
+      due.add(answer.loggedEncounterId);
+    }
+  }
+  const held = (id: number) => encounters.has(id) || storedUnavailable.has(id);
+  const unread = ids.filter((id) => !held(id));
+  // A re-read already has an answer to show, so first reads go first. A
+  // re-read the cap leaves out keeps its answer and limits nothing.
+  const toRead = [...unread, ...ids.filter((id) => due.has(id))].slice(
+    0,
+    MAX_RAIDER_IO_LOGGED_ENCOUNTER_READS_PER_RUN
   );
-  const unread = ids.filter((id) => !encounters.has(id));
-  const toRead = unread.slice(0, MAX_RAIDER_IO_LOGGED_ENCOUNTER_READS_PER_RUN);
-  const notRead = new Map<number, RaiderIoEvidenceLimitation>(
+  // This run's answer for an id no stored answer covers, or a fresh
+  // permanent refusal, which replaces a stored one.
+  const answered = new Map<number, RaiderIoEvidenceLimitation>(
     unread
       .slice(MAX_RAIDER_IO_LOGGED_ENCOUNTER_READS_PER_RUN)
       .map((id) => [id, "request_cap"] as const)
   );
   let limitation: RaiderIoFirstKillLimitation | null =
-    unread.length > toRead.length ? { code: "request_cap" } : null;
+    unread.length > MAX_RAIDER_IO_LOGGED_ENCOUNTER_READS_PER_RUN
+      ? { code: "request_cap" }
+      : null;
   const fallShort = (next: RaiderIoFirstKillLimitation) => {
-    if (RETRYABLE.has(next.code)) limitation ??= next;
+    limitation ??= next;
+  };
+  // A retryable miss matters only where nothing stored answers the id.
+  const miss = (id: number, code: RaiderIoEvidenceLimitation) => {
+    if (!held(id)) answered.set(id, code);
   };
 
   const limiter = createConcurrencyLimiter(
     RAIDER_IO_LOGGED_ENCOUNTER_CONCURRENCY
   );
   let abandoned = false;
-  const read: RaiderIoLoggedEncounterInput[] = [];
+  const readNow: RaiderIoLoggedEncounterInput[] = [];
+  const unavailableNow: RaiderIoLoggedEncounterUnavailableInput[] = [];
+  const refuse = (id: number, code: RaiderIoLoggedEncounterUnavailableCode) => {
+    const kept = storedRead.get(id);
+    if (kept) {
+      // A read is never unread. Saved again unchanged, the hidden roster's
+      // `read_at` moves on and it is not asked about again for a week.
+      readNow.push(kept);
+      return;
+    }
+    answered.set(id, code);
+    unavailableNow.push({ loggedEncounterId: id, code });
+  };
   await Promise.all(
     toRead.map((id) =>
       limiter.run(async () => {
         if (abandoned) {
-          notRead.set(id, "unavailable");
+          miss(id, "unavailable");
           return;
         }
         const kill = killById.get(id)!;
@@ -4207,10 +5353,14 @@ export async function collectRaiderIoFirstKills(
             kill.raidSlug,
             id,
             input.signal,
-            input.onPhysicalRequest
+            input.onEncounterRequest
           );
           if (result.kind === "limitation") {
-            notRead.set(id, result.code);
+            if (isPermanent(result.code)) {
+              refuse(id, result.code);
+              return;
+            }
+            miss(id, result.code);
             fallShort({
               code: result.code,
               ...(result.retryAfterMs === undefined
@@ -4224,30 +5374,34 @@ export async function collectRaiderIoFirstKills(
             result.bossSlug !== kill.bossSlug
           ) {
             // The log names another boss than the kill it was listed under.
-            notRead.set(id, "schema_drift");
+            refuse(id, "schema_drift");
             return;
           }
-          read.push(encounterInput(id, result));
+          readNow.push(encounterInput(id, result));
         } catch (error) {
           if (input.signal.aborted) throw error;
           abandoned = true;
-          notRead.set(id, "unavailable");
+          miss(id, "unavailable");
           fallShort({ code: "unavailable" });
         }
       })
     )
   );
 
-  if (read.length > 0) {
+  if (readNow.length > 0 || unavailableNow.length > 0) {
     try {
-      await input.saveEncounters(read);
-      for (const encounter of read) {
+      await input.saveAnswers({
+        encounters: readNow,
+        unavailable: unavailableNow
+      });
+      for (const encounter of readNow) {
         encounters.set(encounter.loggedEncounterId, encounter);
       }
     } catch {
-      // Unsaved, a read would name an encounter no reader can find.
-      for (const encounter of read) {
-        notRead.set(encounter.loggedEncounterId, "unavailable");
+      // Unsaved, a new read would name an encounter no reader can find. A
+      // stored answer stands; a refusal is still this run's true answer.
+      for (const encounter of readNow) {
+        miss(encounter.loggedEncounterId, "unavailable");
       }
       fallShort({ code: "unavailable" });
     }
@@ -4301,7 +5455,8 @@ export async function collectRaiderIoFirstKills(
             killedAt: kill.firstDefeated,
             loggedEncounterId: id,
             encounterState: "unavailable",
-            encounterLimitationCode: notRead.get(id) ?? "unavailable"
+            encounterLimitationCode:
+              answered.get(id) ?? storedUnavailable.get(id) ?? "unavailable"
           }
         ];
       }
@@ -4337,12 +5492,12 @@ async function raiderIoCharacterId(
     key: CharacterKey;
     raiderio: Partial<Pick<RaiderIoGateway, "getCharacter">>;
     signal: AbortSignal;
-    onPhysicalRequest?: () => void;
+    onCharacterRequest?: () => void;
   }>
 ): Promise<number | null> {
   if (!input.raiderio.getCharacter) return null;
   try {
-    input.onPhysicalRequest?.();
+    input.onCharacterRequest?.();
     const character = await input.raiderio.getCharacter(
       input.key,
       input.signal
@@ -4354,45 +5509,22 @@ async function raiderIoCharacterId(
   }
 }
 
-/** Whether a Warcraft Logs kill of the same boss sits within the match tolerance. */
-export function matchesWarcraftLogsKill(
+const rankKey = (
   kill: Pick<
     CharacterRaiderIoFirstKillInput,
-    "raidSlug" | "bossSlug" | "killedAt"
-  >,
-  warcraftLogsKills: readonly Readonly<{
-    raidName: string;
-    bossName?: string;
-    killedAt: string;
-  }>[]
-): boolean {
-  const at = Date.parse(kill.killedAt);
-  return warcraftLogsKills.some((stored) => {
-    if (stored.bossName === undefined) return false;
-    const boss = lookupRaiderIoBoss(stored.raidName, stored.bossName);
-    return (
-      boss?.raidSlug === kill.raidSlug &&
-      boss.bossSlug === kill.bossSlug &&
-      Math.abs(Date.parse(stored.killedAt) - at) <= STORED_KILL_MATCH_MS
-    );
-  });
-}
+    "raidSlug" | "bossSlug" | "loggedEncounterId"
+  >
+) => `${kill.raidSlug}\0${kill.bossSlug}\0${String(kill.loggedEncounterId)}`;
 
 function rankable(
   kill: CharacterRaiderIoFirstKillInput,
   encounters: ReadonlyMap<number, RaiderIoLoggedEncounterInput>
 ) {
-  const encounter =
-    kill.loggedEncounterId === null
-      ? undefined
-      : encounters.get(kill.loggedEncounterId);
-  // The encounter's own guild where the log was read. Raider.IO's attribution
-  // stands in only for a log not yet read.
-  const guild = encounter
-    ? encounter.guild
-    : kill.encounterState === "read"
-      ? null
-      : kill.guild;
+  // Only a kill whose log was read stands as a kill event of its own, so only
+  // it is worth a rank request; its guild is the encounter's own.
+  if (kill.encounterState !== "read" || kill.loggedEncounterId === null)
+    return null;
+  const guild = encounters.get(kill.loggedEncounterId)?.guild;
   if (!guild) return null;
   const region = guild.region as CharacterKey["region"];
   if (!supportedRegions.includes(region)) return null;
@@ -4412,11 +5544,13 @@ function rankable(
 }
 
 /**
- * World ranks for first kills no Warcraft Logs kill matches, from the
+ * World ranks for read first kills no Warcraft Logs kill matches, from the
  * encounter's guild and exact defeat time through `historicWorldRankForKill`.
  * A guild's first kill gets its rank and a later kill with the same guild gets
- * none. A matched kill keeps the Warcraft Logs lookup it already has. Never
- * limits the phase: a missing rank is simply looked up again next run.
+ * none. A matched kill keeps the Warcraft Logs lookup it already has. A rank
+ * once checked is kept with its check time, a null rank included, and never
+ * asked about again. Never limits the phase: a lookup that fails is simply
+ * made again next run.
  */
 export async function rankRaiderIoFirstKills(
   input: Readonly<{
@@ -4434,14 +5568,19 @@ export async function rankRaiderIoFirstKills(
     onPhysicalRequest?: () => void;
   }>
 ): Promise<readonly CharacterRaiderIoFirstKillInput[]> {
-  const ranked = new Set(
+  const checked = new Map(
     input.published
-      .filter((kill) => kill.historicWorldRank !== null)
-      .map((kill) => `${kill.raidSlug}\0${kill.bossSlug}`)
+      .filter((kill) => kill.historicRankCheckedAt !== null)
+      .map((kill) => [rankKey(kill), kill] as const)
   );
   const candidates = input.kills.flatMap((kill) => {
-    if (ranked.has(`${kill.raidSlug}\0${kill.bossSlug}`)) return [];
-    if (matchesWarcraftLogsKill(kill, input.warcraftLogsKills)) return [];
+    if (checked.has(rankKey(kill))) return [];
+    if (
+      input.warcraftLogsKills.some((stored) =>
+        matchesRaiderIoKill(kill, stored)
+      )
+    )
+      return [];
     const found = rankable(kill, input.encounters);
     return found ? [{ kill, ...found }] : [];
   });
@@ -4486,15 +5625,23 @@ export async function rankRaiderIoFirstKills(
       );
     }
   }
-  return input.kills.map((kill) =>
-    ranks.has(kill)
+  return input.kills.map((kill) => {
+    const before = checked.get(rankKey(kill));
+    if (before) {
+      return {
+        ...kill,
+        historicWorldRank: before.historicWorldRank,
+        historicRankCheckedAt: before.historicRankCheckedAt
+      };
+    }
+    return ranks.has(kill)
       ? {
           ...kill,
           historicWorldRank: ranks.get(kill)!,
           historicRankCheckedAt: checkedAt
         }
-      : kill
-  );
+      : kill;
+  });
 }
 ```
 
@@ -4514,7 +5661,7 @@ it("hands back every first kill and the raids its tiers answer for (#732)", asyn
     bossSlug: "midnight-falls",
     firstDefeated: "2026-07-20T17:25:57.000Z",
     guild: null,
-    loggedEncounterId: 10_095_623
+    loggedEncounterId: 700_001
   };
   const result = await raiderIoVerifiedKills(
     {
@@ -4549,7 +5696,7 @@ In `packages/application/src/verified-kills.ts`, add to `VerifiedKillsResult`:
   askedRaidSlugs?: readonly string[];
 ```
 
-Replace the top-of-function doc comment's "Never evidence: a kill counts only once a hydrated log attributes it." with "A plain kill is never evidence: it counts only once a hydrated log attributes it, or once Raider.IO's own logged encounter of it is read (#732)." In `raiderIoVerifiedKills`, compute the tiers once and return the new fields:
+Replace the top-of-function doc comment's "Never evidence: a kill counts only once a hydrated log attributes it." with "A plain kill is never evidence: it counts only once a hydrated log attributes it, or once Raider.IO's own logged encounter of it is read (#732)." In `raiderIoVerifiedKills`, compute the tiers once and pass them to the request:
 
 ```ts
   const tierOrdinals = historicTierOrdinalsFrom(options.killScanFloor);
@@ -4558,6 +5705,8 @@ Replace the top-of-function doc comment's "Never evidence: a kill counts only on
     result = await raiderio.getHistoricMythicKills(key, {
       tierOrdinals,
 ```
+
+and return the new fields:
 
 ```ts
 return {
@@ -4629,16 +5778,34 @@ In `fromStagedCollection`, after `cuttingEdges: staged.cuttingEdges ?? [],`:
 
 - [ ] **Step 8: Write the failing handler tests**
 
-In `packages/application/src/applicant-evidence-job-handler.test.ts`, add `fullEvidencePhasePlan` to the imports (`import { fullEvidencePhasePlan } from "./evidence-phase-ledger";`) and `RaiderIoLoggedEncounterInput` to the `@slashwho/database` type import. Append a new `describe` inside the top-level `describe("applicant evidence job handler", ...)`:
+In `packages/application/src/applicant-evidence-job-handler.test.ts`, add `fullEvidencePhasePlan` to the imports (`import { fullEvidencePhasePlan } from "./evidence-phase-ledger";`), `CharacterRaiderIoFirstKillInput` and `RaiderIoLoggedEncounterAnswers` to the `@slashwho/database` type import, and a value import of the storage merge (a pure function; the dossier web tests already import `@slashwho/database` values):
+
+```ts
+import { mergeRaiderIoFirstKills } from "@slashwho/database";
+```
+
+In the exact cost-row expectation of `"records the spend, the caps in force and the requests it issued"` (line 2953-2966), add after `raiderIoRankings: 0,`:
+
+```ts
+              raiderIoLoggedEncounters: 0,
+```
+
+Append a new `describe` inside the top-level `describe("applicant evidence job handler", ...)`:
 
 ```ts
 describe("Raider.IO-logged first kills (#732)", () => {
+  // Synthetic identities throughout: this repository is public.
+  const killGuild = {
+    name: "Fixture Guild Alfa",
+    realm: "twisting-nether",
+    region: "eu"
+  };
   const midnightFalls = {
     raidSlug: "tier-mn-1",
     bossSlug: "midnight-falls",
     firstDefeated: "2026-07-20T17:25:57.000Z",
-    guild: { name: "Method", realm: "twisting-nether", region: "eu" },
-    loggedEncounterId: 10_095_623
+    guild: killGuild,
+    loggedEncounterId: 700_001
   };
   const encounter = {
     kind: "encounter" as const,
@@ -4648,15 +5815,15 @@ describe("Raider.IO-logged first kills (#732)", () => {
     defeatedAt: "2026-07-20T17:25:57.301Z",
     durationMs: 507_324,
     itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
-    guild: { name: "Method", realm: "twisting-nether", region: "eu" },
+    guild: killGuild,
     deathCount: 2,
     vantusCount: 16,
     roster: {
       state: "available" as const,
       members: [
         {
-          raiderIoCharacterId: 250_442_362,
-          name: "Rinn",
+          raiderIoCharacterId: 424_242,
+          name: "Alfa",
           realm: "silvermoon",
           region: "eu",
           className: "Demon Hunter",
@@ -4666,6 +5833,17 @@ describe("Raider.IO-logged first kills (#732)", () => {
         }
       ]
     }
+  };
+  const storedFirstKill: CharacterRaiderIoFirstKillInput = {
+    raidSlug: "tier-mn-1",
+    bossSlug: "midnight-falls",
+    killedAt: encounter.defeatedAt,
+    guild: killGuild,
+    loggedEncounterId: 700_001,
+    encounterState: "read",
+    encounterLimitationCode: null,
+    historicWorldRank: null,
+    historicRankCheckedAt: null
   };
   const noKills = {
     kind: "evidence" as const,
@@ -4693,17 +5871,27 @@ describe("Raider.IO-logged first kills (#732)", () => {
         kind: "evidence" as const,
         kills: [midnightFalls]
       })),
-      getLoggedEncounter: vi.fn(async () => encounter),
+      getLoggedEncounter: vi.fn(
+        async (
+          _raidSlug: string,
+          _id: number,
+          _signal?: AbortSignal,
+          onPhysicalRequest?: () => void
+        ) => {
+          onPhysicalRequest?.();
+          return encounter;
+        }
+      ),
       getCharacter: vi.fn(async () => ({
         key,
-        displayName: "Rinn",
+        displayName: "Alfa",
         className: "Demon Hunter",
         level: 90,
         guild: null,
         ownerId: null,
         profileGuess: null,
         declaredMain: null,
-        raiderIoCharacterId: 250_442_362
+        raiderIoCharacterId: 424_242
       })),
       ...overrides
     };
@@ -4711,12 +5899,15 @@ describe("Raider.IO-logged first kills (#732)", () => {
 
   function loggedStore() {
     const evidence = store();
-    const saved: RaiderIoLoggedEncounterInput[] = [];
+    const saved: RaiderIoLoggedEncounterAnswers[] = [];
     const transitions: Array<{ id: string; state: string }> = [];
-    evidence.saveRaiderIoLoggedEncounters = async (encounters) => {
-      saved.push(...encounters);
+    evidence.saveRaiderIoLoggedEncounters = async (answers) => {
+      saved.push(answers);
     };
-    evidence.raiderIoLoggedEncounters = async () => [];
+    evidence.raiderIoLoggedEncounters = async () => ({
+      encounters: [],
+      unavailable: []
+    });
     evidence.storedRaiderIoFirstKills = async () => [];
     evidence.listPhases = async () =>
       fullEvidencePhasePlan().map((id, ordinal) => ({
@@ -4758,7 +5949,10 @@ describe("Raider.IO-logged first kills (#732)", () => {
     await loggedHandler(evidence, raiderIo()).execute(run.id);
 
     expect(evidence.saved).toEqual([
-      expect.objectContaining({ loggedEncounterId: 10_095_623 })
+      {
+        encounters: [expect.objectContaining({ loggedEncounterId: 700_001 })],
+        unavailable: []
+      }
     ]);
     const published = evidence.published[0]!.result;
     expect(published.state).toBe("complete");
@@ -4769,7 +5963,7 @@ describe("Raider.IO-logged first kills (#732)", () => {
           raidSlug: "tier-mn-1",
           bossSlug: "midnight-falls",
           killedAt: "2026-07-20T17:25:57.301Z",
-          loggedEncounterId: 10_095_623,
+          loggedEncounterId: 700_001,
           encounterState: "read",
           historicWorldRank: null
         }
@@ -4813,10 +6007,42 @@ describe("Raider.IO-logged first kills (#732)", () => {
     });
   });
 
+  it("drains a capped backlog on ordinary runs, never on a cap retry", async () => {
+    // Break caught (#734 review): at rollout every long-time Mythic raider has
+    // more than 50 unread logs. A cap retry would be a whole evidence run,
+    // spending Warcraft Logs points to read Raider.IO.
+    const evidence = loggedStore();
+    const raiderio = raiderIo({
+      getHistoricMythicKills: vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: Array.from({ length: 51 }, (_, index) => ({
+          ...midnightFalls,
+          bossSlug: `boss-${String(index + 1)}`,
+          loggedEncounterId: index + 1
+        }))
+      })),
+      getLoggedEncounter: vi.fn(async (_raidSlug: string, id: number) => ({
+        ...encounter,
+        bossSlug: `boss-${String(id)}`,
+        roster: { state: "unavailable" as const, reason: "private" as const }
+      }))
+    });
+
+    await loggedHandler(evidence, raiderio).execute(run.id);
+
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(50);
+    const published = evidence.published[0]!.result;
+    expect(published.state).toBe("partial");
+    expect(published.raiderIoFirstKills?.limitationCode).toBe("request_cap");
+    expect(published).not.toHaveProperty("retryAfterAt");
+  });
+
   it("carries stored first kills forward when Raider.IO cannot answer", async () => {
     // Break caught: a complete publish with an empty Raider.IO section would
     // drop every first kill a private profile once had.
     const evidence = loggedStore();
+    const stored = [storedFirstKill];
+    evidence.storedRaiderIoFirstKills = async () => stored;
     const raiderio = raiderIo({
       getHistoricMythicKills: vi.fn(async () => ({
         kind: "limitation" as const,
@@ -4827,44 +6053,43 @@ describe("Raider.IO-logged first kills (#732)", () => {
     await loggedHandler(evidence, raiderio).execute(run.id);
 
     expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
-    expect(evidence.published[0]!.result).not.toHaveProperty(
-      "raiderIoFirstKills"
-    );
-    expect(evidence.published[0]!.result.state).toBe("complete");
+    const published = evidence.published[0]!.result;
+    expect(published).not.toHaveProperty("raiderIoFirstKills");
+    expect(published.state).toBe("complete");
+    // What storage writes from this publication, by the rule storage applies.
+    expect(
+      mergeRaiderIoFirstKills(
+        stored,
+        published.raiderIoFirstKills,
+        published.state,
+        false
+      )
+    ).toEqual([storedFirstKill]);
   });
 
   it("reads nothing already stored and asks no id it already holds", async () => {
     const evidence = loggedStore();
-    evidence.raiderIoLoggedEncounters = async () => [
-      {
-        loggedEncounterId: 10_095_623,
-        raidSlug: "tier-mn-1",
-        bossSlug: "midnight-falls",
-        pulledAt: encounter.pulledAt,
-        defeatedAt: encounter.defeatedAt,
-        durationMs: encounter.durationMs,
-        guild: encounter.guild,
-        itemLevel: encounter.itemLevel,
-        deathCount: 2,
-        vantusCount: 16,
-        rosterState: "available",
-        members: encounter.roster.members,
-        readAt: "2026-09-01T00:00:00.000Z"
-      }
-    ];
-    evidence.storedRaiderIoFirstKills = async () => [
-      {
-        raidSlug: "tier-mn-1",
-        bossSlug: "midnight-falls",
-        killedAt: encounter.defeatedAt,
-        guild: encounter.guild,
-        loggedEncounterId: 10_095_623,
-        encounterState: "read",
-        encounterLimitationCode: null,
-        historicWorldRank: null,
-        historicRankCheckedAt: null
-      }
-    ];
+    evidence.raiderIoLoggedEncounters = async () => ({
+      encounters: [
+        {
+          loggedEncounterId: 700_001,
+          raidSlug: "tier-mn-1",
+          bossSlug: "midnight-falls",
+          pulledAt: encounter.pulledAt,
+          defeatedAt: encounter.defeatedAt,
+          durationMs: encounter.durationMs,
+          guild: encounter.guild,
+          itemLevel: encounter.itemLevel,
+          deathCount: 2,
+          vantusCount: 16,
+          rosterState: "available",
+          members: encounter.roster.members,
+          readAt: "2026-09-01T00:00:00.000Z"
+        }
+      ],
+      unavailable: []
+    });
+    evidence.storedRaiderIoFirstKills = async () => [storedFirstKill];
     const raiderio = raiderIo();
 
     await loggedHandler(evidence, raiderio).execute(run.id);
@@ -4876,6 +6101,22 @@ describe("Raider.IO-logged first kills (#732)", () => {
       evidence.published[0]!.result.raiderIoFirstKills?.kills
     ).toHaveLength(1);
   });
+
+  it("counts each logged-encounter read on the cost row, and the character read with the kill list's", async () => {
+    const evidence = loggedStore();
+
+    await loggedHandler(evidence, raiderIo()).execute(run.id);
+
+    expect(evidence.costs).toEqual([
+      expect.objectContaining({
+        requests: expect.objectContaining({
+          raiderIoLoggedEncounters: 1,
+          // The profile read that learned the character's Raider.IO id.
+          raiderIoHistoric: 1
+        })
+      })
+    ]);
+  });
 });
 ```
 
@@ -4886,7 +6127,7 @@ Expected: FAIL — the store has no `saveRaiderIoLoggedEncounters` member in its
 
 In `packages/application/src/applicant-evidence-job-handler.ts`:
 
-Add to the `@slashwho/database` type import: `CharacterRaiderIoFirstKillInput`, `RaiderIoFirstKillsPublication`, `RaiderIoLoggedEncounterInput`, `StoredRaiderIoLoggedEncounter`. Add:
+Add to the `@slashwho/database` type import: `CharacterRaiderIoFirstKillInput`, `RaiderIoFirstKillsPublication`, `RaiderIoLoggedEncounterAnswers`, `StoredRaiderIoLoggedEncounterAnswers`. Add:
 
 ```ts
 import {
@@ -4903,13 +6144,13 @@ Add to `ApplicantEvidenceStore`, after `collectedTierZones`:
   storedRaiderIoFirstKills?(
     key: CharacterKey
   ): Promise<readonly CharacterRaiderIoFirstKillInput[]>;
-  /** The stored logged encounters among these ids. */
+  /** The stored answers among these logged-encounter ids. */
   raiderIoLoggedEncounters?(
     ids: readonly number[]
-  ): Promise<readonly StoredRaiderIoLoggedEncounter[]>;
-  /** Stores encounters once each, outside the snapshot transaction. */
+  ): Promise<StoredRaiderIoLoggedEncounterAnswers>;
+  /** Stores a run's logged-encounter answers, outside the snapshot transaction. */
   saveRaiderIoLoggedEncounters?(
-    encounters: readonly RaiderIoLoggedEncounterInput[],
+    answers: RaiderIoLoggedEncounterAnswers,
     readAt: Date
   ): Promise<void>;
 ```
@@ -4930,6 +6171,12 @@ Widen the `raiderio` option:
         "getHistoricMythicKills" | "getLoggedEncounter" | "getCharacter"
       >
     >;
+```
+
+In the cost row's `requests` (line 1236), after `raiderIoRankings: requests("raiderIoRankings"),`:
+
+```ts
+            raiderIoLoggedEncounters: requests("raiderIoLoggedEncounter"),
 ```
 
 Directly after the closing brace of `if (options.raiderio && !targeted) { ... }` (the `raiderio_rankings` block) and before `let cuttingEdges`, add:
@@ -4958,9 +6205,12 @@ if (!targeted && raiderIoLogs && getLoggedEncounter && verified?.firstKills) {
         kills: firstKills,
         published,
         storedEncounters: async (ids) =>
-          (await evidence.raiderIoLoggedEncounters?.(ids)) ?? [],
-        saveEncounters: async (encounters) => {
-          await evidence.saveRaiderIoLoggedEncounters?.(encounters, now());
+          (await evidence.raiderIoLoggedEncounters?.(ids)) ?? {
+            encounters: [],
+            unavailable: []
+          },
+        saveAnswers: async (answers) => {
+          await evidence.saveRaiderIoLoggedEncounters?.(answers, now());
         },
         raiderio: {
           getLoggedEncounter,
@@ -4969,8 +6219,12 @@ if (!targeted && raiderIoLogs && getLoggedEncounter && verified?.firstKills) {
             : {})
         },
         signal: activeContext.signal,
-        onPhysicalRequest: () =>
-          scope.increment("raiderIoLoggedEncounterRequests")
+        now,
+        onEncounterRequest: () =>
+          scope.increment("raiderIoLoggedEncounterRequests"),
+        // A Raider.IO character read, counted with the kill list's
+        // character reads rather than with the encounters.
+        onCharacterRequest: () => scope.increment("raiderIoHistoricRequests")
       })
     );
     const ranked = await rankRaiderIoFirstKills({
@@ -5011,13 +6265,18 @@ if (!targeted && raiderIoLogs && getLoggedEncounter && verified?.firstKills) {
 }
 ```
 
-Change `retryAfterMs` so a Raider.IO shortfall asks for its own retry:
+Change `retryAfterMs` so a Raider.IO shortfall asks for its own retry, except a cap:
 
 ```ts
 const retryAfterMs = Math.max(
   retryDelayMs(response.limitation) ?? 0,
   retryDelayMs(drivingParse) ?? 0,
-  retryDelayMs(raiderIoShortfall) ?? 0
+  // A capped Raider.IO backlog drains on ordinary runs, 50 at a time.
+  // A cap retry would be a whole evidence run, spending Warcraft Logs
+  // points to read Raider.IO (#732).
+  retryDelayMs(
+    raiderIoShortfall?.code === "request_cap" ? null : raiderIoShortfall
+  ) ?? 0
 );
 ```
 
@@ -5041,7 +6300,7 @@ In the main `stageAndPublish` call, add after `cuttingEdges,`:
 - [ ] **Step 10: Run the tests to verify they pass**
 
 Run: `corepack pnpm exec vitest run --project unit packages/application/src`
-Expected: PASS, including the four new handler tests and every existing phase-transition test.
+Expected: PASS, including the six new handler tests, the updated cost-row expectation, and every existing phase-transition test.
 
 Run: `corepack pnpm --filter @slashwho/application typecheck && corepack pnpm --filter @slashwho/contracts typecheck && corepack pnpm --filter @slashwho/worker typecheck && corepack pnpm --filter @slashwho/web typecheck`
 Expected: all exit 0. If the worker reports that its `raiderio: gateway` is not assignable, the discovery gateway's `getCharacter` return type has diverged from `@slashwho/raiderio`'s `RaiderIoCharacter`; widen `createGateway`'s return type in `apps/worker/src/runtime.ts:138-143` to include `Pick<EvidenceRaiderIoGateway, "getMythicBossRankings" | "getLoggedEncounter" | "getCharacter">` rather than casting.
@@ -5059,17 +6318,17 @@ git commit -m "feat(application): read Raider.IO logged encounters of first kill
 
 **Files:**
 
-- Modify: `packages/domain/src/applicant-dossier.ts` (types 16-198, `buildApplicantDossier` 511-877)
+- Modify: `packages/domain/src/applicant-dossier.ts` (types 16-198, `withhold` 547-561, the kills loop 562-584, `buildApplicantDossier` 511-877)
 - Modify: `packages/domain/src/index.ts`
 - Test: `packages/domain/src/applicant-dossier.test.ts`
 - Modify: `packages/contracts/src/dossier.ts:159-170`, `packages/contracts/src/index.ts`, `packages/contracts/src/contracts.test.ts`
 - Create: `packages/application/src/raiderio-first-kill-evidence.ts`
 - Test: `packages/application/src/raiderio-first-kill-evidence.test.ts`
-- Modify: `packages/application/src/applicant-dossier-service.ts` (`EvidenceResult` 248-262, the evidence builder return ~497-545, `mergeIdentityEvidence` 588-630, `buildApplicantDossier` call ~930-948), `applicant-dossier-service.test.ts` (fixture 72-345)
+- Modify: `packages/application/src/applicant-dossier-service.ts` (`EvidenceResult` 248-262, the evidence builder return ~493-545 with `warcraftLogsComplete` at 510-516, `mergeIdentityEvidence` 588-630, `buildApplicantDossier` call ~930-948), `applicant-dossier-service.test.ts` (fixture 72-345, the parse-budget test at 965-981)
 
 **Interfaces:**
 
-- Consumes: `STORED_KILL_MATCH_MS`, `lookupRaidEncounterByRaiderIoSlugs` (Task 3); `StoredCharacterRaiderIoFirstKill`, `StoredRaiderIoLoggedEncounter`, `CharacterEvidenceRun.raiderIoLimitationCode` (Task 4).
+- Consumes: `STORED_KILL_MATCH_MS`, `matchesRaiderIoKill`, `lookupRaidEncounterByRaiderIoSlugs` (Task 3); `isRosterShown` (Task 2); `StoredCharacterRaiderIoFirstKill`, `PublishedRaiderIoLoggedEncounter`, `CharacterEvidenceRun.raiderIoLimitationCode`, `CharacterEvidenceRun.killScanSkipped` (Task 4).
 - Produces (exported from `@slashwho/domain`):
 
 ```ts
@@ -5092,7 +6351,13 @@ export type DossierLoggedEncounter = Readonly<{
   deathCount: number;
   vantusCount: number;
   roster:
-    | Readonly<{ state: "available"; members: readonly DossierRosterMember[] }>
+    | Readonly<{
+        state: "available";
+        /** Everyone Raider.IO listed, by role, including raiders `members` leaves out. */
+        roleCounts: Readonly<Record<DossierRosterRole, number>>;
+        /** The raiders a dossier may name: suppressed ones already left out. */
+        members: readonly DossierRosterMember[];
+      }>
     | Readonly<{ state: "private" }>;
 }>;
 export type DossierRaiderIoFirstKill = Readonly<{
@@ -5138,20 +6403,21 @@ Append to `packages/domain/src/applicant-dossier.test.ts` (add `ApplicantDossier
 
 ```ts
 describe("Raider.IO-logged first kills (#732)", () => {
-  const eundarielKey: CharacterKey = {
+  // Synthetic identities throughout: this repository is public.
+  const alfaKey: CharacterKey = {
     region: "eu",
     realm: "draenor",
-    name: "eundariel"
+    name: "alfa"
   };
-  const eundariel = { key: eundarielKey, displayName: "Eundariel" };
-  const method = {
-    name: "Method",
+  const alfa = { key: alfaKey, displayName: "Alfa" };
+  const killGuild = {
+    name: "Fixture Guild Alfa",
     region: "eu" as const,
     realm: "twisting-nether"
   };
   const members = [
     {
-      name: "Healername",
+      name: "Charlie",
       realm: "twisting-nether",
       region: "eu",
       className: "Priest",
@@ -5160,7 +6426,7 @@ describe("Raider.IO-logged first kills (#732)", () => {
       itemLevel: 291.4
     },
     {
-      name: "Eundariel",
+      name: "Alfa",
       realm: "draenor",
       region: "eu",
       className: "Demon Hunter",
@@ -5169,7 +6435,7 @@ describe("Raider.IO-logged first kills (#732)", () => {
       itemLevel: null
     },
     {
-      name: "Tankname",
+      name: "Bravo",
       realm: "twisting-nether",
       region: "eu",
       className: "Warrior",
@@ -5182,21 +6448,25 @@ describe("Raider.IO-logged first kills (#732)", () => {
     pulledAt: "2026-07-20T17:17:29.977Z",
     defeatedAt: "2026-07-20T17:25:57.301Z",
     durationMs: 507_324,
-    guild: method,
+    guild: killGuild,
     itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
     deathCount: 2,
     vantusCount: 16,
-    roster: { state: "available", members }
+    roster: {
+      state: "available",
+      roleCounts: { tank: 1, healer: 1, dps: 1 },
+      members
+    }
   };
   function raiderIoKill(
     overrides: Partial<DossierRaiderIoFirstKill> = {}
   ): DossierRaiderIoFirstKill {
     return {
-      character: eundarielKey,
+      character: alfaKey,
       raidSlug: "tier-mn-1",
       bossSlug: "midnight-falls",
       killedAt: "2026-07-20T17:25:57.301Z",
-      guild: method,
+      guild: killGuild,
       historicWorldRank: null,
       encounter: { state: "read", encounter: loggedEncounter },
       ...overrides
@@ -5219,9 +6489,9 @@ describe("Raider.IO-logged first kills (#732)", () => {
       journalBossId: "2740",
       bossOrder: 2,
       killedAt: "2026-07-20T18:25:00.000Z",
-      guild: method,
+      guild: killGuild,
       historicWorldRank: null,
-      reportUrl: "https://www.warcraftlogs.com/reports/method#fight=9",
+      reportUrl: "https://www.warcraftlogs.com/reports/fixturealfa#fight=9",
       performance: damageParse,
       ...overrides
     });
@@ -5251,8 +6521,8 @@ describe("Raider.IO-logged first kills (#732)", () => {
 
   it("shows a logged kill with no public logs as a kill of its own, with its guild and roster", () => {
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [],
       raiderIoFirstKills: [raiderIoKill()],
       limitations: []
@@ -5261,25 +6531,87 @@ describe("Raider.IO-logged first kills (#732)", () => {
     const midnightFalls = verifiedKill(boss(dossier));
     expect(midnightFalls.firstKill).toEqual({
       killedAt: "2026-07-20T17:25:57.301Z",
-      guild: method,
+      guild: killGuild,
       historicWorldRank: null,
       reportUrl: null,
       reportUrls: [],
       reports: [],
-      characters: [eundarielKey],
+      characters: [alfaKey],
       parses: [],
       roster: availableRoster
     });
     expect(midnightFalls.bestParses).toEqual([]);
   });
 
+  it("counts every raider Raider.IO listed, shown or not", () => {
+    // A raider removed from SlashWho is left off the list before it gets
+    // here (#734 review), but the raid still had twenty players.
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [
+        raiderIoKill({
+          encounter: {
+            state: "read",
+            encounter: {
+              ...loggedEncounter,
+              roster: {
+                state: "available",
+                roleCounts: { tank: 2, healer: 4, dps: 14 },
+                members
+              }
+            }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(verifiedKill(boss(dossier)).firstKill.roster).toMatchObject({
+      state: "available",
+      playerCount: 20,
+      roleCounts: { tank: 2, healer: 4, dps: 14 },
+      members: availableRoster.members
+    });
+  });
+
+  it("shows a roster left with nobody to name as hidden, never as an empty table", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [
+        raiderIoKill({
+          encounter: {
+            state: "read",
+            encounter: {
+              ...loggedEncounter,
+              roster: {
+                state: "available",
+                roleCounts: { tank: 1, healer: 0, dps: 0 },
+                members: []
+              }
+            }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(verifiedKill(boss(dossier)).firstKill.roster).toEqual({
+      state: "unavailable",
+      reason: "private"
+    });
+  });
+
   it("makes the boss a kill, not a boss with no logs", () => {
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [],
       wipes: [],
-      completeWarcraftLogsCharacters: [eundarielKey],
+      completeWarcraftLogsCharacters: [alfaKey],
       raiderIoFirstKills: [raiderIoKill()],
       limitations: []
     });
@@ -5289,16 +6621,16 @@ describe("Raider.IO-logged first kills (#732)", () => {
   });
 
   it("lends a matching Warcraft Logs kill the roster and changes nothing else about it", () => {
-    const warcraftLogs = midnightFallsKill(eundarielKey);
+    const warcraftLogs = midnightFallsKill(alfaKey);
     const without = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [warcraftLogs],
       limitations: []
     });
     const withRoster = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [warcraftLogs],
       raiderIoFirstKills: [raiderIoKill()],
       limitations: []
@@ -5318,10 +6650,10 @@ describe("Raider.IO-logged first kills (#732)", () => {
     // 2 h 1 min after Raider.IO's time: not the same kill, but the dossier's
     // same-region, same-date grouping still shows one event for the night.
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [
-        midnightFallsKill(eundarielKey, {
+        midnightFallsKill(alfaKey, {
           killedAt: "2026-07-20T19:26:58.000Z"
         })
       ],
@@ -5333,20 +6665,20 @@ describe("Raider.IO-logged first kills (#732)", () => {
     expect(midnightFalls.firstKills).toHaveLength(1);
     expect(midnightFalls.firstKill).toMatchObject({
       killedAt: "2026-07-20T17:25:57.301Z",
-      reportUrl: "https://www.warcraftlogs.com/reports/method#fight=9",
+      reportUrl: "https://www.warcraftlogs.com/reports/fixturealfa#fight=9",
       roster: availableRoster
     });
     expect(midnightFalls.firstKill.parses).toEqual([
-      expect.objectContaining({ character: "Eundariel" })
+      expect.objectContaining({ character: "Alfa" })
     ]);
   });
 
   it("makes an earlier Raider.IO kill the boss's first kill", () => {
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [
-        midnightFallsKill(eundarielKey, {
+        midnightFallsKill(alfaKey, {
           killedAt: "2026-07-27T20:00:00.000Z"
         })
       ],
@@ -5366,14 +6698,14 @@ describe("Raider.IO-logged first kills (#732)", () => {
     });
     // The Warcraft Logs kill's parses still reach the best-parse row.
     expect(midnightFalls.bestParses).toEqual([
-      expect.objectContaining({ character: "Eundariel" })
+      expect.objectContaining({ character: "Alfa" })
     ]);
   });
 
   it("still shows another character's Warcraft Logs parses as the best", () => {
     const dossier = buildApplicantDossier({
       root,
-      characters: [rootCharacter, eundariel],
+      characters: [rootCharacter, alfa],
       kills: [
         midnightFallsKill(root, { killedAt: "2026-07-27T20:00:00.000Z" })
       ],
@@ -5390,8 +6722,8 @@ describe("Raider.IO-logged first kills (#732)", () => {
 
   it("carries the rank collection gave the kill from its encounter guild", () => {
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [],
       raiderIoFirstKills: [raiderIoKill({ historicWorldRank: 3 })],
       limitations: []
@@ -5401,8 +6733,8 @@ describe("Raider.IO-logged first kills (#732)", () => {
 
   it("shows a pug's kill with no guild", () => {
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [],
       raiderIoFirstKills: [
         raiderIoKill({
@@ -5436,8 +6768,8 @@ describe("Raider.IO-logged first kills (#732)", () => {
     ]
   ])("says why a roster is unavailable: %s", (_name, first, reason) => {
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [],
       raiderIoFirstKills: [first],
       limitations: []
@@ -5451,9 +6783,9 @@ describe("Raider.IO-logged first kills (#732)", () => {
   it("names a matched kill Raider.IO holds no log of, and never counts an unlogged one as evidence", () => {
     const unlogged = raiderIoKill({ encounter: { state: "none" } });
     const matched = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
-      kills: [midnightFallsKill(eundarielKey)],
+      root: alfaKey,
+      characters: [alfa],
+      kills: [midnightFallsKill(alfaKey)],
       raiderIoFirstKills: [unlogged],
       limitations: []
     });
@@ -5463,8 +6795,8 @@ describe("Raider.IO-logged first kills (#732)", () => {
     });
 
     const alone = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
+      root: alfaKey,
+      characters: [alfa],
       kills: [],
       raiderIoFirstKills: [unlogged],
       limitations: []
@@ -5474,12 +6806,71 @@ describe("Raider.IO-logged first kills (#732)", () => {
 
   it("leaves a kill no Raider.IO kill matched with no roster at all", () => {
     const dossier = buildApplicantDossier({
-      root: eundarielKey,
-      characters: [eundariel],
-      kills: [midnightFallsKill(eundarielKey)],
+      root: alfaKey,
+      characters: [alfa],
+      kills: [midnightFallsKill(alfaKey)],
       limitations: []
     });
     expect(verifiedKill(boss(dossier)).firstKill).not.toHaveProperty("roster");
+  });
+
+  it("withholds an out-of-window Raider.IO kill under Raider.IO, and counts a kill both sources withheld once", () => {
+    // Break caught (#734 pre-flight): the withheld Raider.IO kill was
+    // labelled Warcraft Logs, and tallied a second time beside its own
+    // Warcraft Logs copy.
+    const late = raiderIoKill({
+      raidSlug: "nerubar-palace",
+      bossSlug: "queen-ansurek",
+      killedAt: "2025-06-01T20:00:00.000Z"
+    });
+    const withheld = (dossier: ApplicantDossier) =>
+      dossier.limitations.filter((limitation) =>
+        limitation.code.startsWith("current_content_")
+      );
+    const queenAnsurek = [
+      { raidName: "Nerub-ar Palace", bossName: "Queen Ansurek", kills: 1 }
+    ];
+
+    const alone = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [late],
+      limitations: []
+    });
+    expect(withheld(alone)).toEqual([
+      expect.objectContaining({
+        source: "raiderio",
+        character: alfaKey,
+        code: "current_content_evidence_withheld",
+        encounters: queenAnsurek
+      })
+    ]);
+
+    const both = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [
+        kill(alfaKey, {
+          raidId: "1273",
+          raidName: "Nerub-ar Palace",
+          bossId: "2602",
+          bossName: "Queen Ansurek",
+          journalBossId: "2602",
+          bossOrder: 8,
+          killedAt: "2025-06-01T20:30:00.000Z"
+        })
+      ],
+      raiderIoFirstKills: [late],
+      limitations: []
+    });
+    expect(withheld(both)).toEqual([
+      expect.objectContaining({
+        source: "warcraft_logs",
+        code: "current_content_evidence_withheld",
+        encounters: queenAnsurek
+      })
+    ]);
   });
 });
 ```
@@ -5494,7 +6885,8 @@ Expected: FAIL — `raiderIoFirstKills` is not an input and `DossierLoggedEncoun
 In `packages/domain/src/applicant-dossier.ts`, add `lookupRaidEncounterByRaiderIoSlugs` to the `./raid-catalogue` import and:
 
 ```ts
-import { STORED_KILL_MATCH_MS } from "./kill-matching";
+import { matchesRaiderIoKill } from "./kill-matching";
+import { isRosterShown } from "./logged-encounter";
 ```
 
 After `DossierCuttingEdgeEvidence`, add:
@@ -5520,7 +6912,13 @@ export type DossierLoggedEncounter = Readonly<{
   deathCount: number;
   vantusCount: number;
   roster:
-    | Readonly<{ state: "available"; members: readonly DossierRosterMember[] }>
+    | Readonly<{
+        state: "available";
+        /** Everyone Raider.IO listed, by role, including raiders `members` leaves out. */
+        roleCounts: Readonly<Record<DossierRosterRole, number>>;
+        /** The raiders a dossier may name: suppressed ones already left out. */
+        members: readonly DossierRosterMember[];
+      }>
     | Readonly<{ state: "private" }>;
 }>;
 /**
@@ -5619,11 +7017,12 @@ function killRoster(
   const read = firsts.find((first) => first.encounter.state === "read");
   if (read?.encounter.state === "read") {
     const encounter = read.encounter.encounter;
-    // An empty roster reads as "nobody was there", which is never what
-    // Raider.IO meant; it is shown as hidden instead.
+    // Suppressed raiders are already off the list. What is left is judged by
+    // the one rule the client judged the response by, so a list left with
+    // nobody to name reads as hidden, never as "nobody was there".
     if (
       encounter.roster.state === "private" ||
-      encounter.roster.members.length === 0
+      !isRosterShown(true, encounter.roster.members)
     ) {
       return { state: "unavailable", reason: "private" };
     }
@@ -5638,16 +7037,12 @@ function killRoster(
         ...member,
         isDossierCharacter: isDossierCharacter(member, characters)
       }));
-    const count = (role: DossierRosterRole) =>
-      members.filter((member) => member.role === role).length;
+    // Raider.IO's counts: a raider left off the list still raided.
+    const { tank, healer, dps } = encounter.roster.roleCounts;
     return {
       state: "available",
-      playerCount: members.length,
-      roleCounts: {
-        tank: count("tank"),
-        healer: count("healer"),
-        dps: count("dps")
-      },
+      playerCount: tank + healer + dps,
+      roleCounts: { tank, healer, dps },
       itemLevel: encounter.itemLevel,
       pulledAt: encounter.pulledAt,
       durationMs: encounter.durationMs,
@@ -5665,12 +7060,49 @@ function killRoster(
 }
 ```
 
-In `buildApplicantDossier`, directly after the `for (const suppliedKill of input.kills) { ... }` loop and before `limitations.push(...withheldKillReasons...)`, add:
+In `buildApplicantDossier`, give `withhold` the limitation's source, keyed by it, so a Raider.IO kill is never labelled Warcraft Logs:
+
+```ts
+const withhold = (
+  code: string,
+  kill: Readonly<{
+    character: CharacterKey;
+    raidName: string;
+    bossName: string;
+  }>,
+  source: DossierLimitation["source"] = "warcraft_logs"
+) => {
+  const key = `${source}\0${code}\0${canonicalCharacterId(kill.character)}`;
+  const entry = withheldKillReasons.get(key) ?? {
+    limitation: { source, character: kill.character, code },
+    encounters: new Map()
+  };
+  tallyEncounter(entry.encounters, kill.raidName, kill.bossName);
+  withheldKillReasons.set(key, entry);
+};
+// The Warcraft Logs kills withheld as out of window, so a Raider.IO first
+// kill of the same kill is not tallied a second time.
+const withheldWarcraftLogsKills: CatalogueMatchedKill[] = [];
+```
+
+In the `for (const suppliedKill of input.kills)` loop, record each kill withheld for currentness, just before its `withhold(code, kill);`:
+
+```ts
+withheldWarcraftLogsKills.push(kill);
+```
+
+Directly after that loop and before `limitations.push(...withheldKillReasons...)`, add:
 
 ```ts
 // A Raider.IO first kill with a parsed combat log is evidence of its own
 // (#732). One that matches a Warcraft Logs kill of the same character and
 // boss lends that kill its roster and changes nothing else about it.
+const sameKill = (
+  first: DossierRaiderIoFirstKill,
+  kill: CatalogueMatchedKill
+) =>
+  canonicalCharacterId(kill.character) ===
+    canonicalCharacterId(first.character) && matchesRaiderIoKill(first, kill);
 for (const first of input.raiderIoFirstKills ?? []) {
   const metadata = lookupRaidEncounterByRaiderIoSlugs(
     first.raidSlug,
@@ -5685,13 +7117,8 @@ for (const first of input.raiderIoFirstKills ?? []) {
       distance: Math.abs(Date.parse(kill.killedAt) - at)
     }))
     .filter(
-      ({ kill, distance }) =>
-        kill.raidId === metadata.raidId &&
-        kill.bossId === metadata.bossId &&
-        kill.raiderIoFirstKill === undefined &&
-        canonicalCharacterId(kill.character) ===
-          canonicalCharacterId(first.character) &&
-        distance <= STORED_KILL_MATCH_MS
+      ({ kill }) =>
+        kill.raiderIoFirstKill === undefined && sameKill(first, kill)
     )
     .sort(
       (a, b) => a.distance - b.distance || compareEvidence(a.kill, b.kill)
@@ -5718,11 +7145,16 @@ for (const first of input.raiderIoFirstKills ?? []) {
   };
   const eligible = currentness(raiderIoKill.killedAt, raiderIoKill.raidId);
   if (eligible !== true) {
+    // Its Warcraft Logs copy was withheld and tallied already: one kill,
+    // counted once.
+    if (withheldWarcraftLogsKills.some((kill) => sameKill(first, kill)))
+      continue;
     withhold(
       eligible === false
         ? "current_content_evidence_withheld"
         : "current_content_window_unknown",
-      raiderIoKill
+      raiderIoKill,
+      "raiderio"
     );
     continue;
   }
@@ -5770,7 +7202,7 @@ In `packages/domain/src/index.ts`, add to the `./applicant-dossier` type exports
 - [ ] **Step 4: Run the domain tests to verify they pass**
 
 Run: `corepack pnpm exec vitest run --project unit packages/domain/src`
-Expected: PASS, the whole domain suite (the change must not move any existing kill event).
+Expected: PASS, the whole domain suite (the change must not move any existing kill event or limitation).
 
 - [ ] **Step 5: Write the failing contract test**
 
@@ -5780,7 +7212,11 @@ Add `dossierFirstKillSchema` to the imports of `packages/contracts/src/contracts
 it("carries a first kill's roster, or the reason there is none, and never a Raider.IO id", () => {
   const firstKill = {
     killedAt: "2026-07-20T17:25:57.301Z",
-    guild: { name: "Method", region: "eu", realm: "twisting-nether" },
+    guild: {
+      name: "Fixture Guild Alfa",
+      region: "eu",
+      realm: "twisting-nether"
+    },
     historicWorldRank: null,
     reportUrl: null,
     reports: [],
@@ -5788,7 +7224,7 @@ it("carries a first kill's roster, or the reason there is none, and never a Raid
     parses: []
   };
   const member = {
-    name: "Eundariel",
+    name: "Alfa",
     realm: "draenor",
     region: "eu",
     className: "Demon Hunter",
@@ -5850,6 +7286,8 @@ export const dossierRosterMemberSchema = z
 /**
  * Who was in the raid, from Raider.IO's logged encounter of the kill, or why
  * that cannot be shown. Unavailable is its own state: never "not present".
+ * The counts are Raider.IO's, so they can exceed the raiders listed: a raider
+ * removed from SlashWho is counted and never named.
  */
 export const dossierKillRosterSchema = z.discriminatedUnion("state", [
   z
@@ -5889,8 +7327,8 @@ export const dossierKillRosterSchema = z.discriminatedUnion("state", [
 Add to `dossierFirstKillSchema`'s object, after `parses`:
 
 ```ts
-/** Absent when no Raider.IO first kill was matched to this kill. */
-roster: dossierKillRosterSchema.optional();
+    /** Absent when no Raider.IO first kill was matched to this kill. */
+    roster: dossierKillRosterSchema.optional(),
 ```
 
 and after the other type exports:
@@ -5909,40 +7347,50 @@ Expected: PASS.
 Create `packages/application/src/raiderio-first-kill-evidence.test.ts`:
 
 ```ts
-import type { StoredCharacterRaiderIoFirstKill } from "@slashwho/database";
+import type {
+  PublishedRaiderIoLoggedEncounter,
+  StoredCharacterRaiderIoFirstKill
+} from "@slashwho/database";
 import { describe, expect, it } from "vitest";
 
 import { dossierRaiderIoFirstKill } from "./raiderio-first-kill-evidence";
 
+// Synthetic identities throughout: this repository is public.
 const character = {
   region: "eu" as const,
   realm: "draenor",
-  name: "eundariel"
+  name: "alfa"
 };
-const encounter = {
-  loggedEncounterId: 10_095_623,
+const killGuild = {
+  name: "Fixture Guild Alfa",
+  realm: "twisting-nether",
+  region: "eu"
+};
+const encounter: PublishedRaiderIoLoggedEncounter = {
+  loggedEncounterId: 700_001,
   raidSlug: "tier-mn-1",
   bossSlug: "midnight-falls",
   pulledAt: "2026-07-20T17:17:29.977Z",
   defeatedAt: "2026-07-20T17:25:57.301Z",
   durationMs: 507_324,
-  guild: { name: "Method", realm: "twisting-nether", region: "eu" },
+  guild: killGuild,
   itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
   deathCount: 2,
   vantusCount: 16,
-  rosterState: "available" as const,
+  rosterState: "available",
   members: [
     {
-      raiderIoCharacterId: 250_442_362,
-      name: "Eundariel",
+      raiderIoCharacterId: 424_242,
+      name: "Alfa",
       realm: "draenor",
       region: "eu",
       className: "Demon Hunter",
       specName: "Havoc",
-      role: "dps" as const,
+      role: "dps",
       itemLevel: 290.5
     }
   ],
+  roleCounts: { tank: 2, healer: 4, dps: 14 },
   readAt: "2026-09-28T12:00:00.000Z"
 };
 function stored(
@@ -5952,8 +7400,8 @@ function stored(
     raidSlug: "tier-mn-1",
     bossSlug: "midnight-falls",
     killedAt: "2026-07-20T17:25:57.301Z",
-    guild: { name: "Method", realm: "twisting-nether", region: "eu" },
-    loggedEncounterId: 10_095_623,
+    guild: killGuild,
+    loggedEncounterId: 700_001,
     encounterState: "read",
     encounterLimitationCode: null,
     historicWorldRank: null,
@@ -5964,14 +7412,14 @@ function stored(
 }
 
 describe("dossierRaiderIoFirstKill", () => {
-  it("attributes a read kill to the character and drops every Raider.IO id", () => {
+  it("attributes a read kill to the character, keeps Raider.IO's counts, and drops every Raider.IO id", () => {
     const kill = dossierRaiderIoFirstKill(stored(), character);
     expect(kill).toEqual({
       character,
       raidSlug: "tier-mn-1",
       bossSlug: "midnight-falls",
       killedAt: "2026-07-20T17:25:57.301Z",
-      guild: { name: "Method", realm: "twisting-nether", region: "eu" },
+      guild: killGuild,
       historicWorldRank: null,
       encounter: {
         state: "read",
@@ -5979,15 +7427,16 @@ describe("dossierRaiderIoFirstKill", () => {
           pulledAt: "2026-07-20T17:17:29.977Z",
           defeatedAt: "2026-07-20T17:25:57.301Z",
           durationMs: 507_324,
-          guild: { name: "Method", realm: "twisting-nether", region: "eu" },
+          guild: killGuild,
           itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
           deathCount: 2,
           vantusCount: 16,
           roster: {
             state: "available",
+            roleCounts: { tank: 2, healer: 4, dps: 14 },
             members: [
               {
-                name: "Eundariel",
+                name: "Alfa",
                 realm: "draenor",
                 region: "eu",
                 className: "Demon Hunter",
@@ -6000,7 +7449,8 @@ describe("dossierRaiderIoFirstKill", () => {
         }
       }
     });
-    expect(JSON.stringify(kill)).not.toContain("250442362");
+    expect(JSON.stringify(kill)).not.toContain("424242");
+    expect(JSON.stringify(kill)).not.toContain("700001");
   });
 
   it.each([
@@ -6032,11 +7482,31 @@ describe("dossierRaiderIoFirstKill", () => {
       "none"
     ],
     [
+      "a log Raider.IO refuses to show",
+      stored({
+        encounterState: "unavailable",
+        encounterLimitationCode: "private",
+        encounter: null
+      }),
+      "none"
+    ],
+    [
+      "a log of another kill",
+      stored({
+        encounterState: "unavailable",
+        encounterLimitationCode: "schema_drift",
+        encounter: null
+      }),
+      "none"
+    ],
+    [
       "a read row whose encounter is missing",
       stored({ encounter: null }),
       "not_read"
     ]
   ])("maps %s", (_name, kill, state) => {
+    // Break caught (#734 pre-flight): a 403 is as permanent as a 404, and
+    // mapped to "not read yet" it promised a roster that never comes.
     expect(dossierRaiderIoFirstKill(kill, character).encounter.state).toBe(
       state
     );
@@ -6059,13 +7529,20 @@ describe("dossierRaiderIoFirstKill", () => {
     ).toBeNull();
   });
 
-  it("shows a hidden or empty roster as private", () => {
-    const empty = dossierRaiderIoFirstKill(
-      stored({ encounter: { ...encounter, members: [] } }),
+  it("hands a roster the guild hid over as private", () => {
+    const hidden = dossierRaiderIoFirstKill(
+      stored({
+        encounter: {
+          ...encounter,
+          rosterState: "private",
+          members: [],
+          roleCounts: { tank: 0, healer: 0, dps: 0 }
+        }
+      }),
       character
     );
     expect(
-      empty.encounter.state === "read" && empty.encounter.encounter.roster
+      hidden.encounter.state === "read" && hidden.encounter.encounter.roster
     ).toEqual({ state: "private" });
   });
 });
@@ -6080,8 +7557,8 @@ Create `packages/application/src/raiderio-first-kill-evidence.ts`:
 
 ```ts
 import type {
-  StoredCharacterRaiderIoFirstKill,
-  StoredRaiderIoLoggedEncounter
+  PublishedRaiderIoLoggedEncounter,
+  StoredCharacterRaiderIoFirstKill
 } from "@slashwho/database";
 import {
   supportedRegions,
@@ -6091,9 +7568,15 @@ import {
   type DossierRaiderIoFirstKill
 } from "@slashwho/domain";
 
-// A log Raider.IO no longer has, or one that named another boss, will never
-// be read: the kill is as good as unlogged.
-const PERMANENTLY_UNREAD = new Set(["not_found", "schema_drift"]);
+// Raider.IO's permanent refusals, the same three the collection phase stores
+// as unavailable: a log it no longer has, one it refuses to show (403), and
+// one that named another kill. None will ever be read, so the kill is as
+// good as unlogged.
+const PERMANENTLY_UNREAD: ReadonlySet<string> = new Set([
+  "not_found",
+  "private",
+  "schema_drift"
+]);
 
 function dossierGuild(
   guild: Readonly<{ name: string; realm: string; region: string }> | null
@@ -6110,7 +7593,7 @@ function dossierGuild(
 }
 
 function dossierEncounter(
-  encounter: StoredRaiderIoLoggedEncounter
+  encounter: PublishedRaiderIoLoggedEncounter
 ): DossierLoggedEncounter {
   return {
     pulledAt: encounter.pulledAt,
@@ -6121,10 +7604,12 @@ function dossierEncounter(
     deathCount: encounter.deathCount,
     vantusCount: encounter.vantusCount,
     // Raider.IO's own ids stop here: the contract has no place for them.
+    // Whether what is left can be shown is the domain's `isRosterShown`.
     roster:
-      encounter.rosterState === "available" && encounter.members.length > 0
+      encounter.rosterState === "available"
         ? {
             state: "available",
+            roleCounts: { ...encounter.roleCounts },
             members: encounter.members.map((member) => ({
               name: member.name,
               realm: member.realm,
@@ -6180,13 +7665,21 @@ In `packages/application/src/applicant-dossier-service.ts`:
       ) ?? [],
 ```
 
-- widen `warcraftLogsComplete` so a run partial only for Raider.IO keeps its "no logs" conclusions (its history scan finished):
+- replace `warcraftLogsComplete` and the comment above it, so a run partial only for its parse budget or for Raider.IO keeps its "no logs" conclusions, and only when its history scan ran:
 
 ```ts
+    // Negative conclusions rest on the history scan, which `limitationCode`
+    // reports. A run whose only shortfall is its parse budget, or its
+    // Raider.IO logged-encounter reads (#732), scanned the whole history and
+    // publishes `partial` to say so, so requiring `complete` here would
+    // silently withdraw conclusions the evidence still supports. A run whose
+    // scan was skipped scanned nothing, so it never supports one, whatever
+    // else it names.
     warcraftLogsComplete:
       reservation.kind === "fresh" &&
       (completed?.run.status === "complete" ||
         (completed?.run.status === "partial" &&
+          completed.run.killScanSkipped !== true &&
           (completed.run.parseLimitationCode !== null ||
             completed.run.raiderIoLimitationCode != null))) &&
       completed.run.limitationCode === null &&
@@ -6212,10 +7705,11 @@ In `packages/application/src/applicant-dossier-service.ts`:
 
 - [ ] **Step 9: Pin the service end to end**
 
-In `packages/application/src/applicant-dossier-service.test.ts`, add two options to `fixture`'s options type:
+In `packages/application/src/applicant-dossier-service.test.ts`, add three options to `fixture`'s options type:
 
 ```ts
     evidenceRaiderIoLimitationCode?: string | null;
+    evidenceKillScanSkipped?: boolean;
     raiderIoFirstKills?: readonly StoredCharacterRaiderIoFirstKill[];
 ```
 
@@ -6224,6 +7718,9 @@ In `packages/application/src/applicant-dossier-service.test.ts`, add two options
 ```ts
             ...(options.evidenceRaiderIoLimitationCode
               ? { raiderIoLimitationCode: options.evidenceRaiderIoLimitationCode }
+              : {}),
+            ...(options.evidenceKillScanSkipped
+              ? { killScanSkipped: true }
               : {}),
 ```
 
@@ -6252,7 +7749,43 @@ it("keeps no-log gaps for a run whose only shortfall is Raider.IO's logs (#732)"
   });
 });
 
+it.each([
+  [
+    "Raider.IO also fell short",
+    { evidenceRaiderIoLimitationCode: "request_cap" }
+  ],
+  [
+    "its parse budget ran out",
+    { evidenceParseLimitationCode: "parse_request_cap" }
+  ]
+])(
+  "keeps a skipped-scan run incomplete even when %s",
+  async (_name, shortfall) => {
+    // Break caught (#734 review): a light run publishes `partial` with its
+    // scan skipped; had a Raider.IO shortfall made it read as complete, the
+    // dossier would assert "No qualifying public logs found" from a history
+    // scan that never ran.
+    const result = await fixture({
+      includeCachedKills: false,
+      evidenceStatus: "partial",
+      evidenceLimitationCode: null,
+      evidenceKillScanSkipped: true,
+      ...shortfall
+    }).dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("dossier_not_ready");
+
+    expect(result.dossier.raids[0]?.bosses[0]).toMatchObject({
+      state: "incomplete"
+    });
+  }
+);
+
 it("shows a stored Raider.IO-logged first kill as the boss's kill, with its roster", async () => {
+  const killGuild = {
+    name: "Fixture Guild Alfa",
+    realm: "twisting-nether",
+    region: "eu"
+  };
   const result = await fixture({
     includeCachedKills: false,
     raiderIoFirstKills: [
@@ -6260,25 +7793,26 @@ it("shows a stored Raider.IO-logged first kill as the boss's kill, with its rost
         raidSlug: "tier-mn-1",
         bossSlug: "midnight-falls",
         killedAt: "2026-07-20T17:25:57.301Z",
-        guild: { name: "Method", realm: "twisting-nether", region: "eu" },
-        loggedEncounterId: 10_095_623,
+        guild: killGuild,
+        loggedEncounterId: 700_001,
         encounterState: "read",
         encounterLimitationCode: null,
         historicWorldRank: null,
         historicRankCheckedAt: null,
         encounter: {
-          loggedEncounterId: 10_095_623,
+          loggedEncounterId: 700_001,
           raidSlug: "tier-mn-1",
           bossSlug: "midnight-falls",
           pulledAt: "2026-07-20T17:17:29.977Z",
           defeatedAt: "2026-07-20T17:25:57.301Z",
           durationMs: 507_324,
-          guild: { name: "Method", realm: "twisting-nether", region: "eu" },
+          guild: killGuild,
           itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
           deathCount: 2,
           vantusCount: 16,
           rosterState: "private",
           members: [],
+          roleCounts: { tank: 0, healer: 0, dps: 0 },
           readAt: "2026-09-28T12:00:00.000Z"
         }
       }
@@ -6293,7 +7827,7 @@ it("shows a stored Raider.IO-logged first kill as the boss's kill, with its rost
     state: "kill",
     firstKill: {
       killedAt: "2026-07-20T17:25:57.301Z",
-      guild: { name: "Method", realm: "twisting-nether", region: "eu" },
+      guild: killGuild,
       reportUrl: null,
       parses: [],
       roster: { state: "unavailable", reason: "private" }
@@ -6301,6 +7835,8 @@ it("shows a stored Raider.IO-logged first kill as the boss's kill, with its rost
   });
 });
 ```
+
+The existing test `"keeps no-log gaps for a run whose only shortfall is its parse budget"` is unchanged and must still pass: its run's scan ran.
 
 - [ ] **Step 10: Run the tests to verify they pass**
 
@@ -6327,7 +7863,7 @@ Next.js is not touched here: these are plain React components and CSS. (If a ste
 
 - Create: `apps/web/src/components/dossier-kill-roster.tsx`
 - Test: `apps/web/src/components/dossier-kill-roster.test.tsx`
-- Modify: `apps/web/src/components/dossier-character-name.tsx:68-75` (export the class-colour helper)
+- Modify: `apps/web/src/components/dossier-character-name.tsx:68-75, 129, 228` (export the class-colour helper; its two call sites)
 - Modify: `apps/web/src/components/dossier-parse-list.tsx:13-18, 82-96`
 - Modify: `apps/web/src/components/dossier-raid-list.tsx` (`ReportLinks` 51-70, `KillEvidence` 461-601)
 - Modify: `apps/web/src/components/dossier-raid-list.test.tsx`, `apps/web/src/components/dossier-view.test.tsx:281-285`
@@ -6365,7 +7901,7 @@ const roster: Extract<Roster, { state: "available" }> = {
   vantusCount: 16,
   members: [
     {
-      name: "Tankname",
+      name: "Bravo",
       realm: "twisting-nether",
       region: "eu",
       className: "Warrior",
@@ -6375,7 +7911,7 @@ const roster: Extract<Roster, { state: "available" }> = {
       isDossierCharacter: false
     },
     {
-      name: "Healername",
+      name: "Charlie",
       realm: "twisting-nether",
       region: "eu",
       className: "Priest",
@@ -6385,7 +7921,7 @@ const roster: Extract<Roster, { state: "available" }> = {
       isDossierCharacter: false
     },
     {
-      name: "Eundariel",
+      name: "Alfa",
       realm: "draenor",
       region: "eu",
       className: "Demon Hunter",
@@ -6422,26 +7958,22 @@ it("lists each raider with role, class colour, realm where it differs, and item 
     screen.getByRole("table", { name: "Raid roster" })
   ).getAllByRole("row");
   expect(rows).toHaveLength(4);
-  const [, tank, , eundariel] = rows;
+  const [, tank, , alfa] = rows;
 
   expect(within(tank!).getByRole("img", { name: "Tank" })).toBeInTheDocument();
   expect(within(tank!).queryByText("Twisting Nether")).not.toBeInTheDocument();
   expect(within(tank!).getByText("292.1")).toBeInTheDocument();
   expect(tank).not.toHaveClass("dossier-roster-row--connected");
 
-  expect(
-    within(eundariel!).getByRole("img", { name: "DPS" })
-  ).toBeInTheDocument();
-  expect(within(eundariel!).getByText("Eundariel")).toHaveClass(
+  expect(within(alfa!).getByRole("img", { name: "DPS" })).toBeInTheDocument();
+  expect(within(alfa!).getByText("Alfa")).toHaveClass(
     "dossier-character-name--demon-hunter"
   );
-  expect(
-    within(eundariel!).getByText("Connected character")
-  ).toBeInTheDocument();
-  expect(within(eundariel!).getByText("Draenor")).toBeInTheDocument();
+  expect(within(alfa!).getByText("Connected character")).toBeInTheDocument();
+  expect(within(alfa!).getByText("Draenor")).toBeInTheDocument();
   // An item level Raider.IO did not give is a dash, never zero.
-  expect(within(eundariel!).getByText("—")).toBeInTheDocument();
-  expect(eundariel).toHaveClass("dossier-roster-row--connected");
+  expect(within(alfa!).getByText("—")).toBeInTheDocument();
+  expect(alfa).toHaveClass("dossier-roster-row--connected");
 });
 
 it("shows every realm for a kill with no guild", () => {
@@ -6476,7 +8008,7 @@ Expected: FAIL — cannot resolve `./dossier-kill-roster`.
 
 - [ ] **Step 3: Implement the roster**
 
-In `apps/web/src/components/dossier-character-name.tsx`, rename `colourClass` to an exported `classColourModifier` (same body) and update its one call site (`const modifier = classColourModifier(resolved.className);`):
+In `apps/web/src/components/dossier-character-name.tsx`, rename `colourClass` (line 68) to an exported `classColourModifier` (same body) and update both of its call sites, at lines 129 and 228 (each becomes `const modifier = classColourModifier(resolved.className);`):
 
 ```ts
 /** The class-colour modifier for a class name, or null for one without a colour. */
@@ -6683,7 +8215,7 @@ it("shows a kill with no public logs as such, and builds its roster only once as
     vantusCount: 16,
     members: [
       {
-        name: "Tankname",
+        name: "Bravo",
         realm: "twisting-nether",
         region: "eu",
         className: "Warrior",
@@ -6720,7 +8252,7 @@ it("shows a kill with no public logs as such, and builds its roster only once as
                 ...boss.firstKill,
                 killedAt: "2026-07-20T17:25:57.301Z",
                 guild: {
-                  name: "Method",
+                  name: "Fixture Guild Alfa",
                   region: "eu",
                   realm: "twisting-nether"
                 },
@@ -6840,23 +8372,24 @@ if (reports.length === 0) return <>No public logs found</>;
 - add `const NO_PUBLIC_LOGS = "No public logs found";` above `KillEvidence`, and pass `emptyText={NO_PUBLIC_LOGS}` to all three `DossierParseList` uses in `KillEvidence` (the collapsed "First kill parses", "Best parses", and the panel's per-event parses);
 - in the panel's `<dl>`, after the `Parses` `<div>`, add:
 
+<!-- prettier-ignore -->
 ```tsx
-{
-  evidence.roster ? (
-    <div className="dossier-evidence-wide">
-      <dt>Roster</dt>
-      <dd>
-        <LazyDetails summary="View roster">
-          <DossierKillRoster
-            guildRealm={evidence.guild?.realm ?? null}
-            roster={evidence.roster}
-          />
-        </LazyDetails>
-      </dd>
-    </div>
-  ) : null;
-}
+            {evidence.roster ? (
+              <div className="dossier-evidence-wide">
+                <dt>Roster</dt>
+                <dd>
+                  <LazyDetails summary="View roster">
+                    <DossierKillRoster
+                      guildRealm={evidence.guild?.realm ?? null}
+                      roster={evidence.roster}
+                    />
+                  </LazyDetails>
+                </dd>
+              </div>
+            ) : null}
 ```
+
+(A JSX child of the `<dl>`, so the braces are an expression container and nothing follows `null` but the closing brace.)
 
 In `apps/web/src/app/globals.css`, after `.dossier-evidence dd { ... }`:
 
@@ -6980,8 +8513,17 @@ duration and item levels, the raid and boss, the guild, whether the roster is
 visible, deaths and Vantus runes, and each raider's Raider.IO id, name, realm,
 region, class, specialisation, role and item level. The uploaders
 (`log.sources`, which can hold a BattleTag or Discord handle) and the raw
-response are never kept. A logged encounter never changes, so it is read once
-and shared; each run publishes its first kills with the rest of its snapshot.
+response are never kept. A logged encounter is stored once and shared; each
+run publishes its first kills with the rest of its snapshot. A visible roster
+is never read again: the kill and who was in it do not change. A roster the
+guild hid is read again once a week old, since a guild can open it later. A
+permanent refusal (a deleted log, a 403, or a log of another kill) is stored
+too, so it is not asked about again for 30 days, and the kill counts as having
+no logged encounter meanwhile.
+
+A raider removed from SlashWho (`suppressed_characters`) is left off every
+roster a dossier shows, while the player and role counts stay Raider.IO's. The
+stored rows are kept; removal suppresses reads, as it does everywhere else.
 
 States stay distinct:
 
@@ -6995,7 +8537,11 @@ States stay distinct:
 
 A failed or capped logged-encounter read makes the run partial, so it never
 removes a stored kill; a run that could not read the kill list at all carries
-every stored Raider.IO first kill forward unchanged.
+every stored Raider.IO first kill forward unchanged. A capped run is not
+retried early: the rest are read on the character's next ordinary run, 50 at a
+time. A run partial only for its Raider.IO reads still supports "No qualifying
+public logs found", because its Warcraft Logs history scan ran; a run whose
+scan was skipped never does.
 ```
 
 Run: `corepack pnpm exec prettier --check docs/dossier-evidence-semantics.md`
@@ -7028,5 +8574,6 @@ git commit -m "docs(evidence): Raider.IO-logged first kills as an evidence sourc
 
 ## Self-review notes
 
-- **Spec coverage.** Reading the data (§1): Task 2 (id, gateway method, privacy mapping) and Task 5 (phase, cap 50, concurrency 4, abandon on throw, skip stored ids, presence by id with fallback). Matching (§2): Task 6 (2-hour match, unmatched kill events, earlier first kill) and Task 5 (world rank through `historicWorldRankForKill`, Method pinned by name). Storage (§3): Task 4 (three tables, publish atomicity, merge rules; limited phase partial). Contract and domain (§4): Task 6. Interface (§5) and evidence states (§6): Task 7. Testing (§7): recorded fixtures in Task 1, each layer's tests in its task, no live traffic. Documentation (§8): Task 8.
+- **Spec coverage.** Reading the data (§1): Task 2 (id, gateway method, privacy mapping through `isRosterShown`, one limitation mapper) and Task 5 (phase, cap 50, concurrency 4, abandon on throw, re-read rules, permanent answers stored, presence by id with fallback, no cap retry). Matching (§2): Task 3 (`matchesRaiderIoKill`, Grong placed), Task 6 (2-hour match, unmatched kill events, earlier first kill, withheld under Raider.IO and counted once) and Task 5 (world rank through `historicWorldRankForKill`, read kills only, a checked rank cached; the later-kill rule pinned with a synthetic guild). Storage (§3): Task 4 (three tables with unavailable rows and `normalized_name`, the run-cost column, publish atomicity, merge rules). Removal (§4): Task 4 (the suppression filter on the dossier's load, counts kept) and Task 6 (a roster left with nobody to name). Contract and domain (§5): Task 6, including the skipped-scan rule for `warcraftLogsComplete`. Interface (§6) and evidence states (§7): Task 7. Testing (§8): recorded fixtures in Task 1, each layer's tests in its task, synthetic identities throughout, no live traffic. Documentation (§9): Task 8. Out of scope: the different-guild flag and the Raider.IO link are not built (spec, Out of scope).
+- **Review and pre-flight findings.** PR #734's eight inline comments and pre-flight D1-D13 are each answered by a Global Constraint, a Decision (3, 5, 7, 9, 13-19) or a pinned test named in Review Focus. The four snippets prettier had turned into invalid code (a trailing `;` in a `check()` argument, an array element, an object property and a JSX child) are now written as they sit in context, and the fragments prettier would rewrite carry `<!-- prettier-ignore -->`. Line references were re-checked against `bf7cb95a`.
 - **Deviations** are listed once, under "Decisions this plan makes that the spec did not settle", and none adds scope the spec rules out.
