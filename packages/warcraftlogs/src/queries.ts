@@ -186,6 +186,9 @@ export const characterGuildsQuery = `
   }
 `;
 
+// `rankedCharacters` costs nothing once `fights` is loaded (2.1 points with
+// and without it, measured 2026-09-28). It names the character as ranked in
+// that report, by canonical id, which survives a rename (#733).
 export const reportByCodeQuery = `
   query ReportByCode($code: String!) {
     reportData {
@@ -200,6 +203,7 @@ export const reportByCodeQuery = `
           id encounterID name startTime endTime kill difficulty friendlyPlayers
           gameZone { id name }
         }
+        rankedCharacters { canonicalID name server { slug } }
       }
     }
   }
