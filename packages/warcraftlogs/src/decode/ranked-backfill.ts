@@ -181,6 +181,28 @@ export function historicReportRefs(
   return refs;
 }
 
+/**
+ * The name and realm the character was ranked under in a hydrated ranked
+ * report, proved by canonical id, or null when the report does not say. A
+ * character renamed since raided under this name, and it is the only name
+ * the guild's attendance for that night can list (#733).
+ */
+export function rankedCharacterName(
+  value: unknown,
+  characterId: number
+): Readonly<{ name: string; realm: string }> | null {
+  const report = record(record(record(value)?.data)?.reportData)?.report;
+  const ranked = record(report)?.rankedCharacters;
+  if (!Array.isArray(ranked)) return null;
+  const matches = ranked
+    .map(record)
+    .filter((item) => positiveInteger(item?.canonicalID) === characterId);
+  if (matches.length !== 1) return null;
+  const name = nonEmptyString(matches[0]?.name);
+  const realm = nonEmptyString(record(matches[0]?.server)?.slug);
+  return name && realm ? { name, realm } : null;
+}
+
 export function decodedRankedKill(
   value: unknown,
   expected: {

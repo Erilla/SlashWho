@@ -524,9 +524,23 @@ searched for.
 The cost of the gate is a character whose kills in a tier are all unranked, and
 of whom nothing else is stored there: no guild is searched for them.
 
-Attendance matches players by name, so it also cannot see nights from before
-a character was renamed. The ranked walk works by character id, so it still
-finds those kills.
+Attendance lists each player by the name they used that night. So a report
+counts as listing the character if it names them under any name they raided
+under:
+
+- their current name;
+- their explicit former names (`character_historic_aliases`);
+- every name the tier's ranked walk found them ranked under, confirmed by
+  their Warcraft Logs id.
+
+Each hydrated report is decoded under each of those names. Before this, a
+renamed character's nights from before the rename were ruled out unread
+(#733). The ranked walk, which works by character id, was the only thing that
+found those kills.
+
+A ranked name is known only in the run whose ranked walk accepted that report.
+A continuation whose walk accepts nothing new walks attendance with the
+current name and the explicit former names only.
 
 One press searches every dossier character (#494), one run after another, and
 alts share guilds. A guild's walk across a window that finished is kept by the

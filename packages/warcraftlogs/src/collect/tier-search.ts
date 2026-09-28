@@ -1,3 +1,5 @@
+import { isValidCharacterKey } from "@slashwho/domain";
+
 import {
   ATTENDANCE_PAGE_OVERLAP_MS,
   ATTENDANCE_REPORT_LEAD_MS,
@@ -37,6 +39,22 @@ export async function searchTierAttendance(
 ): Promise<WarcraftLogsTierSearchOutcome> {
   const { ctx, key, options, kills, wipes, scannedReportCodes } = run;
   const sharedAttendanceWalks = ctx.caches.attendanceWalks;
+  // Every name the character raided under, the current one first. A night
+  // from before a rename lists only the name of the night (#733).
+  // A ranked name is written as displayed ("Erilla"); a key is lower case,
+  // and one that still is not a valid key cannot be matched by the decoder.
+  const identities = new Map<string, typeof key>();
+  for (const { name, realm } of [key, ...(search.formerNames ?? [])]) {
+    const identity = {
+      region: key.region,
+      realm: realm.toLocaleLowerCase("en-US"),
+      name: name.normalize("NFC").toLocaleLowerCase("en-US")
+    };
+    if (!isValidCharacterKey(identity)) continue;
+    const id = `${identity.realm}\0${identity.name}`;
+    if (!identities.has(id)) identities.set(id, identity);
+  }
+  const names = [...identities.values()].map((identity) => identity.name);
   const summary = {
     outcome: "complete" as WarcraftLogsTierSearchOutcome["outcome"],
     requests: 0,
@@ -115,7 +133,7 @@ export async function searchTierAttendance(
       // walk, which is a finished walk rather than an unreadable one.
       guildIsAbsent(value)
         ? { reports: [], hasMorePages: false }
-        : guildAttendancePage(value, key.name);
+        : guildAttendancePage(value, names);
     const finished = () => {
       if (replay) return;
       sharedAttendanceWalks.delete(walkKey);
@@ -235,20 +253,24 @@ export async function searchTierAttendance(
           continue;
         }
         summary.reportsHydrated += 1;
-        const decoded = decodedHydratedReport(hydrated.value, key);
-        if (decoded.kind === "limitation") {
-          summary.outcome = "incomplete";
-          continue;
+        // Read as each name: only the one the character raided under that
+        // night attributes anything.
+        for (const identity of identities.values()) {
+          const decoded = decodedHydratedReport(hydrated.value, identity);
+          if (decoded.kind === "limitation") {
+            summary.outcome = "incomplete";
+            continue;
+          }
+          for (const kill of decoded.kills) {
+            if (!kills.has(kill.fightUrl)) summary.recoveredKills += 1;
+            kills.set(kill.fightUrl, kill);
+          }
+          for (const wipe of decoded.wipes) {
+            if (!wipes.has(wipe.fightUrl)) summary.recoveredWipes += 1;
+            wipes.set(wipe.fightUrl, wipe);
+          }
+          if (decoded.limitation) summary.outcome = "incomplete";
         }
-        for (const kill of decoded.kills) {
-          if (!kills.has(kill.fightUrl)) summary.recoveredKills += 1;
-          kills.set(kill.fightUrl, kill);
-        }
-        for (const wipe of decoded.wipes) {
-          if (!wipes.has(wipe.fightUrl)) summary.recoveredWipes += 1;
-          wipes.set(wipe.fightUrl, wipe);
-        }
-        if (decoded.limitation) summary.outcome = "incomplete";
       }
       if (!value.hasMorePages) {
         finished();

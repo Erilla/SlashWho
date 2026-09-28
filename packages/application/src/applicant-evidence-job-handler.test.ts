@@ -6003,6 +6003,25 @@ describe("searching one tier from the dossier", () => {
     expect(options.tierSearch).not.toHaveProperty("raidedTier");
   });
 
+  it("gives the tier's attendance walk the character's former names", async () => {
+    // Attendance lists the name of the night, so a night from before a
+    // rename is recognised only by the former name (#733).
+    const evidence = store(tierRun);
+    evidence.historicAliases = async () => [
+      { region: "eu", realm: "neptulon", name: "erilla" }
+    ];
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const options = (
+      getFirstKillReports.mock.calls[0] as unknown[]
+    )[1] as Record<string, unknown>;
+    expect(options.tierSearch).toMatchObject({
+      formerNames: [{ name: "erilla", realm: "neptulon" }]
+    });
+  });
+
   it("ignores the tier's parse marks for the one run", async () => {
     // A kill recovered in a settled tier would otherwise never be parsed.
     // Its kill marks are the publish's and never reach the gateway.

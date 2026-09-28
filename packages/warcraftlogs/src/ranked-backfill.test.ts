@@ -1277,6 +1277,9 @@ describe("ranked Mythic backfill", () => {
         rankedCap?: number;
         raidedTier?: boolean;
         zoneRankings?: unknown;
+        /** The name attendance lists the unranked night under. */
+        unrankedListedAs?: string;
+        formerNames?: readonly { name: string; realm: string }[];
       }>
     ) => {
       const asked: string[] = [];
@@ -1322,7 +1325,9 @@ describe("ranked Mythic backfill", () => {
                         {
                           code: "unranked",
                           startTime: Date.UTC(2018, 0, 8),
-                          players: [{ name: "Ryun" }]
+                          players: [
+                            { name: options.unrankedListedAs ?? "Ryun" }
+                          ]
                         }
                       ],
                       has_more_pages: false
@@ -1331,7 +1336,13 @@ describe("ranked Mythic backfill", () => {
                 }
               }
             });
-          if (query.includes("ReportByCode")) hydrated.push(variables.code!);
+          if (query.includes("ReportByCode")) {
+            hydrated.push(variables.code!);
+            // `ranked` holds the ranked walk's fight; `unranked` another.
+            return Response.json(
+              report(variables.code!, variables.code === "ranked" ? 10 : 12)
+            );
+          }
           return Response.json(report("ranked", 10));
         },
         clientId: "id",
@@ -1350,7 +1361,8 @@ describe("ranked Mythic backfill", () => {
           to: "2018-07-17T00:00:00.000Z",
           guilds: [{ name: "Guild", realm: "silvermoon", region: "eu" }],
           requestCap: 10,
-          ...(options.raidedTier ? { raidedTier: true } : {})
+          ...(options.raidedTier ? { raidedTier: true } : {}),
+          ...(options.formerNames ? { formerNames: options.formerNames } : {})
         }
       });
       return { result, asked, hydrated };
@@ -1381,6 +1393,52 @@ describe("ranked Mythic backfill", () => {
       const { asked } = await search({ rankedKills: 0, raidedTier: true });
 
       expect(asked).toContain("GuildAttendance");
+    });
+
+    // The ranked fixture's character is ranked as Erilla of Neptulon and
+    // collected as ryun of Silvermoon: renamed, as on #733's live case.
+    it("recognises a night listed under the name the ranked walk proved", async () => {
+      const { result, hydrated } = await search({
+        rankedKills: 1,
+        unrankedListedAs: "Erilla"
+      });
+
+      expect(hydrated).toEqual(["ranked", "unranked"]);
+      expect(result).toMatchObject({
+        kills: expect.arrayContaining([
+          expect.objectContaining({
+            fightUrl: "https://www.warcraftlogs.com/reports/unranked#fight=12"
+          })
+        ]),
+        tierSearch: { recoveredKills: 1 }
+      });
+    });
+
+    it("recognises a night listed under an explicit former name", async () => {
+      // Stored evidence places the character in the tier, so the ranked walk
+      // need find nothing for the walk to run.
+      const { result, hydrated } = await search({
+        rankedKills: 0,
+        raidedTier: true,
+        unrankedListedAs: "Erilla",
+        formerNames: [{ name: "erilla", realm: "neptulon" }]
+      });
+
+      // The ranked walk found nothing here, so both nights are read. Each
+      // report names the character only as Erilla of Neptulon, and each kill
+      // is recovered under that name.
+      expect(hydrated).toEqual(["ranked", "unranked"]);
+      expect(result).toMatchObject({ tierSearch: { recoveredKills: 2 } });
+    });
+
+    it("still rules out a night listing only somebody else", async () => {
+      const { hydrated } = await search({
+        rankedKills: 1,
+        unrankedListedAs: "Stranger"
+      });
+
+      // `ranked` lists the current name; `unranked` only somebody else.
+      expect(hydrated).toEqual(["ranked"]);
     });
 
     it("defers attendance while a capped ranked walk has found nothing yet", async () => {

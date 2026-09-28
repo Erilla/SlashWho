@@ -1828,6 +1828,16 @@ export function createApplicantEvidenceJobHandler(
                         tierSearchZoneIds(tierSearchRaidId, storedEvidence)
                           .size > 0
                           ? { raidedTier: true }
+                          : {}),
+                        // Attendance lists the name of the night, so a
+                        // former name is how an old night is recognised.
+                        ...(historicAliases.length > 0
+                          ? {
+                              formerNames: historicAliases.map((alias) => ({
+                                name: alias.name,
+                                realm: alias.realm
+                              }))
+                            }
                           : {})
                       }
                     }
