@@ -494,6 +494,31 @@ than the ordinary run's budget allowed. It gallops through a guild's attendance 
 the window, then walks it page by page, so an old tier behind years of newer
 reports costs a few requests a guild instead of one for every page in between.
 
+Since #733 the ranked walk goes first, and the attendance walk depends on it:
+
+- **Guilds are walked** only for a character something places in the tier: a
+  kill the ranked walk found, or stored kills or wipes there.
+- **Nothing places them there, and the ranked walk finished:** no guild is
+  walked. The search is recorded `complete`, with no requests and no guilds,
+  so the runs that continue the press do not ask again.
+- **The ranked walk is capped and has found nothing yet:** the walk is
+  deferred. There is no outcome, so the run that continues the ranked walk
+  decides again.
+- **Reports the ranked walk read** are not hydrated a second time.
+
+Before #733, a press searched every connected character's guilds whether or
+not they raided the tier. From 25 to 28 September 2026 that was 406 attendance
+pages, about 10,000 points, and not one report hydrated: 13 of the 14
+characters searched started raiding years after the 2017–2019 tiers they were
+searched for.
+
+The cost of the gate is a character whose kills in a tier are all unranked, and
+of whom nothing else is stored there: no guild is searched for them.
+
+Attendance matches players by name, so it also cannot see nights from before
+a character was renamed. The ranked walk works by character id, so it still
+finds those kills.
+
 One press searches every dossier character (#494), one run after another, and
 alts share guilds. A guild's walk across a window that finished is kept by the
 worker for 30 minutes and replayed for the next character, which judges each

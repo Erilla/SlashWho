@@ -1821,7 +1821,14 @@ export function createApplicantEvidenceJobHandler(
                         skipReportCodes: storedKillReportCodes(
                           [...storedEvidence.kills, ...storedEvidence.wipes],
                           new Set()
-                        )
+                        ),
+                        // Stored evidence in the tier is reason enough to
+                        // walk its guilds; without it the ranked walk decides.
+                        ...(tierSearchRaidId &&
+                        tierSearchZoneIds(tierSearchRaidId, storedEvidence)
+                          .size > 0
+                          ? { raidedTier: true }
+                          : {})
                       }
                     }
                   : {}),

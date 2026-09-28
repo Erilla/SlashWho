@@ -6,7 +6,10 @@ import { characterLookup } from "../queries";
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsLimitation,
+  WarcraftLogsRankedBackfillResult,
   WarcraftLogsReportResult,
+  WarcraftLogsTierSearch,
+  WarcraftLogsTierSearchOutcome,
   WarcraftLogsWipeEvidence
 } from "../types";
 import {
@@ -28,7 +31,7 @@ import { searchTierAttendance } from "./tier-search";
 /**
  * One character's kill evidence and parses. Discovery comes first -- the
  * character's history, stored reports it did not re-find, guild attendance,
- * an explicit tier search, the ranked walk -- then parse work spends its own
+ * the ranked walk, an explicit tier search -- then parse work spends its own
  * budget on what discovery found.
  */
 export async function collectFirstKillReports(
@@ -86,10 +89,9 @@ export async function collectFirstKillReports(
   if (scan.kind !== "history_scan") return scan;
   await rereadStoredReports(run, scan);
   const recovery = await recoverFromAttendance(run, scan);
-  const tierSearchOutcome =
-    options.tierSearch === undefined
-      ? undefined
-      : await searchTierAttendance(run, options.tierSearch);
+  // The ranked walk goes first: what it finds is what says whether the
+  // character raided the tier at all, and so whether its guilds' attendance
+  // is worth walking (#733).
   const rankedBackfill = options.rankedBackfill
     ? await getRankedKillReports(ctx, key, {
         ...options.rankedBackfill,
@@ -106,6 +108,10 @@ export async function collectFirstKillReports(
   } else if (rankedBackfill) {
     scan.limitation ??= rankedBackfill;
   }
+  const tierSearchOutcome =
+    options.tierSearch === undefined
+      ? undefined
+      : await searchTierIfRaided(run, options.tierSearch, rankedBackfill);
 
   const ledger = createParseLedger(options.onLimitation);
   const tierBests = await collectTierBests(run, ledger);
@@ -234,4 +240,51 @@ export async function collectFirstKillReports(
         parse.parseLimitation ?? {
           ...evidenceResult({ kills: [], wipes: [] })
         });
+}
+
+/**
+ * A tier's guild attendance is every report its guilds logged across the
+ * tier, walked back from today, and it can only match the character by the
+ * name they raided under. Walked for every connected character of a dossier,
+ * most of whom started raiding years after the tier, it read 406 pages in
+ * four days and hydrated none (#733). So it is walked only for a character
+ * something already places in the tier: a kill the ranked walk found, or
+ * stored evidence there. A ranked walk that found nothing but has not
+ * finished defers the walk to the run that continues it; one that finished
+ * settles it, and the tier is reported searched. Without a ranked walk in
+ * this call there is no evidence either way, and attendance is walked as
+ * before.
+ */
+async function searchTierIfRaided(
+  run: CollectionRun,
+  search: WarcraftLogsTierSearch,
+  rankedBackfill: WarcraftLogsRankedBackfillResult | undefined
+): Promise<WarcraftLogsTierSearchOutcome | undefined> {
+  if (rankedBackfill?.kind === "evidence") {
+    // The ranked walk read these reports already.
+    for (const kill of rankedBackfill.kills) {
+      // Built by the decoder as `.../reports/<encoded code>`.
+      const code = kill.reportUrl.split("/reports/")[1];
+      if (code) run.scannedReportCodes.add(decodeURIComponent(code));
+    }
+  }
+  const raided =
+    search.raidedTier === true ||
+    rankedBackfill === undefined ||
+    (rankedBackfill.kind === "evidence" && rankedBackfill.kills.length > 0);
+  if (raided) return searchTierAttendance(run, search);
+  const rankedFinished =
+    rankedBackfill.kind === "evidence" &&
+    rankedBackfill.cursor === undefined &&
+    rankedBackfill.limitation === undefined;
+  return rankedFinished
+    ? {
+        outcome: "complete",
+        requests: 0,
+        guildsSearched: 0,
+        reportsHydrated: 0,
+        recoveredKills: 0,
+        recoveredWipes: 0
+      }
+    : undefined;
 }

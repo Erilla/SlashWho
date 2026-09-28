@@ -5976,7 +5976,10 @@ describe("searching one tier from the dossier", () => {
       // Logs adds the character's own list inside the search.
       guilds: [{ name: "Stored Guild", realm: "silvermoon", region: "eu" }],
       // The stored kill's report is already decoded.
-      skipReportCodes: ["zCFtRjmLgvHxynh7"]
+      skipReportCodes: ["zCFtRjmLgvHxynh7"],
+      // And that kill places the character in the tier, so its guilds are
+      // walked whatever the ranked walk finds (#733).
+      raidedTier: true
     });
     expect(options.rankedBackfill).toEqual({
       journalRaidId: eternalPalace.raidId,
@@ -5985,6 +5988,19 @@ describe("searching one tier from the dossier", () => {
     const window = options.tierSearch as { from: string; to: string };
     expect(window.from.startsWith("2019-")).toBe(true);
     expect(window.to.startsWith("2020-")).toBe(true);
+  });
+
+  it("leaves the attendance walk to the ranked walk when nothing stored is in the tier", async () => {
+    const evidence = store(tierRun);
+    const getFirstKillReports = vi.fn(evidenceFound);
+
+    await handlerWith(evidence, getFirstKillReports).execute(run.id);
+
+    const options = (
+      getFirstKillReports.mock.calls[0] as unknown[]
+    )[1] as Record<string, unknown>;
+    expect(options.tierSearch).toBeDefined();
+    expect(options.tierSearch).not.toHaveProperty("raidedTier");
   });
 
   it("ignores the tier's parse marks for the one run", async () => {

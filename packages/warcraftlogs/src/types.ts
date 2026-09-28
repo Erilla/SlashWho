@@ -222,12 +222,20 @@ export type WarcraftLogsTierSearch = Readonly<{
    * re-read fights the character already holds.
    */
   skipReportCodes?: readonly string[];
+  /**
+   * Whether stored evidence already places the character in this tier. Unset,
+   * attendance is walked only once the tier's ranked walk finds a kill, since
+   * a character nothing places there has no night to find (#733).
+   */
+  raidedTier?: boolean;
 }>;
 
 /**
  * What a tier search did. `complete` means every guild was walked across the
- * whole window; `request_cap` that its budget ran out first; `incomplete` that
- * some guild's attendance could not be read. None of them limits the run: a
+ * whole window, or that the tier's finished ranked walk and stored evidence
+ * both place the character nowhere in it, so there was nothing to walk for;
+ * `request_cap` that its budget ran out first; `incomplete` that some guild's
+ * attendance could not be read. None of them limits the run: a
  * search only ever adds evidence.
  */
 export type WarcraftLogsTierSearchOutcome = Readonly<{
