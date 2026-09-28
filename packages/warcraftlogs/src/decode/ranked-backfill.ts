@@ -233,14 +233,21 @@ export function decodedUnderRankedName(
   return decodedHydratedReport(value, identity);
 }
 
-export function decodedRankedKill(
+/**
+ * The character's Mythic kills in one hydrated ranked report: every kill of
+ * the zone's ranked encounters, not only the ranked fight that led to the
+ * report, so a raid night is read once for all its bosses (#712). Identity is
+ * proved once for the report, by canonical id and a unique actor.
+ */
+export function decodedRankedKills(
   value: unknown,
   expected: {
     code: string;
-    fightId: number;
-    spec?: string;
+    /** The ranked fight that led here, with its spec when ranked with one. */
+    ranked: Readonly<{ fightId: number; spec?: string }>;
     zoneId: number;
-    encounterId: number;
+    /** The zone's encounters the character is ranked on. */
+    encounterIds: readonly number[];
     characterId: number;
     journalRaidId: string;
     region: CharacterKey["region"];
@@ -253,16 +260,8 @@ export function decodedRankedKill(
     return { kind: "limitation", code: "schema_drift" };
   if (positiveInteger(record(entry.zone)?.id) !== expected.zoneId) return [];
   const fights = entry.fights;
-  if (!Array.isArray(fights) || fights.length !== 1)
+  if (!Array.isArray(fights))
     return { kind: "limitation", code: "schema_drift" };
-  const fight = record(fights[0]);
-  if (
-    positiveInteger(fight?.id) !== expected.fightId ||
-    positiveInteger(fight?.encounterID) !== expected.encounterId ||
-    fight?.difficulty !== MYTHIC_DIFFICULTY ||
-    fight.kill !== true
-  )
-    return [];
   const ranked = entry.rankedCharacters;
   const actors = record(entry.masterData)?.actors;
   if (ranked === null) return [];
@@ -299,19 +298,23 @@ export function decodedRankedKill(
     );
   if (matches.length !== 1) return [];
   const actor = matches[0]!;
-  // Specs are an independent consistency check when the report supplies
-  // them. Identity was already established by canonical ID and unique actor.
-  if (expected.spec && Array.isArray(fight.friendlySpecs)) {
-    const actorIndex = Array.isArray(fight.friendlyPlayers)
-      ? fight.friendlyPlayers.indexOf(actor.id)
+  // Specs are an independent consistency check when the ranking supplies
+  // one, which it does only for the ranked fight. Identity was already
+  // established by canonical ID and unique actor.
+  const rankedFight = fights
+    .map(record)
+    .find((fight) => positiveInteger(fight?.id) === expected.ranked.fightId);
+  let specContradicted = false;
+  if (expected.ranked.spec && Array.isArray(rankedFight?.friendlySpecs)) {
+    const actorIndex = Array.isArray(rankedFight.friendlyPlayers)
+      ? rankedFight.friendlyPlayers.indexOf(actor.id)
       : -1;
-    const fightSpec = nonEmptyString(fight.friendlySpecs[actorIndex]);
-    if (
-      fightSpec &&
+    const fightSpec = nonEmptyString(rankedFight.friendlySpecs[actorIndex]);
+    specContradicted =
+      fightSpec !== null &&
+      fightSpec !== undefined &&
       fightSpec.toLocaleLowerCase("en-US") !==
-        expected.spec.toLocaleLowerCase("en-US")
-    )
-      return [];
+        expected.ranked.spec.toLocaleLowerCase("en-US");
   }
   const alias = {
     region: expected.region,
@@ -321,11 +324,13 @@ export function decodedRankedKill(
   const decoded = decodedHydratedReport(value, alias);
   if (decoded.kind !== "evidence") return decoded;
   if (decoded.limitation) return decoded.limitation;
+  const encounters = new Set(expected.encounterIds.map(String));
   return decoded.kills.filter(
     (kill) =>
       kill.reportCode === expected.code &&
-      kill.fightId === expected.fightId &&
-      kill.bossId === String(expected.encounterId) &&
+      encounters.has(kill.bossId) &&
+      kill.difficulty === MYTHIC_DIFFICULTY &&
+      !(specContradicted && kill.fightId === expected.ranked.fightId) &&
       // A combined zone's fights name no raid, so the boss has to place them.
       lookupRaidForEvidence(kill)?.raidId === expected.journalRaidId &&
       currentContentEligibilityByRaidId(

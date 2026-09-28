@@ -2,7 +2,7 @@ import type { CharacterKey } from "@slashwho/domain";
 
 import { isLimitation, validCharacterKey, record } from "../decode/primitives";
 import {
-  decodedRankedKill,
+  decodedRankedKills,
   rankedCharacterName,
   historicEncounterIds,
   historicReportRefs,
@@ -158,6 +158,10 @@ export async function getRankedKillReports(
   }
   while (progress.zoneIndex < progress.zoneIds.length) {
     const zoneId = progress.zoneIds[progress.zoneIndex]!;
+    // One read covers every kill of the zone's ranked encounters in a
+    // report, so a report is read at most once a zone. Per zone, because a
+    // zone walked again under another partition ranks other encounters.
+    const readReports = new Set<string>();
     const partition = progress.partitionIds?.[progress.zoneIndex];
     if (partition === undefined)
       return limited("zone_rankings", {
@@ -237,14 +241,16 @@ export async function getRankedKillReports(
         ) {
           const ref = refs[progress.reportIndex]!;
           const fightKey = `${ref.code}:${ref.fightId}`;
-          if (hydratedFights.has(fightKey)) continue;
+          if (
+            hydratedFights.has(fightKey) ||
+            acceptedFights.has(fightKey) ||
+            readReports.has(ref.code)
+          )
+            continue;
           const detail = await request(
             "report_hydration",
             historicRankedReportQuery,
-            {
-              code: ref.code,
-              fightId: ref.fightId
-            }
+            { code: ref.code }
           );
           if (!detail)
             return limited("report_hydration", {
@@ -253,26 +259,23 @@ export async function getRankedKillReports(
             });
           if (detail.kind !== "success") {
             if (detail.code === "not_found" || detail.code === "private") {
-              hydratedFights.add(fightKey);
+              readReports.add(ref.code);
               continue;
             }
             return limited("report_hydration", detail);
           }
-          const decoded = decodedRankedKill(detail.value, {
-            ...ref,
+          const decoded = decodedRankedKills(detail.value, {
+            code: ref.code,
+            ranked: ref,
             zoneId,
-            encounterId,
+            encounterIds: progress.encounterIds,
             characterId: progress.characterId!,
             journalRaidId: options.journalRaidId,
             region: key.region
           });
           if (isLimitation(decoded))
             return limited("report_hydration", decoded);
-          const report = record(
-            record(record(detail.value)?.data)?.reportData
-          )?.report;
           if (decoded.length > 0) {
-            acceptedFights.add(fightKey);
             const ranked = rankedCharacterName(
               detail.value,
               progress.characterId!
@@ -284,13 +287,26 @@ export async function getRankedKillReports(
               );
             }
           }
+          // Every kill of the zone's ranked encounters in the report was
+          // decoded, so later rankings of its accepted fights read nothing
+          // again. The report is done once its ranked fight was accepted, or
+          // when it cannot credit anyone. A ranked fight it rejected -- one
+          // metric's spec contradicting the fight, say -- is left to the
+          // other metric's ranking, which reads it again, as before (#712).
+          const report = record(
+            record(record(detail.value)?.data)?.reportData
+          )?.report;
           if (
-            decoded.length > 0 ||
+            decoded.some((kill) => kill.fightId === ref.fightId) ||
             report === null ||
             record(report)?.rankedCharacters === null
-          )
-            hydratedFights.add(fightKey);
-          for (const kill of decoded) kills.set(kill.fightUrl, kill);
+          ) {
+            readReports.add(ref.code);
+          }
+          for (const kill of decoded) {
+            acceptedFights.add(`${kill.reportCode}:${kill.fightId}`);
+            kills.set(kill.fightUrl, kill);
+          }
         }
       }
       progress = {

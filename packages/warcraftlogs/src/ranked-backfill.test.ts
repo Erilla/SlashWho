@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { rankedCharacterName } from "./decode/ranked-backfill";
+import type { WarcraftLogsRankedBackfillCursor } from "./types";
 import { createPlannedWarcraftLogsClient as createWarcraftLogsClient } from "./planned-client.test-support";
 
 const key = { region: "eu", realm: "silvermoon", name: "ryun" } as const;
@@ -52,6 +53,11 @@ const report = (code: string, fightId: number, canonicalID = 40989140) => ({
     }
   }
 });
+
+// Each fixture report holds one ranked fight. The walk reads a report whole
+// (#712), asking for no fight id, so fixtures answer by report code.
+const rankedFightOf = (code: string): number =>
+  code === "linked" || code === "secondReport" ? 11 : 10;
 
 describe("ranked Mythic backfill", () => {
   it("excludes a post-content Antorus kill despite a canonical ranking", async () => {
@@ -179,7 +185,7 @@ describe("ranked Mythic backfill", () => {
           });
         const payload = report(
           String(variables.code),
-          Number(variables.fightId)
+          rankedFightOf(String(variables.code))
         );
         if (variables.code === "unlinked") {
           unlinkedReads += 1;
@@ -643,7 +649,7 @@ describe("ranked Mythic backfill", () => {
             }
           });
         return Response.json(
-          report(String(variables.code), Number(variables.fightId))
+          report(String(variables.code), rankedFightOf(String(variables.code)))
         );
       }
     );
@@ -745,7 +751,10 @@ describe("ranked Mythic backfill", () => {
               }
             });
           return Response.json(
-            report(String(variables.code), Number(variables.fightId))
+            report(
+              String(variables.code),
+              rankedFightOf(String(variables.code))
+            )
           );
         },
         clientId: "id",
@@ -1583,5 +1592,167 @@ describe("the name a character was ranked under", () => {
         40989140
       )
     ).toBeNull();
+  });
+});
+
+describe("reading each ranked report once (#712)", () => {
+  // A raid night holds several ranked bosses. Read once a fight, the same
+  // report cost 2.1 points per ranked boss; read once, 2.1 in all (measured
+  // 2026-09-28: 265 reads for 157 distinct reports across four tiers).
+  const antorus = {
+    data: {
+      worldData: {
+        zones: [
+          {
+            id: 17,
+            name: "Antorus, The Burning Throne",
+            partitions: [{ id: 1 }]
+          }
+        ]
+      }
+    }
+  };
+  const fight = (id: number, encounterID: number, name: string) => ({
+    id,
+    encounterID,
+    name,
+    startTime: id * 1000,
+    endTime: id * 1000 + 500,
+    kill: true,
+    difficulty: 5,
+    friendlyPlayers: [7],
+    friendlySpecs: ["Holy"],
+    gameZone: { id: 999, name: "Antorus, The Burning Throne" }
+  });
+  const walk = async (
+    options: Readonly<{
+      rankedCharacters?: null;
+      requestCap?: number;
+      cursor?: WarcraftLogsRankedBackfillCursor;
+    }> = {}
+  ) => {
+    const reads: string[] = [];
+    const client = createWarcraftLogsClient({
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token")
+          return Response.json({ access_token: "token", expires_in: 3600 });
+        const { query, variables } = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: Record<string, number | string>;
+        };
+        if (query.includes("HistoricRaidZones")) return Response.json(antorus);
+        if (query.includes("HistoricZoneRankings"))
+          return Response.json({
+            data: {
+              characterData: {
+                character: {
+                  id: 40989140,
+                  damage: {
+                    rankings: [
+                      { encounterID: 2092, totalKills: 1 },
+                      { encounterID: 2088, totalKills: 1 }
+                    ]
+                  },
+                  healing: { rankings: [] }
+                }
+              }
+            }
+          });
+        if (query.includes("HistoricEncounterRankings"))
+          return Response.json({
+            data: {
+              characterData: {
+                character: {
+                  encounterRankings: {
+                    ranks: [
+                      {
+                        report: {
+                          code: "night",
+                          fightID: variables.encounterId === 2092 ? 10 : 11
+                        },
+                        spec: "Holy"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          });
+        reads.push(String(variables.code));
+        const value = report("night", 10);
+        const entry = value.data.reportData.report;
+        entry.zone.encounters = [
+          { id: 2092, journalID: 2032 },
+          { id: 2088, journalID: 1987 },
+          { id: 2069, journalID: 1983 }
+        ];
+        // A read that names one fight -- the per-fight read this replaced --
+        // is answered with that fight alone.
+        const fights = [
+          fight(10, 2092, "Argus the Unmaker"),
+          fight(11, 2088, "Kin'garoth"),
+          // Killed that night, but not an encounter the character is ranked
+          // on in this zone.
+          fight(12, 2069, "Varimathras")
+        ];
+        entry.fights =
+          typeof variables.fightId === "number"
+            ? fights.filter(({ id }) => id === variables.fightId)
+            : fights;
+        if (options.rankedCharacters === null) entry.rankedCharacters = null;
+        return Response.json(value);
+      },
+      clientId: "id",
+      clientSecret: "secret"
+    });
+    const result = await client.getRankedKillReports(key, {
+      journalRaidId: "946",
+      requestCap: options.requestCap ?? 20,
+      ...(options.cursor ? { cursor: options.cursor } : {})
+    });
+    return { result, reads };
+  };
+
+  it("reads a report ranked for two bosses once, and credits both", async () => {
+    const { result, reads } = await walk();
+
+    expect(reads).toEqual(["night"]);
+    expect(result).toMatchObject({ kind: "evidence" });
+    const fights = (
+      result as { kills: readonly { fightUrl: string }[] }
+    ).kills.map((kill) => kill.fightUrl);
+    expect(fights.sort()).toEqual([
+      "https://www.warcraftlogs.com/reports/night#fight=10",
+      "https://www.warcraftlogs.com/reports/night#fight=11"
+    ]);
+  });
+
+  it("carries every fight the one read accepted in a capped walk's cursor", async () => {
+    // Zones, zone rankings, the first boss's ranking and the report spend
+    // the cap, so the walk stops before the second boss's ranking. The
+    // fight that ranking names was accepted by the one read already.
+    const capped = await walk({ requestCap: 4 });
+    if (capped.result.kind !== "evidence") throw new Error("expected_evidence");
+    const cursor = capped.result.cursor;
+
+    expect(cursor?.acceptedFightKeys).toEqual(
+      expect.arrayContaining(["night:10", "night:11"])
+    );
+    const resumed = await walk({ requestCap: 20, cursor: cursor! });
+    expect(resumed.reads).toEqual([]);
+  });
+
+  it("reads a report that ranks nobody once, not once a ranked fight", async () => {
+    // Tomb of Sargeras's reports carry no rankedCharacters, so no kill in
+    // them can be proved; each was read again for every ranked fight (73
+    // reads of 48 reports, crediting nothing).
+    const { result, reads } = await walk({ rankedCharacters: null });
+
+    expect(reads).toEqual(["night"]);
+    expect(result).toMatchObject({ kind: "evidence", kills: [] });
+    expect(result).not.toHaveProperty("limitation");
   });
 });
