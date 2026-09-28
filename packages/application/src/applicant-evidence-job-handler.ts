@@ -1904,7 +1904,17 @@ export function createApplicantEvidenceJobHandler(
                       rankedBackfill: {
                         journalRaidId: tierSearchRaidId,
                         requestCap: continuationRankedCap,
-                        ...(rankedCursor ? { cursor: rankedCursor } : {})
+                        ...(rankedCursor ? { cursor: rankedCursor } : {}),
+                        // A report that ranks nobody is proved by a name on
+                        // its ranked fight, the name of the night (#742).
+                        ...(historicAliases.length > 0
+                          ? {
+                              formerNames: historicAliases.map((alias) => ({
+                                name: alias.name,
+                                realm: alias.realm
+                              }))
+                            }
+                          : {})
                       }
                     }
                   : {}),
