@@ -570,6 +570,153 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
+  describe("reading the allowance and resolving the character in one request (#712)", () => {
+    const allowance = {
+      limitPerHour: 18000,
+      pointsSpentThisHour: 9058.65,
+      pointsResetIn: 949
+    };
+    const character = {
+      id: 40989140,
+      name: "Sentinel",
+      server: { slug: "silvermoon", region: { slug: "eu" } }
+    };
+
+    it("answers both from one document", async () => {
+      // Break caught: two requests here spend the point the fold exists to
+      // save, on every evidence run.
+      const { client, fetch } = clientFor((url) =>
+        url.pathname === "/oauth/token"
+          ? token()
+          : jsonResponse({
+              data: { rateLimitData: allowance, characterData: { character } }
+            })
+      );
+
+      expect(await client.getRateLimitWithIdentity(key)).toEqual({
+        rateLimit: {
+          kind: "rate_limit",
+          limitPerHour: 18000,
+          pointsSpentThisHour: 9058.65,
+          pointsResetInSeconds: 949
+        },
+        identity: {
+          kind: "identity",
+          key,
+          displayName: "Sentinel",
+          characterId: 40989140
+        }
+      });
+      const bodies = fetch.mock.calls
+        .filter(([input]) => String(input).endsWith("/api/v2/client"))
+        .map(([, init]) => JSON.parse(String(init?.body)) as { query: string });
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]!.query).toContain("rateLimitData");
+      expect(bodies[0]!.query).toContain("characterData");
+    });
+
+    it("keeps the allowance when the character is not found", async () => {
+      // Break caught: reading a missing character as a failed document would
+      // throw the allowance away, and the admission gate would fail open for
+      // every name Warcraft Logs does not know.
+      const { client } = clientFor((url) =>
+        url.pathname === "/oauth/token"
+          ? token()
+          : jsonResponse({
+              data: {
+                rateLimitData: allowance,
+                characterData: { character: null }
+              }
+            })
+      );
+
+      const result = await client.getRateLimitWithIdentity(key);
+      expect(result.rateLimit.kind).toBe("rate_limit");
+      expect(result.identity).toEqual({
+        kind: "limitation",
+        code: "not_found"
+      });
+    });
+
+    it("keeps a private character's answer, and reads the allowance once more", async () => {
+      // Break caught: a private character's GraphQL error fails the whole
+      // document. Returning that as the allowance would admit every private
+      // character past the gate unread; returning no identity would make
+      // the run ask Warcraft Logs the same question a third time. Two
+      // requests, as before the fold.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const { query } = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(query);
+        return query.includes("characterData")
+          ? jsonResponse({
+              data: {
+                rateLimitData: allowance,
+                characterData: { character: null }
+              },
+              ...(fixture("character-private") as object)
+            })
+          : jsonResponse({ data: { rateLimitData: allowance } });
+      });
+
+      const result = await client.getRateLimitWithIdentity(key);
+      expect(result).toEqual({
+        rateLimit: {
+          kind: "rate_limit",
+          limitPerHour: 18000,
+          pointsSpentThisHour: 9058.65,
+          pointsResetInSeconds: 949
+        },
+        identity: { kind: "limitation", code: "private" }
+      });
+      expect(queries).toHaveLength(2);
+      expect(queries[1]).not.toContain("characterData");
+    });
+
+    it("asks nothing more of an upstream that is failing", async () => {
+      // Break caught: a second request straight into a 503 or a 429 spends
+      // another point to learn the same thing, and a null identity would
+      // have the run send a third. It stays a limitation the gate fails open
+      // on, never a throw that stops collection.
+      const { client, fetch } = clientFor((url) =>
+        url.pathname === "/oauth/token"
+          ? token()
+          : new Response("upstream-body-marker", { status: 503 })
+      );
+
+      expect(await client.getRateLimitWithIdentity(key)).toEqual({
+        rateLimit: { kind: "limitation", code: "unavailable" },
+        identity: { kind: "limitation", code: "unavailable" }
+      });
+      expect(
+        fetch.mock.calls.filter(([input]) =>
+          String(input).endsWith("/api/v2/client")
+        )
+      ).toHaveLength(1);
+    });
+
+    it("reads the allowance alone, and leaves the identity unasked, when the document cannot be read", async () => {
+      // Break caught: a body that is not JSON says nothing about either
+      // question, so the allowance is worth one more point and the run
+      // resolves the character itself.
+      const queries: string[] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const { query } = JSON.parse(String(init?.body)) as { query: string };
+        queries.push(query);
+        return query.includes("characterData")
+          ? new Response("not-json", { status: 200 })
+          : jsonResponse({ data: { rateLimitData: allowance } });
+      });
+
+      const result = await client.getRateLimitWithIdentity(key);
+      expect(result.rateLimit.kind).toBe("rate_limit");
+      expect(result.identity).toBeNull();
+      expect(queries).toHaveLength(2);
+    });
+  });
+
   it("resolves a requested key to Warcraft Logs' canonical public character", async () => {
     // Break caught: an upstream transfer or rename could be attributed to the
     // requested key instead of the canonical public character.

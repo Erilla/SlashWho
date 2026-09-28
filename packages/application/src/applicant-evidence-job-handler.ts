@@ -28,6 +28,7 @@ import type {
 import type {
   WarcraftLogsFirstKillEvidence,
   WarcraftLogsGateway,
+  WarcraftLogsIdentityResult,
   WarcraftLogsReportResult,
   WarcraftLogsLimitationCode,
   WarcraftLogsQueryType,
@@ -350,7 +351,9 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
     WarcraftLogsGateway,
     "getFirstKillReports" | "getRateLimit"
   > &
-    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
+    Partial<
+      Pick<WarcraftLogsGateway, "resolveCharacter" | "getRateLimitWithIdentity">
+    >;
   blizzard?: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio?: Pick<RaiderIoGateway, "getMythicBossRankings"> &
     Partial<Pick<RaiderIoGateway, "getHistoricMythicKills">>;
@@ -358,7 +361,9 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
     clientId: string;
     clientSecret: string;
   }) => Pick<WarcraftLogsGateway, "getFirstKillReports" | "getRateLimit"> &
-    Partial<Pick<WarcraftLogsGateway, "resolveCharacter">>;
+    Partial<
+      Pick<WarcraftLogsGateway, "resolveCharacter" | "getRateLimitWithIdentity">
+    >;
   decryptionKey?: Buffer;
   resolveAccountWarcraftLogs?: (
     accountId: string,
@@ -911,7 +916,9 @@ export function createApplicantEvidenceJobHandler(
   /**
    * Reads the allowance the run's gateway reports and refuses the run when too
    * little of it is left, by throwing. Returns the opening reading, or `null`
-   * when it could not be read.
+   * when it could not be read, and the run's Warcraft Logs identity when the
+   * same request answered it: the two cost one point together, and a point
+   * each apart (#712). `undefined` leaves the run to resolve it itself.
    *
    * Read from the run's gateway, not `options.warcraftLogs`: a run carrying a
    * visitor's own credentials spends *their* allowance, and the worker's
@@ -925,13 +932,27 @@ export function createApplicantEvidenceJobHandler(
     state: AttemptState,
     run: ApplicantEvidenceRun,
     gateway: ApplicantEvidenceJobHandlerOptions["warcraftLogs"]
-  ): Promise<WarcraftLogsRateLimit | null> {
+  ): Promise<
+    Readonly<{
+      openingBudget: WarcraftLogsRateLimit | null;
+      identity: WarcraftLogsIdentityResult | undefined;
+    }>
+  > {
     const { context, evidence, record } = state;
-    const budgetBefore = await gateway.getRateLimit(context.signal);
-    if (budgetBefore.kind !== "rate_limit") return null;
+    const combined = gateway.getRateLimitWithIdentity
+      ? await gateway.getRateLimitWithIdentity(run.key, context.signal)
+      : undefined;
+    const budgetBefore =
+      combined?.rateLimit ?? (await gateway.getRateLimit(context.signal));
+    const identity = combined?.identity ?? undefined;
+    if (budgetBefore.kind !== "rate_limit") {
+      return { openingBudget: null, identity };
+    }
     record.pointsLimitPerHour = budgetBefore.limitPerHour;
     record.pointsRemainingBefore = remainingPoints(budgetBefore);
-    if (!belowReserve(budgetBefore, options.pointsReserve)) return budgetBefore;
+    if (!belowReserve(budgetBefore, options.pointsReserve)) {
+      return { openingBudget: budgetBefore, identity };
+    }
     // The run stays claimed and nothing is published. Leaving it unclaimed
     // instead would be a bug: `reserve` counts ('queued','running','retrying')
     // as active, so the character would join a run that is never processed
@@ -1333,7 +1354,8 @@ export function createApplicantEvidenceJobHandler(
         if (await republishStaged(state, run)) return;
 
         const gateway = await gatewayFor(state, run);
-        const openingBudget = await admitOrRefuse(state, run, gateway);
+        const { openingBudget, identity: admittedIdentity } =
+          await admitOrRefuse(state, run, gateway);
 
         // Storage happens in two steps on purpose: the stage records that the
         // scan has been paid for, so a publication that fails transiently is
@@ -1503,16 +1525,16 @@ export function createApplicantEvidenceJobHandler(
         // ID still match report actors against that key, so an ID for
         // whatever the name resolves to instead would read somebody else.
         let characterId: number | undefined;
-        if (gateway.resolveCharacter) {
+        const resolveCharacter = gateway.resolveCharacter;
+        if (admittedIdentity || resolveCharacter) {
           await phaseLedger?.transition(
             "warcraft_logs_identity_resolution",
             "active"
           );
           try {
-            const identity = await gateway.resolveCharacter(
-              run.key,
-              activeContext.signal
-            );
+            const identity =
+              admittedIdentity ??
+              (await resolveCharacter!(run.key, activeContext.signal));
             if (identity.kind === "identity") {
               const ownKey =
                 canonicalCharacterId(identity.key) ===

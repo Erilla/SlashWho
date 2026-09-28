@@ -5454,6 +5454,162 @@ describe("applicant evidence job handler", () => {
         ])
       );
     });
+
+    describe("taking the identity from the admission read (#712)", () => {
+      const identity = {
+        kind: "identity" as const,
+        key,
+        displayName: "Rinn",
+        characterId: 40989140
+      };
+      const opening = {
+        kind: "rate_limit" as const,
+        limitPerHour: 18_000,
+        pointsSpentThisHour: 1_000.25,
+        pointsResetInSeconds: 949
+      };
+      const emptyEvidence = vi.fn(async () => ({
+        kind: "evidence" as const,
+        parsedFightUrls: [],
+        kills: [],
+        wipes: [],
+        tierBests: [],
+        troubledRaidIds: { parses: [], tierBests: [] }
+      }));
+
+      it("asks for the character once, in the read that admits the run", async () => {
+        // Break caught: resolving again after admission spends the point the
+        // combined read exists to save, on every run.
+        const infos: Array<Record<string, unknown>> = [];
+        const getRateLimitWithIdentity = vi.fn(async () => ({
+          rateLimit: opening,
+          identity
+        }));
+        const getRateLimit = vi.fn(async () => ({
+          ...opening,
+          pointsSpentThisHour: 1_950.75
+        }));
+        const resolveCharacter = vi.fn(async () => identity);
+        const getFirstKillReports = emptyEvidence;
+        const handler = handlerFor({
+          evidence: store(),
+          warcraftLogs: {
+            getFirstKillReports,
+            getRateLimit,
+            getRateLimitWithIdentity,
+            resolveCharacter
+          },
+          pointsReserve: 0,
+          logger: { info: (value) => infos.push(value) }
+        });
+
+        await handler.execute(run.id);
+
+        expect(getRateLimitWithIdentity).toHaveBeenCalledOnce();
+        expect(getRateLimitWithIdentity).toHaveBeenCalledWith(
+          key,
+          expect.anything()
+        );
+        expect(resolveCharacter).not.toHaveBeenCalled();
+        // Only the closing sample reads the allowance on its own.
+        expect(getRateLimit).toHaveBeenCalledOnce();
+        expect(getFirstKillReports).toHaveBeenCalledWith(
+          key,
+          expect.objectContaining({ characterId: 40989140 })
+        );
+        expect(infos.at(-1)).toMatchObject({
+          pointsRemainingBefore: 16_999.75,
+          pointsSpentByRun: 950.5
+        });
+      });
+
+      it("resolves the character itself when the admission read left it unasked", async () => {
+        // Break caught: a refused combined document leaves the identity
+        // unanswered, and taking that for "no identity" would read the run
+        // by name for good, never recording its stable ID.
+        const resolveCharacter = vi.fn(async () => identity);
+        const getFirstKillReports = emptyEvidence;
+        const handler = handlerFor({
+          evidence: store(),
+          warcraftLogs: {
+            getFirstKillReports,
+            ...openGate,
+            getRateLimitWithIdentity: vi.fn(async () => ({
+              rateLimit: opening,
+              identity: null
+            })),
+            resolveCharacter
+          },
+          pointsReserve: 0
+        });
+
+        await handler.execute(run.id);
+
+        expect(resolveCharacter).toHaveBeenCalledOnce();
+        expect(getFirstKillReports).toHaveBeenCalledWith(
+          key,
+          expect.objectContaining({ characterId: 40989140 })
+        );
+      });
+
+      it("takes a private answer from the admission read as the identity's answer", async () => {
+        // Break caught: asking again for a character the admission read
+        // already found private spends a third point to hear the same thing.
+        const resolveCharacter = vi.fn(async () => identity);
+        const getFirstKillReports = emptyEvidence;
+        const handler = handlerFor({
+          evidence: store(),
+          warcraftLogs: {
+            getFirstKillReports,
+            ...openGate,
+            getRateLimitWithIdentity: vi.fn(async () => ({
+              rateLimit: opening,
+              identity: {
+                kind: "limitation" as const,
+                code: "private" as const
+              }
+            })),
+            resolveCharacter
+          },
+          pointsReserve: 0
+        });
+
+        await handler.execute(run.id);
+
+        expect(resolveCharacter).not.toHaveBeenCalled();
+        expect(getFirstKillReports).toHaveBeenCalledWith(
+          key,
+          expect.not.objectContaining({ characterId: expect.anything() })
+        );
+      });
+
+      it("still refuses a run the combined read finds over budget", async () => {
+        // Break caught: reading the allowance through the combined document
+        // must not bypass the admission gate it feeds.
+        const getFirstKillReports = emptyEvidence;
+        getFirstKillReports.mockClear();
+        const handler = handlerFor({
+          evidence: store(),
+          warcraftLogs: {
+            getFirstKillReports,
+            ...openGate,
+            getRateLimitWithIdentity: vi.fn(async () => ({
+              rateLimit: { ...opening, pointsSpentThisHour: 17_500.5 },
+              identity
+            }))
+          }
+        });
+
+        await expect(
+          handler.execute(run.id, {
+            attempt: 1,
+            maxAttempts: 5,
+            signal: new AbortController().signal
+          })
+        ).rejects.toMatchObject({ retryable: true, retryAfterMs: 949_000 });
+        expect(getFirstKillReports).not.toHaveBeenCalled();
+      });
+    });
   });
 });
 

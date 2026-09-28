@@ -307,6 +307,32 @@ export const rateLimitQuery = `
   }
 `;
 
+// A run's opening allowance and its character, in one document. Every request
+// costs at least a point, and the two together cost one, so asking them apart
+// spent a point a run on nothing. The allowance an in-document
+// `rateLimitData` reports excludes that document's own charge, exactly as a
+// lone `RateLimit` read does, so the reading means what it meant (measured
+// 2026-09-28, #712).
+export const rateLimitWithCharacterQuery = `
+  query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
+    rateLimitData {
+      limitPerHour
+      pointsSpentThisHour
+      pointsResetIn
+    }
+    characterData {
+      character(name: $name, serverSlug: $realm, serverRegion: $region) {
+        id
+        name
+        server {
+          slug
+          region { slug }
+        }
+      }
+    }
+  }
+`;
+
 export function rankingCharacterIdentityQuery(
   identities: readonly RankingIdentity[]
 ): string {
