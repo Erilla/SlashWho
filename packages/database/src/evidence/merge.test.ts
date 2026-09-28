@@ -404,6 +404,7 @@ describe("mergeRaiderIoFirstKills", () => {
       encounterLimitationCode: null,
       historicWorldRank: null,
       historicRankCheckedAt: null,
+      presenceChecked: false,
       ...overrides
     };
   }
@@ -565,5 +566,60 @@ describe("mergeRaiderIoFirstKills", () => {
       false
     );
     expect(bosses(merged)).toEqual(["queen-ansurek", "midnight-falls"]);
+  });
+});
+
+describe("mergeRaiderIoFirstKills presence", () => {
+  const read: CharacterRaiderIoFirstKillInput = {
+    raidSlug: "tier-mn-1",
+    bossSlug: "midnight-falls",
+    killedAt: "2026-07-20T17:25:57.301Z",
+    guild: null,
+    loggedEncounterId: 700_001,
+    encounterState: "read",
+    encounterLimitationCode: null,
+    historicWorldRank: null,
+    historicRankCheckedAt: null,
+    presenceChecked: true
+  };
+  const publication = (
+    kills: readonly CharacterRaiderIoFirstKillInput[]
+  ) => ({ kills, askedRaidSlugs: ["tier-mn-1"], limitationCode: null });
+
+  it("takes the flag of a kill the run found again", () => {
+    expect(
+      mergeRaiderIoFirstKills(
+        [read],
+        publication([{ ...read, presenceChecked: false }]),
+        "complete",
+        false
+      )[0]!.presenceChecked
+    ).toBe(false);
+  });
+
+  it("keeps the previous flag when it keeps the previous read", () => {
+    // Raider.IO dropped the link: the incoming row is unavailable, unchecked.
+    const dropped: CharacterRaiderIoFirstKillInput = {
+      ...read,
+      loggedEncounterId: null,
+      encounterState: "unavailable",
+      encounterLimitationCode: null,
+      presenceChecked: false
+    };
+    expect(
+      mergeRaiderIoFirstKills([read], publication([dropped]), "complete", false)
+    ).toEqual([read]);
+  });
+
+  it("carries a row's own flag through a partial run", () => {
+    const unchecked = { ...read, presenceChecked: false };
+    expect(
+      mergeRaiderIoFirstKills(
+        [unchecked],
+        publication([]),
+        "partial",
+        false
+      )
+    ).toEqual([unchecked]);
   });
 });
