@@ -5683,7 +5683,8 @@ describe("applicant evidence job handler", () => {
       encounterState: "read",
       encounterLimitationCode: null,
       historicWorldRank: null,
-      historicRankCheckedAt: null
+      historicRankCheckedAt: null,
+      presenceChecked: true
     };
     const noKills = {
       kind: "evidence" as const,

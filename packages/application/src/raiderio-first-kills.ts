@@ -159,14 +159,15 @@ function withoutReadAt(
  * old. First reads come before re-reads, and all of them share one bound, as
  * `raiderio_rankings` does: 50 a run, four at a time, and a read that throws
  * or is rate limited abandons the rest. A kill counts as the character's only
- * when the roster holds the character's own Raider.IO id; where the roster is
- * hidden, Raider.IO's own attribution of the kill stands in for it.
+ * once a visible roster held the character's own Raider.IO id, recorded on
+ * the kill as `presenceChecked`; where the roster is hidden, Raider.IO's own
+ * attribution of the kill stands in for it.
  */
 export async function collectRaiderIoFirstKills(
   input: Readonly<{
     key: CharacterKey;
     kills: readonly HistoricMythicKill[];
-    /** The character's stored first kills: a `read` one has already passed its presence check. */
+    /** The character's stored first kills: a `read` one's `presenceChecked` says whether its presence check has already passed. */
     published: readonly CharacterRaiderIoFirstKillInput[];
     storedEncounters: (
       ids: readonly number[]
@@ -176,6 +177,8 @@ export async function collectRaiderIoFirstKills(
       Partial<Pick<RaiderIoGateway, "getCharacter">>;
     signal: AbortSignal;
     now: () => Date;
+    /** Raids of tiers asked anyway; their due re-reads queue before the back catalogue's. */
+    priorityRaidSlugs?: ReadonlySet<string>;
     /** Called once per logged-encounter request actually sent. */
     onEncounterRequest?: () => void;
     /** Called once for the character read, if one is made. */
@@ -224,9 +227,29 @@ export async function collectRaiderIoFirstKills(
   }
   const held = (id: number) => encounters.has(id) || storedUnavailable.has(id);
   const unread = ids.filter((id) => !held(id));
-  // A re-read already has an answer to show, so first reads go first. A
-  // re-read the cap leaves out keeps its answer and limits nothing.
-  const toRead = [...unread, ...ids.filter((id) => due.has(id))].slice(
+  const readAtById = new Map<number, number>([
+    ...stored.encounters.map(
+      (item) => [item.loggedEncounterId, Date.parse(item.readAt)] as const
+    ),
+    ...stored.unavailable.map(
+      (item) => [item.loggedEncounterId, Date.parse(item.readAt)] as const
+    )
+  ]);
+  const priority = (id: number) =>
+    input.priorityRaidSlugs?.has(killById.get(id)!.raidSlug) ? 0 : 1;
+  // A re-read already has an answer to show, so first reads go first. Among
+  // re-reads, current raids first, then the oldest answer: a back catalogue
+  // falling due at once must not crowd out rosters a recruiter is looking at
+  // now.
+  const dueIds = ids
+    .filter((id) => due.has(id))
+    .sort(
+      (a, b) =>
+        priority(a) - priority(b) ||
+        readAtById.get(a)! - readAtById.get(b)! ||
+        a - b
+    );
+  const toRead = [...unread, ...dueIds].slice(
     0,
     MAX_RAIDER_IO_LOGGED_ENCOUNTER_READS_PER_RUN
   );
@@ -351,20 +374,15 @@ export async function collectRaiderIoFirstKills(
     }
   }
 
-  // Presence is established only where it was checked: a published read kill
-  // whose stored roster was already visible before this run. One accepted
-  // behind a hidden roster was never checked, so once a re-read opens the
-  // roster it is checked like any new read.
-  const visibleBefore = new Set(
-    stored.encounters.flatMap((encounter) =>
-      encounter.rosterState === "available" ? [encounter.loggedEncounterId] : []
-    )
-  );
+  // Presence is established only where it was checked and recorded on the
+  // kill itself. Inferring it from "read, and the roster was visible before
+  // this run" let a partial run that opened a roster carry an unchecked kill
+  // past its check for good.
   const established = new Set(
     input.published.flatMap((kill) =>
       kill.encounterState === "read" &&
       kill.loggedEncounterId !== null &&
-      visibleBefore.has(kill.loggedEncounterId)
+      kill.presenceChecked === true
         ? [kill.loggedEncounterId]
         : []
     )
@@ -374,12 +392,10 @@ export async function collectRaiderIoFirstKills(
       encounter.rosterState === "available" &&
       !established.has(encounter.loggedEncounterId)
   );
-  const characterId = needsPresenceCheck
+  const character = needsPresenceCheck
     ? await raiderIoCharacterId(input)
     : null;
-  if (needsPresenceCheck && characterId === null) {
-    fallShort({ code: "unavailable" });
-  }
+  if (character?.kind === "failed") fallShort({ code: "unavailable" });
 
   const kills = input.kills.flatMap(
     (kill): CharacterRaiderIoFirstKillInput[] => {
@@ -398,7 +414,8 @@ export async function collectRaiderIoFirstKills(
             killedAt: kill.firstDefeated,
             loggedEncounterId: null,
             encounterState: "unavailable",
-            encounterLimitationCode: null
+            encounterLimitationCode: null,
+            presenceChecked: false
           }
         ];
       }
@@ -411,21 +428,31 @@ export async function collectRaiderIoFirstKills(
             loggedEncounterId: id,
             encounterState: "unavailable",
             encounterLimitationCode:
-              answered.get(id) ?? storedUnavailable.get(id) ?? "unavailable"
+              answered.get(id) ?? storedUnavailable.get(id) ?? "unavailable",
+            presenceChecked: false
           }
         ];
       }
-      if (encounter.rosterState === "available" && !established.has(id)) {
-        // Where the id could not be learned the kill waits for a run that
-        // can; the run is partial, so nothing stored is dropped meanwhile.
-        if (characterId === null) return [];
-        if (
-          !encounter.members.some(
-            (member) => member.raiderIoCharacterId === characterId
-          )
-        ) {
+      let presenceChecked = false;
+      if (encounter.rosterState === "available") {
+        if (established.has(id)) {
+          presenceChecked = true;
+        } else if (character?.kind === "id") {
+          if (
+            !encounter.members.some(
+              (member) => member.raiderIoCharacterId === character.id
+            )
+          ) {
+            return [];
+          }
+          presenceChecked = true;
+        } else if (character?.kind !== "none") {
+          // Where the id could not be learned the kill waits for a run that
+          // can; the run is partial, so nothing stored is dropped meanwhile.
           return [];
         }
+        // "none": accepted on Raider.IO's attribution, as behind a hidden
+        // roster, and checked again on a later run.
       }
       return [
         {
@@ -433,7 +460,8 @@ export async function collectRaiderIoFirstKills(
           killedAt: encounter.defeatedAt,
           loggedEncounterId: id,
           encounterState: "read",
-          encounterLimitationCode: null
+          encounterLimitationCode: null,
+          presenceChecked
         }
       ];
     }
@@ -442,6 +470,36 @@ export async function collectRaiderIoFirstKills(
   return { kills, encounters, limitation };
 }
 
+/**
+ * The character's stored first kills in raids this run's kill list did not
+ * ask about, as kill-list entries, so a settled tier's rosters keep being
+ * re-read without asking for its kill list (#732 follow-up). Every one is
+ * rebuilt, due or not: their raids join `askedRaidSlugs`, and a complete
+ * publish keeps only what the run hands it.
+ */
+export function rebuildSettledFirstKills(
+  published: readonly CharacterRaiderIoFirstKillInput[],
+  askedRaidSlugs: readonly string[]
+): HistoricMythicKill[] {
+  const asked = new Set(askedRaidSlugs);
+  return published
+    .filter((kill) => !asked.has(kill.raidSlug))
+    .map((kill) => ({
+      raidSlug: kill.raidSlug,
+      bossSlug: kill.bossSlug,
+      firstDefeated: kill.killedAt,
+      guild: kill.guild ? { ...kill.guild } : null,
+      loggedEncounterId: kill.loggedEncounterId
+    }));
+}
+
+type CharacterIdAnswer =
+  | Readonly<{ kind: "id"; id: number }>
+  // The read succeeded and Raider.IO gives the profile no id. That answer
+  // does not change, so it is not a shortfall.
+  | Readonly<{ kind: "none" }>
+  | Readonly<{ kind: "failed" }>;
+
 async function raiderIoCharacterId(
   input: Readonly<{
     key: CharacterKey;
@@ -449,18 +507,20 @@ async function raiderIoCharacterId(
     signal: AbortSignal;
     onCharacterRequest?: () => void;
   }>
-): Promise<number | null> {
-  if (!input.raiderio.getCharacter) return null;
+): Promise<CharacterIdAnswer> {
+  if (!input.raiderio.getCharacter) return { kind: "failed" };
   try {
     input.onCharacterRequest?.();
     const character = await input.raiderio.getCharacter(
       input.key,
       input.signal
     );
-    return character.raiderIoCharacterId ?? null;
+    return character.raiderIoCharacterId == null
+      ? { kind: "none" }
+      : { kind: "id", id: character.raiderIoCharacterId };
   } catch (error) {
     if (input.signal.aborted) throw error;
-    return null;
+    return { kind: "failed" };
   }
 }
 
