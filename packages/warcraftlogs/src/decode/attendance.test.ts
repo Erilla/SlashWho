@@ -26,7 +26,7 @@ describe("reading an attendance page", () => {
           players: [{ name: "Other" }, { name: "Sentinel-Silvermoon" }]
         }
       ]),
-      "sentinel"
+      ["sentinel"]
     );
 
     expect(
@@ -42,12 +42,30 @@ describe("reading an attendance page", () => {
     ]);
   });
 
+  it("lists the character under any name they raided under", () => {
+    // A night from before a rename lists the former name (#733).
+    const page = guildAttendancePage(
+      attendance([
+        { code: "former", players: [{ name: "Erilla" }] },
+        { code: "current", players: [{ name: "Ryun-Silvermoon" }] },
+        { code: "neither", players: [{ name: "Other" }] }
+      ]),
+      ["ryun", "erilla"]
+    );
+
+    expect(page?.reports.map(({ listsCharacter }) => listsCharacter)).toEqual([
+      true,
+      true,
+      false
+    ]);
+  });
+
   it("matches a name written in another Unicode form", () => {
     // Break caught: a decomposed accent is a different string, so an exact
     // comparison would rule out the very report attendance exists to find.
     const page = guildAttendancePage(
       attendance([{ code: "decomposed", players: [{ name: "Zoë" }] }]),
-      "zoë"
+      ["zoë"]
     );
 
     expect(page?.reports[0]?.listsCharacter).toBe(true);

@@ -222,16 +222,33 @@ export type WarcraftLogsTierSearch = Readonly<{
    * re-read fights the character already holds.
    */
   skipReportCodes?: readonly string[];
+  /**
+   * Whether stored evidence already places the character in this tier. Unset,
+   * attendance is walked only once the tier's ranked walk finds a kill, since
+   * a character nothing places there has no night to find (#733).
+   */
+  raidedTier?: boolean;
+  /**
+   * Other names, with realm, the character raided under: explicit former
+   * names, and those the tier's ranked walk proved by canonical id.
+   * Attendance lists a player by the name of the night, so without them a
+   * night from before a rename is ruled out unread (#733).
+   */
+  formerNames?: readonly Readonly<{ name: string; realm: string }>[];
 }>;
 
 /**
  * What a tier search did. `complete` means every guild was walked across the
- * whole window; `request_cap` that its budget ran out first; `incomplete` that
- * some guild's attendance could not be read. None of them limits the run: a
- * search only ever adds evidence.
+ * whole window, or that the tier's finished ranked walk and stored evidence
+ * both place the character nowhere in it, so there was nothing to walk for;
+ * `request_cap` that its budget ran out first; `incomplete` that some guild's
+ * attendance could not be read; `deferred` that nothing places the
+ * character in the tier yet and the ranked walk that decides it continues in
+ * a later run (#733). None of them limits the run: a search only ever adds
+ * evidence.
  */
 export type WarcraftLogsTierSearchOutcome = Readonly<{
-  outcome: "complete" | "request_cap" | "incomplete";
+  outcome: "complete" | "request_cap" | "incomplete" | "deferred";
   requests: number;
   guildsSearched: number;
   reportsHydrated: number;
@@ -267,6 +284,12 @@ export type WarcraftLogsRankedBackfillResult =
   | Readonly<{
       kind: "evidence";
       kills: readonly WarcraftLogsFirstKillEvidence[];
+      /**
+       * The names, with realm, the character was ranked under in the reports
+       * this call accepted, each proved by canonical id. A renamed character
+       * raided under a former one (#733).
+       */
+      rankedNames?: readonly Readonly<{ name: string; realm: string }>[];
       cursor?: WarcraftLogsRankedBackfillCursor;
       limitation?: WarcraftLogsLimitation;
     }>

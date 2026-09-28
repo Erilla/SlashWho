@@ -15,9 +15,13 @@ export type GuildAttendanceReport = Readonly<{
   listsCharacter: boolean | null;
 }>;
 
+/**
+ * One attendance page. `characterNames` are every name the character raided
+ * under: attendance lists a player by the name of the night.
+ */
 export function guildAttendancePage(
   value: unknown,
-  characterName: string
+  characterNames: readonly string[]
 ): Readonly<{
   reports: readonly GuildAttendanceReport[];
   hasMorePages: boolean;
@@ -35,7 +39,7 @@ export function guildAttendancePage(
     reports.push({
       code,
       startTime: validTimestampMilliseconds(entry?.startTime),
-      listsCharacter: attendanceListsCharacter(entry?.players, characterName)
+      listsCharacter: attendanceListsCharacter(entry?.players, characterNames)
     });
   }
   return { reports, hasMorePages };
@@ -52,10 +56,14 @@ export function guildIsAbsent(value: unknown): boolean {
 
 function attendanceListsCharacter(
   players: unknown,
-  characterName: string
+  characterNames: readonly string[]
 ): boolean | null {
   if (!Array.isArray(players) || players.length === 0) return null;
-  const wanted = characterName.normalize("NFC");
+  const wanted = new Set(
+    characterNames.map((name) =>
+      name.normalize("NFC").toLocaleLowerCase("en-US")
+    )
+  );
   let unreadable = false;
   for (const player of players) {
     const name = nonEmptyString(record(player)?.name);
@@ -66,7 +74,7 @@ function attendanceListsCharacter(
     const listed = name.normalize("NFC").toLocaleLowerCase("en-US");
     // A player from another realm may be written with a realm suffix. The
     // hydrated report decides the realm; this may only say "not this name".
-    if (listed === wanted || listed.split("-")[0] === wanted) return true;
+    if (wanted.has(listed) || wanted.has(listed.split("-")[0]!)) return true;
   }
   return unreadable ? null : false;
 }

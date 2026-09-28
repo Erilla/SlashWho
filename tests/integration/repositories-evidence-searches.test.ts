@@ -408,6 +408,54 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
       ]);
     });
 
+    it("takes a newer press's deferred attendance over an older press's complete one (#733)", async () => {
+      // A deferral is recorded, not left null: the newest outcome is what a
+      // continuation reads, and a null would hand it the older `complete`.
+      await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
+      const press = async (at: Date, since: Date, outcome: string) => {
+        const reserved = await repositories.evidence.reserveTierSearch({
+          key: rootKey,
+          raidId: tier,
+          at,
+          searchedSince: since
+        });
+        if (reserved.kind !== "reserved")
+          throw new Error("tier_search_not_reserved");
+        await repositories.evidence.claim(reserved.run.id, 1);
+        await repositories.evidence.publish(reserved.run.id, {
+          state: "partial",
+          limitationCode: "request_cap",
+          parseLimitationCode: null,
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          completedAt: at
+        });
+        await pool.query(
+          `INSERT INTO character_evidence_run_costs
+             (run_id, attempt, outcome, credentials, request_cap_used,
+              parse_request_cap_used, tier_search_outcome)
+           VALUES ($1, 1, 'published', 'own', 300, 24, $2)`,
+          [reserved.run.id, outcome]
+        );
+      };
+      const later = new Date(searchedAt.getTime() + 2 * 24 * 60 * 60_000);
+      await press(searchedAt, dayBefore, "complete");
+      await expect(
+        repositories.evidence.storedEvidenceTiers(rootKey, tier)
+      ).resolves.toMatchObject({ tierSearchAttendanceComplete: true });
+
+      await press(
+        later,
+        new Date(later.getTime() - 24 * 60 * 60_000),
+        "deferred"
+      );
+
+      await expect(
+        repositories.evidence.storedEvidenceTiers(rootKey, tier)
+      ).resolves.toMatchObject({ tierSearchAttendanceComplete: false });
+    });
+
     it("names the guilds stored kills were in, for the search to walk", async () => {
       await publishEvidence(rootKey, new Date("2026-09-22T12:00:00.000Z"));
 
