@@ -5814,36 +5814,54 @@ describe("applicant evidence job handler", () => {
       });
     });
 
-    it("makes the run partial, and retries it, when a read fails", async () => {
-      const evidence = loggedStore();
-      const raiderio = raiderIo({
-        getLoggedEncounter: vi.fn(async () => {
+    it.each([
+      [
+        "a read throws",
+        "unavailable",
+        async () => {
           throw new Error("raiderio_down");
+        }
+      ],
+      [
+        "Raider.IO rate-limits a read",
+        "rate_limited",
+        async () => ({
+          kind: "limitation" as const,
+          code: "rate_limited" as const,
+          retryAfterMs: 30_000
         })
-      });
+      ]
+    ] as const)(
+      "makes the run partial, but schedules no retry, when %s",
+      async (_name, code, getLoggedEncounter) => {
+        // Controller ruling (#734): a retry would be a whole evidence run,
+        // spending Warcraft Logs points to read Raider.IO. The next ordinary
+        // run reads the encounter again.
+        const evidence = loggedStore();
+        const raiderio = raiderIo({
+          getLoggedEncounter: vi.fn(getLoggedEncounter)
+        });
 
-      await loggedHandler(evidence, raiderio).execute(run.id);
+        await loggedHandler(evidence, raiderio).execute(run.id);
 
-      const published = evidence.published[0]!.result;
-      expect(published.state).toBe("partial");
-      expect(published.raiderIoFirstKills).toMatchObject({
-        limitationCode: "unavailable",
-        kills: [
-          {
-            encounterState: "unavailable",
-            encounterLimitationCode: "unavailable"
-          }
-        ]
-      });
-      // transientRetryMs is 900 000 in DEFAULT_HANDLER_OPTIONS.
-      expect(published.retryAfterAt).toEqual(
-        new Date("2026-09-28T12:15:00.000Z")
-      );
-      expect(evidence.transitions).toContainEqual({
-        id: "raiderio_logged_encounters",
-        state: "limited"
-      });
-    });
+        const published = evidence.published[0]!.result;
+        expect(published.state).toBe("partial");
+        expect(published.raiderIoFirstKills).toMatchObject({
+          limitationCode: code,
+          kills: [
+            {
+              encounterState: "unavailable",
+              encounterLimitationCode: code
+            }
+          ]
+        });
+        expect(published).not.toHaveProperty("retryAfterAt");
+        expect(evidence.transitions).toContainEqual({
+          id: "raiderio_logged_encounters",
+          state: "limited"
+        });
+      }
+    );
 
     it("drains a capped backlog on ordinary runs, never on a cap retry", async () => {
       // Break caught (#734 review): at rollout every long-time Mythic raider has

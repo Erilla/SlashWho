@@ -287,9 +287,20 @@ export async function collectRaiderIoFirstKills(
     }
   }
 
+  // Presence is established only where it was checked: a published read kill
+  // whose stored roster was already visible before this run. One accepted
+  // behind a hidden roster was never checked, so once a re-read opens the
+  // roster it is checked like any new read.
+  const visibleBefore = new Set(
+    stored.encounters.flatMap((encounter) =>
+      encounter.rosterState === "available" ? [encounter.loggedEncounterId] : []
+    )
+  );
   const established = new Set(
     input.published.flatMap((kill) =>
-      kill.encounterState === "read" && kill.loggedEncounterId !== null
+      kill.encounterState === "read" &&
+      kill.loggedEncounterId !== null &&
+      visibleBefore.has(kill.loggedEncounterId)
         ? [kill.loggedEncounterId]
         : []
     )

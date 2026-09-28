@@ -532,12 +532,59 @@ describe("collectRaiderIoFirstKills", () => {
     };
     const raiderio = gateway();
 
+    // A published read kill names a stored encounter; its roster was visible,
+    // so the presence check was made when it was first published.
     const result = await collect([midnightFalls], raiderio, {
-      published: [published]
+      published: [published],
+      storedEncounters: async () => ({
+        encounters: [storedRead()],
+        unavailable: []
+      })
     });
 
+    expect(raiderio.getLoggedEncounter).not.toHaveBeenCalled();
     expect(raiderio.getCharacter).not.toHaveBeenCalled();
     expect(result.kills).toHaveLength(1);
+  });
+
+  it("checks presence once a hidden roster it accepted a kill through opens", async () => {
+    // Break caught (#734 review): a kill published as read behind a hidden
+    // roster counted as established, so when the re-read showed a roster
+    // without the character the kill was kept anyway.
+    const published: CharacterRaiderIoFirstKillInput = {
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      killedAt: "2026-07-20T17:25:57.301Z",
+      guild: killGuild,
+      loggedEncounterId: 700_001,
+      encounterState: "read",
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: null
+    };
+    const raiderio = gateway({
+      getLoggedEncounter: vi.fn(async () =>
+        encounter("midnight-falls", { state: "available", members: [bravo] })
+      )
+    });
+
+    const result = await collect([midnightFalls], raiderio, {
+      published: [published],
+      storedEncounters: async () => ({
+        encounters: [
+          storedRead({
+            rosterState: "private",
+            members: [],
+            readAt: "2026-09-01T00:00:00.000Z"
+          })
+        ],
+        unavailable: []
+      })
+    });
+
+    expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(1);
+    expect(raiderio.getCharacter).toHaveBeenCalledTimes(1);
+    expect(result.kills).toEqual([]);
   });
 
   it("falls back to Raider.IO's own attribution when the roster is hidden", async () => {

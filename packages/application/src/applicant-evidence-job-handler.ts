@@ -2388,13 +2388,12 @@ export function createApplicantEvidenceJobHandler(
         // deliberately not given.
         const retryAfterMs = Math.max(
           retryDelayMs(response.limitation) ?? 0,
-          retryDelayMs(drivingParse) ?? 0,
-          // A capped Raider.IO backlog drains on ordinary runs, 50 at a time.
-          // A cap retry would be a whole evidence run, spending Warcraft Logs
-          // points to read Raider.IO (#732).
-          retryDelayMs(
-            raiderIoShortfall?.code === "request_cap" ? null : raiderIoShortfall
-          ) ?? 0
+          retryDelayMs(drivingParse) ?? 0
+          // A Raider.IO logged-encounter shortfall asks for no retry of its
+          // own, whatever its code (#732): a capped backlog, a rate limit and
+          // a failed read are all read again by the next ordinary run. A
+          // retry would be a whole evidence run, spending Warcraft Logs
+          // points to read Raider.IO. The run is still partial for it.
         );
         // Honest about the run, not just about its history scan: a run that
         // spent its whole parse budget did not finish, and reporting it
