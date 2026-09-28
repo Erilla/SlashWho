@@ -57,7 +57,12 @@ export function historicZoneIds(
         name,
         journalRaidId
       );
-      if (!members) return null;
+      // Another raid's zone was once skipped unread; its malformed encounter
+      // list must not now fail a walk it only possibly contributes to.
+      if (!members) {
+        if (named !== null) continue;
+        return null;
+      }
       if (members.length === 0) continue;
       filter = members;
     }

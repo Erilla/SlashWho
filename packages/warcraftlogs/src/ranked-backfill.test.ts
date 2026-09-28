@@ -1035,6 +1035,30 @@ describe("ranked Mythic backfill", () => {
       expect(asked.zones).toEqual([53]);
       expect(asked.encounters).toEqual([3379]);
     });
+
+    it("skips another raid's zone whose encounter list it cannot read", async () => {
+      // Break caught in review: reading a sibling zone's bosses meant a
+      // malformed list in any other raid's zone failed the whole walk, where
+      // that zone had always been skipped unread.
+      zones.push({
+        id: 60,
+        name: "Nerub-ar Palace",
+        partitions: [{ id: 1 }],
+        encounters: [{ id: 0, name: "" }]
+      });
+      try {
+        const { asked, client } = walk([3379]);
+
+        await client.getRankedKillReports(key, {
+          journalRaidId: "1317",
+          requestCap: 20
+        });
+
+        expect(asked.zones).toEqual([53]);
+      } finally {
+        zones.pop();
+      }
+    });
   });
 
   describe("limitation reporting", () => {
