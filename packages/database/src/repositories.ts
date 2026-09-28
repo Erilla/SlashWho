@@ -629,6 +629,12 @@ export interface CharacterRaiderIoFirstKillInput {
   historicWorldRank: number | null;
   /** When the rank was last looked up; set with a null rank too, so a checked kill is not asked about again. */
   historicRankCheckedAt: string | null;
+  /**
+   * Whether this kill passed the presence check against a visible roster.
+   * Absent reads as false, so an unchecked kill is checked again; never
+   * inferred from the roster's history.
+   */
+  presenceChecked?: boolean;
 }
 
 export interface StoredCharacterRaiderIoFirstKill extends CharacterRaiderIoFirstKillInput {
@@ -1297,9 +1303,24 @@ export interface EvidenceRepository {
    * Forgets every terminal mark for one character, so its history is collected
    * again over as many runs as the budget allows. Deletes no evidence: the
    * stored kills, wipes and tier bests stay readable until their replacements
-   * arrive. Returns the number of marks forgotten.
+   * arrive. Also clears the character's Raider.IO tier reads. Returns the
+   * number of marks forgotten.
    */
   clearTerminalTiers(key: CharacterKey): Promise<number>;
+  /** Settled Raider.IO tiers read at the current version since `since`. */
+  raiderIoTierReads?(
+    key: CharacterKey,
+    since: Date
+  ): Promise<readonly number[]>;
+  /**
+   * Marks settled tiers as read. Written only after a complete publish whose
+   * Raider.IO phase fell short of nothing. Never lowers a stored version.
+   */
+  markRaiderIoTierReads?(
+    key: CharacterKey,
+    ordinals: readonly number[],
+    at: Date
+  ): Promise<void>;
   /**
    * Records the stable Warcraft Logs character ID a key resolved to, replacing
    * any earlier answer: a released name can come to belong to somebody else.

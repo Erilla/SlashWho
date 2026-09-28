@@ -25,6 +25,7 @@ import { one, withTransaction } from "../sql";
 import {
   CURRENT_COLLECTION_VERSIONS,
   CURRENT_EVIDENCE_VERSION,
+  CURRENT_RAIDER_IO_TIER_READ_VERSION,
   isEvidenceFresh
 } from "./freshness";
 import {
@@ -1541,13 +1542,74 @@ export function createEvidenceRepositories(
       async clearTerminalTiers(key) {
         // Marks only. The stored kills, wipes and tier bests stay exactly where
         // they are: a rebuild must not leave a dossier empty while it waits for
-        // the replacement evidence to arrive.
-        const result = await pool.query(
-          `DELETE FROM character_terminal_tiers
-            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
-          [key.region, key.realm, key.name]
+        // the replacement evidence to arrive. Raider.IO tier reads go with the
+        // terminal marks, so a rebuild asks every settled tier again even if
+        // its first run is rate limited before the floor returns.
+        return withTransaction(pool, async (client) => {
+          const result = await client.query(
+            `DELETE FROM character_terminal_tiers
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+            [key.region, key.realm, key.name]
+          );
+          await client.query(
+            `DELETE FROM character_raiderio_tier_reads
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+            [key.region, key.realm, key.name]
+          );
+          return result.rowCount ?? 0;
+        });
+      },
+
+      async raiderIoTierReads(key, since) {
+        if (Number.isNaN(since.valueOf())) {
+          throw new RangeError("character_raiderio_tier_read_time_invalid");
+        }
+        const result = await pool.query<{ tier_ordinal: number }>(
+          `SELECT tier_ordinal
+             FROM character_raiderio_tier_reads
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+              AND collection_version >= $4 AND read_at >= $5
+            ORDER BY tier_ordinal`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            CURRENT_RAIDER_IO_TIER_READ_VERSION,
+            since
+          ]
         );
-        return result.rowCount ?? 0;
+        return result.rows.map((row) => row.tier_ordinal);
+      },
+
+      async markRaiderIoTierReads(key, ordinals, at) {
+        if (Number.isNaN(at.valueOf())) {
+          throw new RangeError("character_raiderio_tier_read_time_invalid");
+        }
+        if (ordinals.length === 0) return;
+        // GREATEST: a worker from an older release, mid-deploy, must not lower
+        // a mark a newer one wrote.
+        await pool.query(
+          `INSERT INTO character_raiderio_tier_reads
+             (region, realm_slug, normalized_name, tier_ordinal,
+              collection_version, read_at)
+           SELECT $1, $2, $3, ordinal, $5, $6
+             FROM unnest($4::integer[]) AS ordinal
+           ON CONFLICT (region, realm_slug, normalized_name, tier_ordinal)
+           DO UPDATE SET
+             collection_version = GREATEST(
+               character_raiderio_tier_reads.collection_version,
+               EXCLUDED.collection_version
+             ),
+             read_at = EXCLUDED.read_at`,
+          [
+            key.region,
+            key.realm,
+            key.name,
+            ordinals,
+            CURRENT_RAIDER_IO_TIER_READ_VERSION,
+            at
+          ]
+        );
       },
       async emptyAttendanceSearches(key, searchedSince) {
         if (Number.isNaN(searchedSince.valueOf())) {

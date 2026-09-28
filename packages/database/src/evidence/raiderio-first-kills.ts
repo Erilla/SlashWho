@@ -27,6 +27,7 @@ type FirstKillRow = {
   encounter_limitation_code: string | null;
   historic_world_rank: number | null;
   historic_rank_checked_at: Date | null;
+  presence_checked: boolean;
 };
 
 // A read row carries every kill column and an unavailable row only its code;
@@ -97,7 +98,8 @@ function mapFirstKill(row: FirstKillRow): CharacterRaiderIoFirstKillInput {
     encounterState: row.encounter_state,
     encounterLimitationCode: row.encounter_limitation_code,
     historicWorldRank: row.historic_world_rank,
-    historicRankCheckedAt: row.historic_rank_checked_at?.toISOString() ?? null
+    historicRankCheckedAt: row.historic_rank_checked_at?.toISOString() ?? null,
+    presenceChecked: row.presence_checked
   };
 }
 
@@ -109,7 +111,7 @@ async function loadRunRaiderIoFirstKills(
     `SELECT raid_slug, boss_slug, killed_at, guild_name, guild_realm,
             guild_region, logged_encounter_id, encounter_state,
             encounter_limitation_code, historic_world_rank,
-            historic_rank_checked_at
+            historic_rank_checked_at, presence_checked
        FROM character_raiderio_first_kills
       WHERE evidence_run_id = $1
       ORDER BY killed_at, raid_slug, boss_slug`,
@@ -510,7 +512,8 @@ export async function insertRaiderIoFirstKills(
         "historic_rank_checked_at",
         "timestamptz",
         (kill) => kill.historicRankCheckedAt
-      ]
+      ],
+      ["presence_checked", "boolean", (kill) => kill.presenceChecked === true]
     ],
     kills
   );
