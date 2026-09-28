@@ -70,3 +70,31 @@ function attendanceListsCharacter(
   }
   return unreadable ? null : false;
 }
+
+export type GuildReport = Readonly<{
+  code: string;
+  /** When the report started, or null when the listing does not say. */
+  startTime: number | null;
+}>;
+
+/** One page of a guild's report listing, or null when it cannot be read. */
+export function guildReportsPage(value: unknown): Readonly<{
+  reports: readonly GuildReport[];
+  hasMorePages: boolean;
+}> | null {
+  const listing = record(record(record(value)?.data)?.reportData)?.reports;
+  const data = record(listing)?.data;
+  const hasMorePages = record(listing)?.has_more_pages;
+  if (!Array.isArray(data) || typeof hasMorePages !== "boolean") return null;
+  const reports: GuildReport[] = [];
+  for (const value of data) {
+    const entry = record(value);
+    const code = nonEmptyString(entry?.code);
+    if (!code) return null;
+    reports.push({
+      code,
+      startTime: validTimestampMilliseconds(entry?.startTime)
+    });
+  }
+  return { reports, hasMorePages };
+}

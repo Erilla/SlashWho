@@ -56,9 +56,14 @@ export type WarcraftLogsQueryType =
    * lists for the character, as places to walk attendance for.
    */
   | "character_guilds"
-  /** `GuildAttendance`, one per attendance page searched for a verified kill. */
+  /** `GuildAttendance`, one per attendance page a tier search walks. */
   | "guild_attendance"
-  /** `ReportByCode`, one per attendance report hydrated. */
+  /**
+   * `GuildReports`, one per page of a guild's reports from the night of a
+   * verified kill no decoded report accounts for (#712).
+   */
+  | "guild_reports"
+  /** `ReportByCode`, one per report hydrated from a guild's reports or attendance. */
   | "report_hydration"
   /** `CharacterZoneParses`, one per raid zone read for tier bests. */
   | "zone_rankings"
@@ -187,7 +192,7 @@ export type WarcraftLogsWipeEvidence = Readonly<{
 export type WarcraftLogsVerifiedKill = Readonly<{
   /** When the kill happened, as an ISO string. */
   at: string;
-  /** The guild the kill was in, whose attendance is searched. */
+  /** The guild the kill was in, whose reports from that night are searched. */
   guild: Readonly<{
     name: string;
     realm: string;
@@ -362,8 +367,8 @@ export type WarcraftLogsReportResult =
       attendanceRecoveredKills?: number;
       /**
        * Verified kills whose night was searched to the end and held nothing:
-       * the guild's attendance was walked past it, or Warcraft Logs has no such
-       * guild, and no report read could have held it. A caller may stop
+       * the guild's reports from that night were all listed, or Warcraft Logs
+       * has no such guild, and no report read could have held it. A caller may stop
        * searching for these for a while. Absent when none qualified.
        */
       attendanceSearchedEmpty?: readonly WarcraftLogsVerifiedKill[];
@@ -537,9 +542,9 @@ export interface WarcraftLogsGateway {
       /**
        * Kills another provider attributes to the character, with the guild
        * they were in. They are where to look, never evidence: one that no
-       * decoded report covers is searched for in that guild's attendance, on
+       * decoded report covers is searched for in that guild's reports from
        * that night, and counts only if a hydrated report attributes it.
-       * Absent or empty, attendance is not read at all.
+       * Absent or empty, no guild is searched at all.
        */
       verifiedKills?: readonly WarcraftLogsVerifiedKill[];
       /**

@@ -181,7 +181,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-33).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-34).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
@@ -215,7 +215,8 @@ describe("database migrations", () => {
       { idx: 60, tag: "0061_discovery_guild_reads_dropped" },
       { idx: 61, tag: "0062_evidence_run_origin" },
       { idx: 62, tag: "0063_evidence_run_root" },
-      { idx: 63, tag: "0064_history_actor_requests" }
+      { idx: 63, tag: "0064_history_actor_requests" },
+      { idx: 64, tag: "0065_guild_report_requests" }
     ]);
   });
 

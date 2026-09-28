@@ -1904,12 +1904,12 @@ export function createEvidenceRepositories(
              blizzard_achievements_requests,
              duration_ms, queue_wait_ms, warcraft_logs_ms,
              warcraft_logs_historic_alias_ms, db_ms, db_max_call_name, origin,
-             history_actor_requests
+             history_actor_requests, guild_report_requests
            )
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
                    $23, $24, $25, $26, $27, $28, $29, $30, $31, $32,
-                   $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43)
+                   $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44)
            ON CONFLICT (run_id, attempt) DO UPDATE SET
              recorded_at = now(),
              outcome = EXCLUDED.outcome,
@@ -1954,7 +1954,8 @@ export function createEvidenceRepositories(
              db_ms = EXCLUDED.db_ms,
              db_max_call_name = EXCLUDED.db_max_call_name,
              origin = EXCLUDED.origin,
-             history_actor_requests = EXCLUDED.history_actor_requests`,
+             history_actor_requests = EXCLUDED.history_actor_requests,
+             guild_report_requests = EXCLUDED.guild_report_requests`,
           [
             cost.runId,
             cost.attempt,
@@ -1998,7 +1999,8 @@ export function createEvidenceRepositories(
             cost.timings?.dbMs ?? null,
             cost.timings?.dbMaxCallName ?? null,
             cost.origin ?? "unknown",
-            cost.requests.historyActors ?? 0
+            cost.requests.historyActors ?? 0,
+            cost.requests.guildReports ?? 0
           ]
         );
       },
