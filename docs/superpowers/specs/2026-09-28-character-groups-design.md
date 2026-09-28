@@ -263,12 +263,26 @@ to an existing table in any phase.
 
 - it never lowers `observed_at`;
 - it never retracts a row observed after its own run started;
-- it writes nothing at all for an observer that already has a row from a run
-  started after this one. The newer run's write stands.
+- it writes nothing for a source family whose newest recorded write, for this
+  observer, came from a run started after this one. The newer run's write
+  stands.
 
-A continuation cycle that commits late therefore cannot re-add rows with an
-older time over a newer run's, and its seal cannot retract what a newer run
-saw.
+**How writes are recorded.** `character_connection_writes` holds one row per
+observer and source family: `observer_character_id`, `family` (`raiderio` or
+`fingerprint`), `run_id` and `run_started_at`.
+
+- **When it's written.** Every write step 3 makes upserts it for each family
+  the run actually discovered, even when the write left no connection rows. A
+  newer run that retracted everything therefore still blocks an older, delayed
+  write.
+- **Continuation cycles.** They write the fingerprint family under their
+  chain's cycle-1 run. They are compared with the newest fingerprint write, so
+  they are blocked only by a newer sweep chain, never by a Raider.IO-only run.
+- **Runs that didn't sweep.** A `not_due` publication or a live-sweep
+  completion discovers only the Raider.IO family, so it records and blocks
+  only that family. It never blocks a chain's later cycles or its seal.
+
+The table is new, so P2 is unaffected.
 
 - **Phase 1:** the snapshot commits as today. Steps 3 and 4 then run in a
   separate, best-effort transaction.
@@ -326,9 +340,10 @@ discovered, as dossiers do today. Nothing discovers a member automatically.
 The worker starts maintaining the new tables in best-effort transactions. No
 page, route, response or publication outcome changes.
 
-**Migration `0067`** (after #734's `0066`; recheck `origin/main` before
-merging, and renumber the file, journal index, `when` and migrations test if
-another migration took the number):
+**Migration `0067`** (after #734's `0066`. The parallel spec on
+`fix/raiderio-logged-kills-back-catalogue` also plans `0067`. Whichever lands
+second renumbers the SQL file, the journal index, a strictly greater `when`,
+and the migrations test's slice):
 
 1. **Create** the three tables.
 2. **Backfill Raider.IO links** from each root's latest completed snapshot.
@@ -546,7 +561,15 @@ both tests under the lock before reserving. Every holder of the groups lock is
 bounded:
 
 - a publication holds it for its database writes only;
-- a stale `reserve` holds it for two indexed reads and one insert;
+- a stale `reserve` holds it for:
+  - walking `pageMembers(O)`, bounded by `DOSSIER_CHARACTER_CEILING`;
+  - `isFresh` and the active-run test per member;
+  - one `FOR UPDATE` on a member's run;
+  - the rate count;
+  - at most two inserts.
+
+  That is tens of milliseconds, with no provider call.
+
 - each maintenance recompute, phase 1's and phase 3's expiry pass alike, holds
   it for at most 30 seconds and then resumes from a saved position.
 
@@ -574,18 +597,36 @@ bounded:
   search may add to it.
   - **A landing-page search** keeps today's rule, which records a `job` or
     `character` result, and now also records `group_ready`.
-  - **A page's automatic start** sends `origin: "page"` in its `POST` body, and
+  - **The `groupStale` start** sends `origin: "page"` in its `POST` body, and
     `dossiers.start` never records it. Merely viewing a sibling's page
     therefore never adds that character to the landing list.
-- **A stale member that Raider.IO no longer knows.** For a key that is in a
-  group, `search.create` first checks the negative cache and runs `reserve`,
-  and only then reads the root character from Raider.IO. If that read fails,
-  the reservation is cancelled.
-  - A negative-cache hit answers `not_found` with no Raider.IO read.
-  - A refused `reserve`, such as `rate_limited`, answers with no Raider.IO read.
+  - **The root-only automatic start** is recorded, as today. Only the
+    `groupStale` start is new, and only it carries `origin`.
+  - **The request contract.** `createDossierRequestSchema` is `.strict()`, so
+    phase 2 adds `origin` to it as an optional field.
+- **Order of checks in `search.create`.** Today's order is kept: Raider.IO is
+  read before `reserve`, so no reservation ever has to be cancelled. The
+  checks run in this order:
+  1. **The fresh short cut:** `isFresh(pageMembers(O))`. A fresh group answers
+     `group_ready` or `character` here, before the negative cache, so a
+     negatively cached member of a fresh group still opens from a landing
+     search.
+  2. **The negative cache.** It is checked for every key, not only one with no
+     snapshot, as today. A hit answers `not_found` with no Raider.IO read.
+  3. **A read-only rate-limit check.** It tests whether `reserve` would refuse
+     the caller's bucket, without charging it. A refusal answers
+     `rate_limited` with no Raider.IO read.
+  4. **The Raider.IO root read**, as today. A 404 writes the negative cache, as
+     today.
+  5. **`reserve`**, which charges, and returns `reserved`, `active` or `fresh`.
+     On `active` or `fresh` the Raider.IO result is simply unused, because
+     `jobResult` needs no root character.
 
-  A renamed member, or a low-level alt the sweep found, therefore costs one
-  Raider.IO read per `NEGATIVE_CACHE_TTL_MS`, not one per page load.
+  Nothing is cancelled that this call did not insert, so another visitor's
+  run is never failed or refunded. The gap between reserving and enqueueing
+  stays as short as it is today. A renamed member, or a low-level alt the sweep
+  found, costs one Raider.IO read per `NEGATIVE_CACHE_TTL_MS`, not one per page
+  load.
 
 - **The URL returned is always O's**, even when the run joined belongs to
   another member. Today `search-service.ts` returns the run's own character
@@ -646,13 +687,22 @@ bounded:
   - `groupStale` on the dossier. It is true only when all of these hold:
     - `isFresh(pageMembers(O))` is false;
     - no page member has an active discovery run;
-    - O is not in the negative cache.
+    - O is not in the negative cache;
+    - no page member has a discovery run that failed within the back-off
+      window.
 
-    It is absent or false otherwise. A page already following a run therefore
-    never starts another, and a member Raider.IO no longer knows doesn't keep
-    asking. Because `isFresh` counts a run that completed against a live
-    sweep's snapshot, a character whose own sweep chain is live or abandoned
-    becomes fresh as soon as one start completes. It never loops.
+    It is absent or false otherwise.
+    - **The back-off window.** `FRESHNESS_HOURS` after the member's most recent
+      failed run. It doubles with each consecutive failed run, up to
+      `FINGERPRINT_SWEEP_CADENCE_HOURS`. A cancelled reservation ends
+      `failed`, so it counts too. Explicit searches ignore the back-off.
+    - **Why a start never loops.** A page already following a run never starts
+      another, and a member Raider.IO no longer knows doesn't keep asking.
+      `isFresh` counts a run that completed against a live sweep's snapshot, so
+      a character whose own sweep chain is live or abandoned becomes fresh as
+      soon as one start completes. A member whose runs keep failing, whether
+      from schema drift, the job lifetime or an upstream outage, costs one
+      start per back-off window, not one per load.
 - **Research state.** The contract stays one `{state, message}`.
   - **Where it comes from:** the latest completed snapshots of the page's
     members, the characters actually shown, not of the whole group.
@@ -700,8 +750,11 @@ bounded:
 
   It runs these tests without the groups lock first, and returns at once when
   the check isn't due. It fires on every dossier read, polls included, so the
-  common case must cost no lock. When due, it reserves through `reserve`, which
-  repeats the tests under the groups lock.
+  common case must cost no lock. When due, it reserves through `reserve`,
+  passing the due tests (cadence and resumable cursor) as `sweepDue`, and
+  `reserve` repeats them and the active-run test under the groups lock. A
+  sweep that publishes between the unlocked test and the lock therefore stops
+  the reservation.
   - **Freshness doesn't hold it off.** It passes `ignoreFreshness`, because
     the weekly check is not a search and must not wait up to
     `FRESHNESS_HOURS` behind a fresh group.
@@ -714,9 +767,18 @@ bounded:
 
 ### Reviewer edits
 
-Every edit resolves rows across the page's members, not just the rows made on
-the page being viewed. "A member of O's group" in the table means a page
-member: a suppressed member's rows are neither read nor written from O's page.
+Every edit resolves rows across the group, not just the rows made on the page
+being viewed. The scope differs by direction:
+
+- **Reads** ("is T excluded?", `hasManualConnection`) use page members only.
+  A suppressed member's rows neither grey nor flag anything on O's page.
+- **Writes that clear** (Include, Remove) act across the whole stored group,
+  suppressed members included. Otherwise a suppressed member's row would
+  survive, keep T in the stored group, and grey or bring back T once the
+  suppression lifts. Deleting or clearing such a row reveals nothing about
+  the suppressed character.
+- **Writes that add** (Exclude, a manual connection) write from O only.
+
 The two exclusion stores are kept apart:
 
 | Edit                           | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -726,7 +788,7 @@ The two exclusion stores are kept apart:
 | Include T                      | Clear `excluded` on every manual row in the group targeting T, and delete every `dossier_character_exclusions` row in the group naming T. It never deletes a manual row.                                                                                                                                                                                                                                                                                                                                                                |
 | Remove the manual connection T | Delete every manual row from a member of the group targeting T, then recompute under the groups lock in the same transaction. The dialog says "Remove the manual connection to T". If a provider path still reaches T, it adds that T stays in the dossier through that link.                                                                                                                                                                                                                                                           |
 | Add a manual connection to T   | First check rejections, group against group. If the group T would bring in and O's group contain any rejected pair, the add returns `rejected` before anything is queued or spent, and the page says to undo that rejection first. Otherwise, as today, call `search.create` for T. Only a `job`, `character` or `group_ready` result links anything, so a rate-limited, suppressed or invalid target links nothing. Then, in a new transaction, write the row from O and recompute under the groups lock. T appears at once, as today. |
-| Exclude O                      | O is never shown excluded on its own page, even if a row made from another page names it. A row whose maker is the character it names is ignored everywhere. Phase 2 hides Exclude on the opened character's row, which today offers it, and guards the write.                                                                                                                                                                                                                                                                          |
+| Exclude O                      | O is never shown excluded on its own page, even if a row made from another page names it. A self-exclusion, meaning a row naming any key in its maker's shared Warcraft Logs identity set, is ignored everywhere. Phase 2 hides Exclude on the opened character's row, which today offers it, and guards the write.                                                                                                                                                                                                                     |
 
 - **What `search.create` for T does.** It discovers T if T's own group is stale
   or T is unknown, as today. If T is already in a fresh group, that group's
@@ -874,8 +936,12 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
 
 - **Unit:**
   - `countingLinks`, including rejected pairs;
-  - recompute: merges, splits on retraction, id survival, and freshness
-    rewritten when no link changed;
+  - recompute: merges, splits on retraction and id survival;
+  - `isFresh` over run completion, including a live-sweep completion, a failed
+    run and a partial snapshot;
+  - `character_connection_writes`: a live-sweep completion in the middle of a
+    chain, then a later cycle and the seal, still write the fingerprint family;
+    a newer run that left no rows still blocks an older delayed write;
   - retraction by family: `not_due`, capped, `matched`, an empty `matched`
     after a 404, a sealed chain, privacy-hidden, and a continuation never
     touching Raider.IO links;
@@ -908,6 +974,10 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
 - **Integration:**
   - reservation, where concurrent searches for several members reserve one
     run;
+  - a search for a member Raider.IO answers 404, while another visitor's run
+    for the group is queued, leaves that run queued and charged;
+  - a rate-limited search makes no Raider.IO read;
+  - a `POST` carrying `origin` parses, and one without it still does;
   - search and the applicant watcher agree, including the re-enqueue key;
   - the `fresh` result for a member with no snapshot of its own;
   - `readInitial` joining a sibling's run;
@@ -922,6 +992,10 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
     today's root label;
   - a stale page whose start is rate-limited, or whose joined run fails, keeps
     showing its dossier with no research error;
+  - a stale page whose member's last run failed sends no start within the
+    back-off window, and a landing search for it still reserves;
+  - Remove and Include from O's page clear a suppressed member's row too, so
+    T neither returns nor greys when the suppression lifts;
   - a stale page whose O owns a live sweep chain, and one whose O owns an
     abandoned chain, each send one start and then none on later loads;
   - a stale page for a member Raider.IO answers 404 sends one start, costs one
