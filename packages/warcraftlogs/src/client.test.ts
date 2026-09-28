@@ -4170,6 +4170,98 @@ describe("Warcraft Logs gateway", () => {
       expect(result).not.toHaveProperty("attendanceRecoveredKills");
     });
 
+    describe("a report naming the character only as they were before a rename (#733)", () => {
+      // The report's actor carries the name of the night; its ranking ties
+      // that name to the character's canonical id, which survives a rename.
+      const characterId = 4_242;
+      const renamed = async (code: string, canonicalID = characterId) => {
+        const value = (await hydratedKill(code).json()) as {
+          data: { reportData: { report: Record<string, unknown> } };
+        };
+        const report = value.data.reportData.report;
+        report.masterData = {
+          actors: [
+            { id: 12, name: "Formername", server: "Silvermoon", type: "Player" }
+          ]
+        };
+        report.rankedCharacters = [
+          { canonicalID, name: "Formername", server: { slug: "silvermoon" } }
+        ];
+        return jsonResponse(value);
+      };
+      const collect = async (
+        options: Readonly<{
+          canonicalID?: number;
+          characterId?: number;
+          reread?: boolean;
+        }>
+      ) => {
+        const { client } = clientFor(async (url, init) => {
+          if (url.pathname === "/oauth/token") return token();
+          const body = JSON.parse(String(init?.body)) as {
+            query: string;
+            variables: { code?: string };
+          };
+          if (body.query.includes("RecentReports")) return history();
+          if (body.query.includes("GuildReports")) {
+            return guildReports([
+              { code: "killNight", startTime: night - hours(1) }
+            ]);
+          }
+          if (body.query.includes("ReportByCode")) {
+            return renamed(body.variables.code!, options.canonicalID);
+          }
+          return emptyZoneRankingsResponse();
+        });
+        return client.getFirstKillReports(key, {
+          requestCap: 10,
+          parseRequestCap: 1,
+          ...(options.characterId !== undefined
+            ? { characterId: options.characterId }
+            : {}),
+          ...(options.reread
+            ? { storedKillReportCodes: ["storedRecovery"] }
+            : { verifiedKills: verified })
+        });
+      };
+      const fightUrls = (result: unknown) =>
+        (result as { kills: readonly { fightUrl: string }[] }).kills.map(
+          (kill) => kill.fightUrl
+        );
+
+      it("keeps a stored kill its re-read names under the former name", async () => {
+        // Break caught: decoded under the current name alone, the re-read
+        // found nothing, which a complete publish reads as a kill the run
+        // stopped finding -- and drops.
+        const result = await collect({ characterId, reread: true });
+
+        expect(fightUrls(result)).toEqual([
+          "https://www.warcraftlogs.com/reports/storedRecovery#fight=8"
+        ]);
+      });
+
+      it("recovers a night's kill named under the former name", async () => {
+        const result = await collect({ characterId });
+
+        expect(result).toMatchObject({ attendanceRecoveredKills: 1 });
+        expect(fightUrls(result)).toEqual([
+          "https://www.warcraftlogs.com/reports/killNight#fight=8"
+        ]);
+      });
+
+      it("credits nobody whose ranking is another character's", async () => {
+        // The name is only trusted as the character's when the ranking ties
+        // it to their canonical id: a namesake on the realm is not them.
+        for (const options of [
+          { characterId, canonicalID: characterId + 1 },
+          { canonicalID: characterId }
+        ]) {
+          const result = await collect(options);
+          expect(fightUrls(result)).toEqual([]);
+        }
+      });
+    });
+
     it("limits the scan when a stored recovery cannot be re-read", async () => {
       // A complete publish would drop the stored kill this run failed to read
       // again. A partial one carries every stored kill forward.

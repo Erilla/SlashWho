@@ -340,6 +340,8 @@ that did not name the character. So every report on the night is hydrated,
 at about 2 points each, where attendance could rule some out. A night rarely
 holds more than three.
 
+A hydrated report is decoded under the character's current name. If that credits nothing, it is decoded again under the name the report's `rankedCharacters` gives for the character's Warcraft Logs id, when that name differs (#733). A renamed character's nights from before the rename name them only as they were then. This applies to recovery and to stored-kill re-reads alike: a re-read that decoded to nothing would read as a kill the run stopped finding, and a complete publish would drop it. `rankedCharacters` costs nothing once `fights` is loaded (2.1 points with and without it, measured 2026-09-28). A report that ranks nobody by that id, such as one with only unranked fights, cannot be matched this way.
+
 A search never limits the run: a guild Warcraft Logs does not know, a page it
 will not serve, or a spent budget recovers nothing and leaves the run's status
 to its history scan. A re-read that fails for any reason other than the report
