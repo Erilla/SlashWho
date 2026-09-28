@@ -720,11 +720,15 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
       [22],
       new Date("2026-09-02T00:00:00.000Z")
     );
-    const row = await pool.query<{ collection_version: number }>(
-      `SELECT collection_version FROM character_raiderio_tier_reads
+    const row = await pool.query<{ collection_version: number; read_at: Date }>(
+      `SELECT collection_version, read_at FROM character_raiderio_tier_reads
         WHERE tier_ordinal = 22`
     );
     expect(row.rows[0]!.collection_version).toBe(99);
+    // An older worker's mark must not refresh read_at either: a version-99
+    // row's read_at stays at its own, later mark, not the one this
+    // older-release write just made.
+    expect(row.rows[0]!.read_at.toISOString()).toBe("2026-06-01T00:00:00.000Z");
 
     // A mark below the current version is not read back.
     await pool.query(

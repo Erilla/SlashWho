@@ -1600,7 +1600,12 @@ export function createEvidenceRepositories(
                character_raiderio_tier_reads.collection_version,
                EXCLUDED.collection_version
              ),
-             read_at = EXCLUDED.read_at`,
+             read_at = CASE
+               WHEN EXCLUDED.collection_version >=
+                 character_raiderio_tier_reads.collection_version
+               THEN EXCLUDED.read_at
+               ELSE character_raiderio_tier_reads.read_at
+             END`,
           [
             key.region,
             key.realm,
