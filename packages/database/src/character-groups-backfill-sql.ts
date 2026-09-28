@@ -12,8 +12,15 @@
  * - `markerAndLedger` writes reason `'rebuild'` instead of `'backfill'`;
  * - `groups` adds `ON CONFLICT DO NOTHING` on the groups insert and
  *   `ON CONFLICT (character_id) DO UPDATE SET group_id = EXCLUDED.group_id`
- *   on the members insert, so a rebuild composes safely with whatever the
- *   groups table already holds.
+ *   on the members insert (both currently inert: `rebuild()` always deletes
+ *   `character_groups`/`character_group_members` first, so neither clause
+ *   ever actually has anything to conflict with; on a real conflict,
+ *   `ON CONFLICT DO NOTHING` on the groups insert would silently drop that
+ *   group from `inserted`, and the final `JOIN inserted` would then drop its
+ *   members too), plus a `NOT EXISTS` filter over its observed edges that
+ *   excludes any pair with a `kind = 'rejected'` row, matching
+ *   `COUNTING_LINKS_FROM`. The migration's own `groups` statement is left as
+ *   it is: no rejection can exist before phase 3.
  */
 export const REBUILD_SQL = {
   pinLatest: `
@@ -101,9 +108,21 @@ SELECT discovery_run_id, reservation_id, root_character_id, family, 'replaced', 
   groups: `
 -- Groups: components over the backfilled links and every resolved manual
 -- connection, excluded or not. Every character gets a group; a group's id is
--- its lowest member's id, which is stable and needs no mapping table.
+-- its lowest member's id, which is stable and needs no mapping table. Unlike
+-- the migration's own groups statement, a pair with a \`kind = 'rejected'\`
+-- row is excluded here, matching \`COUNTING_LINKS_FROM\`: the rebuild can run
+-- after phase 3 exists, so it must honour rejections the migration's
+-- one-time backfill never had to.
 WITH RECURSIVE edges AS (
-  SELECT character_low_id AS a, character_high_id AS b FROM character_connections WHERE kind = 'observed'
+  SELECT connection.character_low_id AS a, connection.character_high_id AS b
+  FROM character_connections connection
+  WHERE connection.kind = 'observed'
+    AND NOT EXISTS (
+      SELECT 1 FROM character_connections rejection
+      WHERE rejection.kind = 'rejected'
+        AND rejection.character_low_id = connection.character_low_id
+        AND rejection.character_high_id = connection.character_high_id
+    )
   UNION
   SELECT manual.root_character_id, target.id
   FROM manual_dossier_connections manual

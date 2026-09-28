@@ -11,6 +11,7 @@ import {
 import type { TestRepositories } from "./test-repositories";
 
 const thirdKey = { region: "eu", realm: "draenor", name: "third" } as const;
+const eKey = { region: "eu", realm: "draenor", name: "eve" } as const;
 
 describe("character connections: observation writes", () => {
   let pool: Pool;
@@ -588,7 +589,7 @@ describe("character connections: observation writes", () => {
   }
 
   describe("group recompute, maintenance pass and rebuild", () => {
-    it("merges into one group after a write, then splits when a link is retracted", async () => {
+    it("merges into one group after a write, then splits when a link is retracted, the surviving part keeping the id", async () => {
       const first = await publishedRun();
       const written = await connections().writeObservations({
         runId: first,
@@ -607,8 +608,18 @@ describe("character connections: observation writes", () => {
         ]
       });
       await connections().recomputeGroupsOf(written.changedCharacterIds);
-      expect(await groupOf(altKey)).toBe(await groupOf(rootKey));
-      expect(await groupOf(thirdKey)).toBe(await groupOf(rootKey));
+      const mergedGroupId = await groupOf(rootKey);
+      expect(mergedGroupId).toBeDefined();
+      expect(await groupOf(altKey)).toBe(mergedGroupId);
+      expect(await groupOf(thirdKey)).toBe(mergedGroupId);
+
+      // Backdate every group so the next recompute's stamp is provably new,
+      // not just the row's own DEFAULT now() from creation.
+      await pool.query(
+        `UPDATE character_groups SET recomputed_at = now() - interval '1 hour'`
+      );
+      const before = (await pool.query<{ now: Date }>(`SELECT now() AS now`))
+        .rows[0]!.now;
 
       const second = await publishedRun([
         observation(rootKey, "Ryii"),
@@ -628,11 +639,103 @@ describe("character connections: observation writes", () => {
         ]
       });
       await connections().recomputeGroupsOf(retracted.changedCharacterIds);
-      expect(await groupOf(thirdKey)).not.toBe(await groupOf(rootKey));
-      const stamps = await pool.query<{ fresh: boolean }>(
-        `SELECT recomputed_at >= now() - interval '1 minute' AS fresh FROM character_groups`
+
+      // The bigger surviving part (root + alt) keeps the merged group's id;
+      // a regression that hands it to the smaller part, or mints a new id
+      // for everyone, must fail this.
+      expect(await groupOf(rootKey)).toBe(mergedGroupId);
+      expect(await groupOf(altKey)).toBe(mergedGroupId);
+      const thirdGroupId = await groupOf(thirdKey);
+      expect(thirdGroupId).toBeDefined();
+      expect(thirdGroupId).not.toBe(mergedGroupId);
+
+      const stamps = await pool.query<{ recomputed_at: Date }>(
+        `SELECT recomputed_at FROM character_groups`
       );
-      expect(stamps.rows.every((row) => row.fresh)).toBe(true);
+      expect(stamps.rows.length).toBeGreaterThan(0);
+      expect(stamps.rows.every((row) => row.recomputed_at >= before)).toBe(
+        true
+      );
+    });
+
+    it("closes recompute across a link whose own recompute never ran, not just across the seed's BFS", async () => {
+      // Break caught: recomputeComponent stopped once it had pulled in an old
+      // group's other members, without continuing the walk from them. A
+      // character split off into its own group could still hold a committed
+      // link to some other character (whose own recompute had not yet run,
+      // or crashed) and that link was silently dropped, stamping a group
+      // that was not actually a closed component.
+      const first = await publishedRun();
+      const written = await connections().writeObservations({
+        runId: first,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: [
+              { key: altKey, source: "claimed" },
+              { key: thirdKey, source: "claimed" }
+            ]
+          }
+        ]
+      });
+      await connections().recomputeGroupsOf(written.changedCharacterIds);
+      // root, alt and third (the eventual splitting-off character) are one
+      // group.
+
+      await publishedRunFor(eKey, [observation(eKey, "Eve")]);
+      const eId = await characterId(eKey);
+      await connections().recomputeGroupsOf([eId]);
+      // eve is her own separate group.
+
+      // A committed third-eve link whose own recompute never ran: inserted
+      // directly, bypassing writeObservations/recomputeGroupsOf entirely.
+      // No FK ties `discovery_run_id` to a real run, but `first` is a real,
+      // already-published one anyway.
+      const thirdId = await characterId(thirdKey);
+      await pool.query(
+        `INSERT INTO character_connections
+           (character_low_id, character_high_id, kind, source, observed_from_character_id, discovery_run_id, observed_at)
+         VALUES (LEAST($1::uuid, $2::uuid), GREATEST($1::uuid, $2::uuid), 'observed', 'claimed', $1, $3, now())`,
+        [thirdId, eId, first]
+      );
+
+      const second = await publishedRun([
+        observation(rootKey, "Ryii"),
+        observation(altKey, "Alt", "claimed")
+      ]);
+      await connections().writeObservations({
+        runId: second,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          }
+        ]
+      });
+      // Seeded from root alone (not from third or a full changedCharacterIds
+      // list, whose order across two ids is an unpinned UUID sort): root's
+      // own BFS never touches the third-eve link directly, so this only
+      // reaches eve at all if pulling in root's old group's other members
+      // (third) also continues the walk from them.
+      const rootId = await characterId(rootKey);
+      await connections().recomputeGroupsOf([rootId]);
+
+      expect(await groupOf(thirdKey)).toBe(await groupOf(eKey));
+      expect(await groupOf(thirdKey)).not.toBe(await groupOf(rootKey));
+      const thirdGroupId = await groupOf(thirdKey);
+      const merged = await pool.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM character_group_members WHERE group_id = $1`,
+        [thirdGroupId]
+      );
+      expect(Number(merged.rows[0]!.n)).toBe(2);
     });
 
     it("counts a manual connection as a link, excluded or not", async () => {
@@ -656,6 +759,24 @@ describe("character connections: observation writes", () => {
         completed: true,
         ordered: true
       });
+
+      // Prove the pass actually re-stamps every group it *walks*, not merely
+      // ones it happens to create: backdate, then run a fresh full cycle.
+      await pool.query(
+        `UPDATE character_groups SET recomputed_at = now() - interval '1 hour'`
+      );
+      const before = (await pool.query<{ now: Date }>(`SELECT now() AS now`))
+        .rows[0]!.now;
+      const second = await connections().recomputePass({ budgetMs: 30_000 });
+      expect(second.cycleCompleted).toBe(true);
+      const stamps = await pool.query<{ recomputed_at: Date }>(
+        `SELECT recomputed_at FROM character_groups`
+      );
+      expect(stamps.rows.length).toBeGreaterThan(0);
+      expect(stamps.rows.every((row) => row.recomputed_at >= before)).toBe(
+        true
+      );
+
       const partial = await connections().recomputePass({ budgetMs: 0 });
       expect(partial.cycleCompleted).toBe(false);
     });
@@ -690,6 +811,11 @@ describe("character connections: observation writes", () => {
         hold.release();
       }
       const rebuilt = await connections().rebuild();
+      // Exact counts for this fixture: root's snapshot has two `claimed`
+      // members (alt, third) and no fingerprint sweep, so exactly two
+      // observed links from exactly one observer.
+      expect(rebuilt.observers).toBe(1);
+      expect(rebuilt.links).toBe(2);
       expect(rebuilt.groups).toBeGreaterThan(0);
       const ledger = await pool.query(
         `SELECT DISTINCT reason, decision FROM character_connection_write_log`
@@ -698,6 +824,75 @@ describe("character connections: observation writes", () => {
         reason: "rebuild",
         decision: "replaced"
       });
+    });
+
+    it("takes the rebuild lock exclusively, blocking until a shared holder releases it", async () => {
+      await publishedRun();
+      const hold = await pool.connect();
+      try {
+        await hold.query("BEGIN");
+        await hold.query(
+          "SELECT pg_advisory_xact_lock_shared(hashtextextended('character-groups-rebuild', 0))"
+        );
+        const rebuildPromise = connections().rebuild();
+        const TIMED_OUT = Symbol("timed_out");
+        const raced = await Promise.race([
+          rebuildPromise,
+          new Promise((resolve) => setTimeout(() => resolve(TIMED_OUT), 300))
+        ]);
+        expect(raced).toBe(TIMED_OUT);
+        await hold.query("ROLLBACK");
+        const rebuilt = await rebuildPromise;
+        expect(rebuilt.groups).toBeGreaterThan(0);
+      } finally {
+        hold.release();
+      }
+    });
+
+    it("preserves rejections and earlier ledger rows, excluding a rejected pair from its groups", async () => {
+      const runId = await publishedRun();
+      const rootId = await characterId(rootKey);
+      const altId = await characterId(altKey);
+
+      // A pre-existing rejection between root and alt: the rebuild's groups
+      // statement must never treat this pair as linked, even though its
+      // raw Raider.IO observation is re-derived fresh from the snapshot.
+      await pool.query(
+        `INSERT INTO character_connections
+           (character_low_id, character_high_id, kind, rejection_id, rejected_from_character_id, observed_at)
+         VALUES (LEAST($1::uuid, $2::uuid), GREATEST($1::uuid, $2::uuid), 'rejected', gen_random_uuid(), $1, now())`,
+        [rootId, altId]
+      );
+
+      // An earlier, unrelated ledger row the rebuild must not disturb.
+      await pool.query(
+        `INSERT INTO character_connection_write_log
+           (run_id, sweep_reservation_id, observer_character_id, family, decision, reason, run_started_at)
+         VALUES ($1, NULL, $2, 'raiderio', 'added_only', 'capped', now() - interval '2 hours')`,
+        [runId, rootId]
+      );
+
+      const rebuilt = await connections().rebuild();
+      expect(rebuilt.observers).toBe(1);
+      expect(rebuilt.links).toBe(2);
+      expect(rebuilt.groups).toBe(2);
+
+      const rejection = await pool.query(
+        `SELECT 1 FROM character_connections
+         WHERE kind = 'rejected'
+           AND character_low_id = LEAST($1::uuid, $2::uuid)
+           AND character_high_id = GREATEST($1::uuid, $2::uuid)`,
+        [rootId, altId]
+      );
+      expect(rejection.rowCount).toBe(1);
+
+      const earlierLedger = await pool.query(
+        `SELECT 1 FROM character_connection_write_log WHERE decision = 'added_only' AND reason = 'capped'`
+      );
+      expect(earlierLedger.rowCount).toBe(1);
+
+      expect(await groupOf(altKey)).not.toBe(await groupOf(rootKey));
+      expect(await groupOf(thirdKey)).toBe(await groupOf(rootKey));
     });
   });
 

@@ -251,8 +251,47 @@ export function createCharacterConnectionRepositories(
 
     async recomputePass({ budgetMs }) {
       const startedAt = Date.now();
+      const withinBudget = () => Date.now() - startedAt < budgetMs;
       let groupsRecomputed = 0;
+      let ungroupedAssigned = 0;
+
+      /**
+       * Assigns one ungrouped character to a group, in its own short
+       * transaction. Returns false once none remain.
+       */
+      const assignNextUngrouped = (): Promise<boolean> =>
+        withTransaction(pool, async (client) => {
+          await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+          await lockRebuildShared(client);
+          await lockGroups(client);
+          await client.query(
+            `UPDATE character_groups_maintenance
+             SET cycle_started_at = COALESCE(cycle_started_at, now())
+             WHERE id = 1`
+          );
+          const ungrouped = await client.query<{ id: string }>(
+            `SELECT c.id FROM characters c LEFT JOIN character_group_members m ON m.character_id = c.id
+             WHERE m.character_id IS NULL ORDER BY c.id LIMIT 1`
+          );
+          if (!ungrouped.rows[0]) return false;
+          await recomputeComponent(client, ungrouped.rows[0].id);
+          return true;
+        });
+
+      // Ungrouped characters, handled once up front in their own short
+      // transactions rather than re-scanned for on every group step below.
+      while (withinBudget()) {
+        if (!(await assignNextUngrouped())) break;
+        ungroupedAssigned += 1;
+      }
+      if (!withinBudget()) {
+        return { groupsRecomputed, ungroupedAssigned, cycleCompleted: false };
+      }
+
       for (;;) {
+        if (!withinBudget()) {
+          return { groupsRecomputed, ungroupedAssigned, cycleCompleted: false };
+        }
         const step = await withTransaction(pool, async (client) => {
           await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
           await lockRebuildShared(client);
@@ -263,41 +302,71 @@ export function createCharacterConnectionRepositories(
              WHERE id = 1 RETURNING cursor_group_id`
           );
           const cursor = state.rows[0]?.cursor_group_id ?? null;
-          // Ungrouped characters first (new since the last pass), then groups in id order.
-          const ungrouped = await client.query<{ id: string }>(
-            `SELECT c.id FROM characters c LEFT JOIN character_group_members m ON m.character_id = c.id
-             WHERE m.character_id IS NULL ORDER BY c.id LIMIT 1`
-          );
-          if (ungrouped.rows[0]) {
-            await recomputeComponent(client, ungrouped.rows[0].id);
-            return { done: false };
-          }
-          const next = await client.query<{ id: string; seed: string }>(
+          const next = await client.query<{
+            id: string;
+            seed: string | null;
+          }>(
             `SELECT g.id, (SELECT character_id FROM character_group_members WHERE group_id = g.id ORDER BY character_id LIMIT 1) AS seed
              FROM character_groups g WHERE $1::uuid IS NULL OR g.id > $1::uuid ORDER BY g.id LIMIT 1`,
             [cursor]
           );
           const group = next.rows[0];
-          if (!group) {
+          if (!group) return { kind: "no_next_group" as const };
+          if (!group.seed) {
+            // An empty group has nothing to recompute: drop it and move on,
+            // rather than leaving it to be skipped forever.
+            await client.query(`DELETE FROM character_groups WHERE id = $1`, [
+              group.id
+            ]);
             await client.query(
-              `UPDATE character_groups_maintenance
-               SET last_cycle_started_at = cycle_started_at, last_cycle_completed_at = now(),
-                   cycle_started_at = NULL, cursor_group_id = NULL
-               WHERE id = 1`
+              `UPDATE character_groups_maintenance SET cursor_group_id = $1 WHERE id = 1`,
+              [group.id]
             );
-            return { done: true };
+            return { kind: "empty_group_deleted" as const };
           }
-          if (group.seed) await recomputeComponent(client, group.seed);
+          await recomputeComponent(client, group.seed);
           await client.query(
             `UPDATE character_groups_maintenance SET cursor_group_id = $1 WHERE id = 1`,
             [group.id]
           );
-          return { done: false };
+          return { kind: "group_recomputed" as const };
         });
-        if (step.done) return { groupsRecomputed, cycleCompleted: true };
-        groupsRecomputed += 1;
-        if (Date.now() - startedAt >= budgetMs)
-          return { groupsRecomputed, cycleCompleted: false };
+
+        if (step.kind === "group_recomputed") groupsRecomputed += 1;
+
+        if (step.kind === "no_next_group") {
+          // Check once more for ungrouped characters -- created since the
+          // batch above ran -- before recording the cycle as complete.
+          const before = ungroupedAssigned;
+          while (withinBudget()) {
+            if (!(await assignNextUngrouped())) break;
+            ungroupedAssigned += 1;
+          }
+          if (!withinBudget()) {
+            return {
+              groupsRecomputed,
+              ungroupedAssigned,
+              cycleCompleted: false
+            };
+          }
+          if (ungroupedAssigned === before) {
+            await withTransaction(pool, async (client) => {
+              await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+              await lockRebuildShared(client);
+              await lockGroups(client);
+              await client.query(
+                `UPDATE character_groups_maintenance
+                 SET last_cycle_started_at = cycle_started_at, last_cycle_completed_at = now(),
+                     cycle_started_at = NULL, cursor_group_id = NULL
+                 WHERE id = 1`
+              );
+            });
+            return { groupsRecomputed, ungroupedAssigned, cycleCompleted: true };
+          }
+          // Draining created new groups that may sort past the cursor;
+          // give the walk another pass before trying to finish again.
+          continue;
+        }
       }
     },
 
@@ -319,7 +388,7 @@ export function createCharacterConnectionRepositories(
           links: string;
           groups: string;
         }>(
-          `SELECT (SELECT count(*) FROM character_connection_writes)::text AS observers,
+          `SELECT (SELECT count(DISTINCT observer_character_id) FROM character_connection_writes)::text AS observers,
                   (SELECT count(*) FROM character_connections WHERE kind = 'observed')::text AS links,
                   (SELECT count(*) FROM character_groups)::text AS groups`
         );
@@ -336,60 +405,66 @@ export function createCharacterConnectionRepositories(
 }
 
 /**
- * Recompute the component containing `seed`: load it through counting links,
- * split or merge against the stored groups, and write the result. Returns
+ * Recompute the component containing `seed`, iterating to closure: BFS over
+ * counting links, plus (whenever a node is visited) every other member of
+ * that node's *current* group, repeated until nothing new turns up. A link
+ * whose own recompute hasn't run yet (or crashed) can leave a node grouped
+ * with another node it has no direct counting-link path to; pulling in that
+ * old group's members once and stopping there, without continuing the walk
+ * from them, dropped exactly that link and stamped a slice of a still-live
+ * component as though it were closed. Only once the node set stops growing
+ * does `components` run, over every link collected among them. Returns
  * every character visited.
  */
 async function recomputeComponent(
   client: PoolClient,
   seed: string
 ): Promise<string[]> {
-  const visited = new Set<string>([seed]);
+  const nodes = new Set<string>([seed]);
   const links: { a: string; b: string }[] = [];
   let frontier = [seed];
   while (frontier.length > 0) {
+    const next = new Set<string>();
+
     const edges = await client.query<{ a: string; b: string }>(
       COUNTING_LINKS_FROM,
       [frontier]
     );
-    const next: string[] = [];
     for (const edge of edges.rows) {
       links.push(edge);
       for (const id of [edge.a, edge.b]) {
-        if (!visited.has(id)) {
-          visited.add(id);
-          next.push(id);
-        }
+        if (!nodes.has(id)) next.add(id);
       }
     }
-    frontier = next;
+
+    // Every other member of a visited node's *current* group: closure over
+    // group co-membership too, so a link whose own recompute is still
+    // pending is still reached from here, in the next round of this loop.
+    const groupmates = await client.query<{ character_id: string }>(
+      `SELECT character_id FROM character_group_members
+       WHERE group_id IN (SELECT group_id FROM character_group_members WHERE character_id = ANY($1))`,
+      [frontier]
+    );
+    for (const row of groupmates.rows) {
+      if (!nodes.has(row.character_id)) next.add(row.character_id);
+    }
+
+    for (const id of next) nodes.add(id);
+    frontier = [...next];
   }
-  // The component may have been larger before: include the old group's other
-  // members so a split assigns them too.
-  const old = await client.query<{ character_id: string; group_id: string }>(
-    `SELECT character_id, group_id FROM character_group_members
-     WHERE group_id IN (SELECT group_id FROM character_group_members WHERE character_id = ANY($1))`,
-    [[...visited]]
+  const membershipRows = await client.query<{
+    character_id: string;
+    group_id: string;
+  }>(
+    `SELECT character_id, group_id FROM character_group_members WHERE character_id = ANY($1)`,
+    [[...nodes]]
   );
-  const nodes = new Set([
-    ...visited,
-    ...old.rows.map((row) => row.character_id)
-  ]);
-  const extraLinks = old.rows.some((row) => !visited.has(row.character_id))
-    ? (
-        await client.query<{ a: string; b: string }>(COUNTING_LINKS_FROM, [
-          [...nodes].filter((id) => !visited.has(id))
-        ])
-      ).rows
-    : [];
   const parts = components(
     nodes,
-    [...links, ...extraLinks].filter(
-      (link) => nodes.has(link.a) && nodes.has(link.b)
-    )
+    links.filter((link) => nodes.has(link.a) && nodes.has(link.b))
   );
   const membership = new Map(
-    old.rows.map((row) => [row.character_id, row.group_id])
+    membershipRows.rows.map((row) => [row.character_id, row.group_id])
   );
   const groupRows = await client.query<{ id: string; created_at: Date }>(
     `SELECT id, created_at FROM character_groups WHERE id = ANY($1)`,

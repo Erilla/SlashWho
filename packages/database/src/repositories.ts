@@ -1971,7 +1971,12 @@ export interface CharacterConnectionRepository {
   recomputeGroupsOf(characterIds: readonly string[]): Promise<void>;
   recomputePass(input: {
     budgetMs: number;
-  }): Promise<{ groupsRecomputed: number; cycleCompleted: boolean }>;
+  }): Promise<{
+    groupsRecomputed: number;
+    /** Previously-ungrouped characters newly assigned a group this call. */
+    ungroupedAssigned: number;
+    cycleCompleted: boolean;
+  }>;
   rebuild(): Promise<{ observers: number; links: number; groups: number }>;
 }
 
