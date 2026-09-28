@@ -18,7 +18,10 @@ import {
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
 import type { BlizzardGateway } from "@slashwho/blizzard";
-import type { RaiderIoGateway } from "@slashwho/raiderio";
+import {
+  raiderIoHistoricTierOrdinals,
+  type RaiderIoGateway
+} from "@slashwho/raiderio";
 import { supportedRaidCatalogue, type CharacterKey } from "@slashwho/domain";
 import { describe, expect, it, vi } from "vitest";
 
@@ -3761,6 +3764,9 @@ describe("applicant evidence job handler", () => {
           killedAt: "2026-09-01T00:00:00.000Z"
         }
       );
+      // Every settled tier already read: only the last pinned one is asked.
+      evidence.raiderIoTierReads = async () =>
+        raiderIoHistoricTierOrdinals.slice(0, -1);
       const getHistoricMythicKills = vi.fn(async () => ({
         kind: "evidence" as const,
         kills: []
@@ -3796,6 +3802,60 @@ describe("applicant evidence job handler", () => {
       expect(getHistoricMythicKills).toHaveBeenCalledWith(
         key,
         expect.objectContaining({ tierOrdinals: [35] })
+      );
+    });
+
+    it("asks every settled tier above the scan floor until it is marked read", async () => {
+      // Break caught (#732 follow-up): a settled tier was never asked, so its
+      // logged kills were never collected.
+      const evidence = store();
+      evidence.stored.push({ raidId: "42", domain: "kills" });
+      evidence.storedKills.push(
+        {
+          raidId: "42",
+          raidName: "The Dreamrift",
+          killedAt: "2026-06-01T00:00:00.000Z"
+        },
+        {
+          raidId: "43",
+          raidName: "The Venomous Abyss",
+          killedAt: "2026-09-01T00:00:00.000Z"
+        }
+      );
+      const getHistoricMythicKills = vi.fn(async () => ({
+        kind: "evidence" as const,
+        kills: []
+      }));
+      const handler = createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: {
+          getFirstKillReports: vi.fn(async () => ({
+            kind: "evidence" as const,
+            parsedFightUrls: [],
+            kills: [],
+            wipes: [],
+            tierBests: [],
+            troubledRaidIds: { parses: [], tierBests: [] }
+          })),
+          ...openGate
+        },
+        raiderio: { getHistoricMythicKills } as never,
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1_800_000,
+        transientRetryMs: 900_000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1_800_000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000
+      });
+
+      await handler.execute(run.id);
+
+      // Every pinned raid closed before 2026-09-01, and none is marked read.
+      expect(getHistoricMythicKills).toHaveBeenCalledWith(
+        key,
+        expect.objectContaining({ tierOrdinals: raiderIoHistoricTierOrdinals })
       );
     });
 
@@ -5738,8 +5798,8 @@ describe("applicant evidence job handler", () => {
       };
     }
 
-    function loggedStore() {
-      const evidence = store();
+    function loggedStore(activeRun: typeof run = run) {
+      const evidence = store(activeRun);
       const saved: RaiderIoLoggedEncounterAnswers[] = [];
       const transitions: Array<{ id: string; state: string }> = [];
       evidence.saveRaiderIoLoggedEncounters = async (answers) => {
@@ -5975,6 +6035,445 @@ describe("applicant evidence job handler", () => {
           })
         })
       ]);
+    });
+
+    describe("settled tiers (#732 follow-up)", () => {
+      // A floor above every pinned raid's close: every tier but 35 is settled.
+      function settledStore(
+        marked: readonly number[] = [],
+        activeRun: typeof run = run
+      ) {
+        const evidence = loggedStore(activeRun);
+        evidence.stored.push({ raidId: "42", domain: "kills" });
+        evidence.storedKills.push(
+          {
+            raidId: "42",
+            raidName: "The Dreamrift",
+            killedAt: "2026-06-01T00:00:00.000Z"
+          },
+          {
+            raidId: "43",
+            raidName: "The Venomous Abyss",
+            killedAt: "2026-09-01T00:00:00.000Z"
+          }
+        );
+        const marks: number[][] = [];
+        evidence.raiderIoTierReads = async () => marked;
+        evidence.markRaiderIoTierReads = async (_key, ordinals) => {
+          marks.push([...ordinals]);
+        };
+        return Object.assign(evidence, { marks });
+      }
+      const settledOrdinals = raiderIoHistoricTierOrdinals.slice(0, -1);
+      const queenAnsurek = {
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek",
+        firstDefeated: "2024-10-01T20:00:00.000Z",
+        guild: killGuild,
+        loggedEncounterId: 700_002
+      };
+      const storedQueen: CharacterRaiderIoFirstKillInput = {
+        raidSlug: "nerubar-palace",
+        bossSlug: "queen-ansurek",
+        killedAt: "2024-10-01T20:00:00.000Z",
+        guild: killGuild,
+        loggedEncounterId: 700_002,
+        encounterState: "read",
+        encounterLimitationCode: null,
+        historicWorldRank: null,
+        historicRankCheckedAt: "2026-09-01T00:00:00.000Z",
+        presenceChecked: true
+      };
+
+      it("asks a settled tier once, publishes its logged kill, and marks it", async () => {
+        const evidence = settledStore();
+        const raiderio = raiderIo({
+          getHistoricMythicKills: vi.fn(async () => ({
+            kind: "evidence" as const,
+            kills: [midnightFalls, queenAnsurek]
+          })),
+          getLoggedEncounter: vi.fn(async (_raidSlug: string, id: number) =>
+            id === 700_002
+              ? {
+                  ...encounter,
+                  raidSlug: "nerubar-palace",
+                  bossSlug: "queen-ansurek"
+                }
+              : encounter
+          )
+        });
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        expect(raiderio.getHistoricMythicKills).toHaveBeenCalledWith(
+          key,
+          expect.objectContaining({
+            tierOrdinals: raiderIoHistoricTierOrdinals
+          })
+        );
+        const published = evidence.published[0]!.result;
+        expect(published.state).toBe("complete");
+        expect(published.raiderIoFirstKills?.kills).toContainEqual(
+          expect.objectContaining({
+            bossSlug: "queen-ansurek",
+            encounterState: "read"
+          })
+        );
+        expect(evidence.marks).toEqual([settledOrdinals]);
+      });
+
+      it("keeps every rebuilt kill, due or not, logged or not, and re-reads a due roster without the kill list", async () => {
+        // Break caught (#734 follow-up review): rebuilding only the due kills
+        // while their raids joined askedRaidSlugs deleted the rest on a
+        // complete publish, the failure that cost 9 characters on 2026-09-23.
+        const evidence = settledStore(settledOrdinals);
+        const noLog: CharacterRaiderIoFirstKillInput = {
+          ...storedQueen,
+          bossSlug: "ulgrax",
+          loggedEncounterId: null,
+          encounterState: "unavailable",
+          presenceChecked: false
+        };
+        const dueRoster: CharacterRaiderIoFirstKillInput = {
+          ...storedQueen,
+          bossSlug: "the-bloodbound-horror",
+          loggedEncounterId: 700_003
+        };
+        evidence.storedRaiderIoFirstKills = async () => [
+          storedQueen,
+          noLog,
+          dueRoster
+        ];
+        const storedEncounter = (
+          id: number,
+          bossSlug: string,
+          readAt: string
+        ) => ({
+          loggedEncounterId: id,
+          raidSlug: "nerubar-palace",
+          bossSlug,
+          pulledAt: encounter.pulledAt,
+          defeatedAt: "2024-10-01T20:00:00.000Z",
+          durationMs: encounter.durationMs,
+          guild: encounter.guild,
+          itemLevel: encounter.itemLevel,
+          deathCount: 2,
+          vantusCount: 16,
+          shareRaidUntil: null,
+          rosterState: "available" as const,
+          members: encounter.roster.members,
+          readAt
+        });
+        evidence.raiderIoLoggedEncounters = async () => ({
+          encounters: [
+            // Read last week: not due.
+            storedEncounter(
+              700_002,
+              "queen-ansurek",
+              "2026-09-21T00:00:00.000Z"
+            ),
+            // Read 40 days ago with no end named: due.
+            storedEncounter(
+              700_003,
+              "the-bloodbound-horror",
+              "2026-08-19T00:00:00.000Z"
+            )
+          ],
+          unavailable: []
+        });
+        const raiderio = raiderIo({
+          // The asked tier lists nothing: every logged kill is a rebuilt one.
+          getHistoricMythicKills: vi.fn(async () => ({
+            kind: "evidence" as const,
+            kills: []
+          })),
+          getLoggedEncounter: vi.fn(async () => ({
+            ...encounter,
+            raidSlug: "nerubar-palace",
+            bossSlug: "the-bloodbound-horror",
+            roster: {
+              state: "unavailable" as const,
+              reason: "private" as const
+            }
+          }))
+        });
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        expect(raiderio.getHistoricMythicKills).toHaveBeenCalledWith(
+          key,
+          expect.objectContaining({ tierOrdinals: [35] })
+        );
+        expect(raiderio.getLoggedEncounter).toHaveBeenCalledTimes(1);
+        expect(evidence.saved[0]!.encounters).toEqual([
+          expect.objectContaining({
+            loggedEncounterId: 700_003,
+            rosterState: "private"
+          })
+        ]);
+        const published = evidence.published[0]!.result;
+        expect(published.state).toBe("complete");
+        // Asked, so a complete publish is free to drop what it lacks.
+        expect(published.raiderIoFirstKills?.askedRaidSlugs).toContain(
+          "nerubar-palace"
+        );
+        const kept = mergeRaiderIoFirstKills(
+          [storedQueen, noLog, dueRoster],
+          published.raiderIoFirstKills,
+          published.state,
+          false
+        ).map((kill) => kill.bossSlug);
+        expect(kept).toEqual(
+          expect.arrayContaining([
+            "queen-ansurek",
+            "ulgrax",
+            "the-bloodbound-horror"
+          ])
+        );
+        expect(evidence.transitions).toContainEqual({
+          id: "raiderio_logged_encounters",
+          state: "completed"
+        });
+      });
+
+      it("drops a stored settled kill the kill list no longer returns, on a complete re-ask", async () => {
+        // Marks expired (none current): the tier is asked again and has
+        // withdrawn the kill.
+        const evidence = settledStore();
+        evidence.storedRaiderIoFirstKills = async () => [storedQueen];
+        const raiderio = raiderIo();
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        const published = evidence.published[0]!.result;
+        expect(published.state).toBe("complete");
+        expect(published.raiderIoFirstKills?.askedRaidSlugs).toContain(
+          "nerubar-palace"
+        );
+        expect(
+          mergeRaiderIoFirstKills(
+            [storedQueen],
+            published.raiderIoFirstKills,
+            published.state,
+            false
+          ).map((kill) => kill.bossSlug)
+        ).not.toContain("queen-ansurek");
+      });
+
+      it.each([
+        [
+          "the phase is capped",
+          (evidence: ReturnType<typeof settledStore>) => evidence,
+          () =>
+            raiderIo({
+              getHistoricMythicKills: vi.fn(async () => ({
+                kind: "evidence" as const,
+                kills: Array.from({ length: 51 }, (_, index) => ({
+                  ...midnightFalls,
+                  bossSlug: `boss-${String(index + 1)}`,
+                  loggedEncounterId: index + 1
+                }))
+              })),
+              getLoggedEncounter: vi.fn(
+                async (_raidSlug: string, id: number) => ({
+                  ...encounter,
+                  bossSlug: `boss-${String(id)}`,
+                  roster: {
+                    state: "unavailable" as const,
+                    reason: "private" as const
+                  }
+                })
+              )
+            })
+        ],
+        [
+          "the kill list fails",
+          (evidence: ReturnType<typeof settledStore>) => evidence,
+          () =>
+            raiderIo({
+              getHistoricMythicKills: vi.fn(async () => ({
+                kind: "limitation" as const,
+                code: "unavailable" as const
+              }))
+            })
+        ],
+        [
+          "the stored first kills cannot be read",
+          (evidence: ReturnType<typeof settledStore>) => {
+            evidence.storedRaiderIoFirstKills = async () => {
+              throw new Error("database_down");
+            };
+            return evidence;
+          },
+          () => raiderIo()
+        ],
+        [
+          "the phase never runs",
+          (evidence: ReturnType<typeof settledStore>) => evidence,
+          () => {
+            const raiderio = raiderIo();
+            return { ...raiderio, getLoggedEncounter: undefined } as never;
+          }
+        ]
+      ] as const)(
+        "marks nothing when %s",
+        async (_name, prepare, gatewayFor) => {
+          const evidence = prepare(settledStore());
+          const raiderio = gatewayFor();
+
+          await loggedHandler(evidence, raiderio).execute(run.id);
+
+          expect(evidence.marks).toEqual([]);
+          expect(evidence.published[0]!.result).not.toHaveProperty(
+            "retryAfterAt"
+          );
+        }
+      );
+
+      it("marks nothing on a targeted run", async () => {
+        // A tier search never runs the phase, so it cannot vouch for a tier.
+        const eternalPalace = supportedRaidCatalogue().find(
+          (raid) => raid.raidName === "The Eternal Palace"
+        )!;
+        const tierRun = {
+          ...run,
+          mode: "tier_search" as const,
+          tierSearchRaidId: eternalPalace.raidId
+        };
+        const evidence = settledStore([], tierRun);
+        const raiderio = raiderIo();
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        expect(evidence.published).toHaveLength(1);
+        expect(raiderio.getHistoricMythicKills).not.toHaveBeenCalled();
+        expect(evidence.marks).toEqual([]);
+      });
+
+      it("marks nothing when the publish is partial for Warcraft Logs reasons", async () => {
+        const evidence = settledStore();
+        const handler = handlerFor({
+          evidence,
+          warcraftLogs: {
+            getFirstKillReports: vi.fn(async () => ({
+              ...noKills,
+              limitation: {
+                kind: "limitation" as const,
+                code: "request_cap" as const
+              }
+            })),
+            ...openGate
+          },
+          raiderio: raiderIo(),
+          pointsReserve: 0,
+          now: () => new Date("2026-09-28T12:00:00.000Z")
+        });
+
+        await handler.execute(run.id);
+
+        expect(evidence.published[0]!.result.state).toBe("partial");
+        // The phase itself ran whole: only the publish holds the mark back.
+        expect(evidence.published[0]!.result.raiderIoFirstKills).toMatchObject({
+          limitationCode: null
+        });
+        expect(evidence.marks).toEqual([]);
+      });
+
+      it("marks nothing when the publish fails, and a failed mark write does not fail the run", async () => {
+        const failing = settledStore();
+        failing.publish = async () => {
+          throw new Error("publish_failed");
+        };
+        // A failed publish settles the run through the handler's own failure
+        // path rather than rejecting, so what it leaves behind is the proof.
+        await loggedHandler(failing, raiderIo()).execute(run.id);
+        expect(failing.published).toEqual([]);
+        expect(failing.marks).toEqual([]);
+
+        const throwing = settledStore();
+        throwing.markRaiderIoTierReads = async () => {
+          throw new Error("mark_failed");
+        };
+        await expect(
+          loggedHandler(throwing, raiderIo()).execute(run.id)
+        ).resolves.toBeUndefined();
+        expect(throwing.published[0]!.result.state).toBe("complete");
+        expect(throwing.failed).toEqual([]);
+        // The handler settles its own errors, so the run's recorded outcome
+        // is what shows the mark write did not fail it.
+        expect(throwing.costs.at(-1)?.outcome).toBe("complete");
+      });
+
+      it("no id: completes the run and marks its tiers when Raider.IO gives the profile no id", async () => {
+        const evidence = settledStore();
+        const raiderio = raiderIo({
+          getCharacter: vi.fn(async () => ({
+            key,
+            displayName: "Alfa",
+            className: "Demon Hunter",
+            level: 90,
+            guild: null,
+            ownerId: null,
+            profileGuess: null,
+            declaredMain: null
+          }))
+        });
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        expect(raiderio.getCharacter).toHaveBeenCalled();
+        expect(evidence.published[0]!.result.state).toBe("complete");
+        expect(evidence.marks).toHaveLength(1);
+      });
+
+      it("records the phase as run when its only logged kills are rebuilt", async () => {
+        const evidence = settledStore(settledOrdinals);
+        evidence.storedRaiderIoFirstKills = async () => [storedQueen];
+        const raiderio = raiderIo({
+          getHistoricMythicKills: vi.fn(async () => ({
+            kind: "evidence" as const,
+            kills: []
+          }))
+        });
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        expect(evidence.transitions).toContainEqual({
+          id: "raiderio_logged_encounters",
+          state: "completed"
+        });
+        expect(evidence.transitions).not.toContainEqual({
+          id: "raiderio_logged_encounters",
+          state: "skipped"
+        });
+      });
+
+      it("records the phase as limited when the stored first kills cannot be read", async () => {
+        const evidence = settledStore();
+        evidence.storedRaiderIoFirstKills = async () => {
+          throw new Error("database_down");
+        };
+        // A kill list with no logged kill: only the failed load keeps the
+        // phase from being skipped.
+        const raiderio = raiderIo({
+          getHistoricMythicKills: vi.fn(async () => ({
+            kind: "evidence" as const,
+            kills: []
+          }))
+        });
+
+        await loggedHandler(evidence, raiderio).execute(run.id);
+
+        expect(evidence.published[0]!.result.state).toBe("partial");
+        expect(evidence.transitions).toContainEqual({
+          id: "raiderio_logged_encounters",
+          state: "limited"
+        });
+        expect(evidence.transitions).not.toContainEqual({
+          id: "raiderio_logged_encounters",
+          state: "skipped"
+        });
+      });
     });
   });
 });
