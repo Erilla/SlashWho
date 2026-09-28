@@ -110,7 +110,12 @@ const historicRaidProgressResponseSchema = z.object({
             z.object({
               slug: z.string().min(1),
               firstDefeated: z.string().datetime(),
-              loggedEncounterId: z.number().int().positive().nullable().optional(),
+              loggedEncounterId: z
+                .number()
+                .int()
+                .positive()
+                .nullable()
+                .optional(),
               guild: z
                 .object({
                   name: z.string().min(1),
