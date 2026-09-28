@@ -525,10 +525,16 @@ costs 2.1 points whether it loads one fight or every Mythic kill in it
 - **What one read credits:** every kill in the report of an encounter the
   character is ranked on in the zone. Identity is proved once for the report,
   by canonical id and a unique actor.
-- **When the report counts as read:** once its ranked fight is accepted, or
-  when it can credit no one, for example a report without `rankedCharacters`.
-  A ranked fight it rejects, such as one metric's spec contradicting the
-  fight, is left to the other metric's ranking, which reads the report again.
+- **When the report counts as read:** after one read, always. Everything the
+  decoder judges (zone, identity, which kills count) is the report's, not the
+  ranked fight's, so no later ranking of it can change the answer. The
+  ranking's spec is not checked against the fight. Checked on only the fight
+  a read was for, it made the kills credited depend on which boss the walk
+  reached first (#741 review), and a spec logged differently makes the kill no
+  less the character's.
+- **A ranked fight missing from the read** is `schema_drift`. That covers both
+  the read it triggered and a read of its report made for another boss. The
+  ranking named a Mythic kill that the report's kills leave out.
 - **Duplicate copies:** a report ranked for some bosses often also holds
   another uploader's copy of the night's other kills. These are now credited,
   as the history scan has always done: about 90% of stored kills have a copy

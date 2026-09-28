@@ -237,14 +237,20 @@ export function decodedUnderRankedName(
  * The character's Mythic kills in one hydrated ranked report: every kill of
  * the zone's ranked encounters, not only the ranked fight that led to the
  * report, so a raid night is read once for all its bosses (#712). Identity is
- * proved once for the report, by canonical id and a unique actor.
+ * proved once for the report, by canonical id and a unique actor, and each
+ * kill still needs that actor among its fight's players.
+ *
+ * The ranking's spec is not checked against the fight. It was a secondary
+ * check on the one fight a read was for; applied to that fight alone, it made
+ * the kills a read credits depend on which boss the walk reached first. A
+ * spec the log records differently makes the kill no less the character's.
  */
 export function decodedRankedKills(
   value: unknown,
   expected: {
     code: string;
-    /** The ranked fight that led here, with its spec when ranked with one. */
-    ranked: Readonly<{ fightId: number; spec?: string }>;
+    /** The ranked fight that led here. */
+    ranked: Readonly<{ fightId: number }>;
     zoneId: number;
     /** The zone's encounters the character is ranked on. */
     encounterIds: readonly number[];
@@ -265,6 +271,14 @@ export function decodedRankedKills(
   const ranked = entry.rankedCharacters;
   const actors = record(entry.masterData)?.actors;
   if (ranked === null) return [];
+  // The ranking named this fight a Mythic kill of this report. A kills-only
+  // read that leaves it out is not the report the ranking described.
+  if (
+    !fights.some(
+      (fight) => positiveInteger(record(fight)?.id) === expected.ranked.fightId
+    )
+  )
+    return { kind: "limitation", code: "schema_drift" };
   if (!Array.isArray(ranked) || !Array.isArray(actors))
     return { kind: "limitation", code: "schema_drift" };
   const identities = ranked.map(record);
@@ -298,24 +312,6 @@ export function decodedRankedKills(
     );
   if (matches.length !== 1) return [];
   const actor = matches[0]!;
-  // Specs are an independent consistency check when the ranking supplies
-  // one, which it does only for the ranked fight. Identity was already
-  // established by canonical ID and unique actor.
-  const rankedFight = fights
-    .map(record)
-    .find((fight) => positiveInteger(fight?.id) === expected.ranked.fightId);
-  let specContradicted = false;
-  if (expected.ranked.spec && Array.isArray(rankedFight?.friendlySpecs)) {
-    const actorIndex = Array.isArray(rankedFight.friendlyPlayers)
-      ? rankedFight.friendlyPlayers.indexOf(actor.id)
-      : -1;
-    const fightSpec = nonEmptyString(rankedFight.friendlySpecs[actorIndex]);
-    specContradicted =
-      fightSpec !== null &&
-      fightSpec !== undefined &&
-      fightSpec.toLocaleLowerCase("en-US") !==
-        expected.ranked.spec.toLocaleLowerCase("en-US");
-  }
   const alias = {
     region: expected.region,
     realm: String(actor.server).toLocaleLowerCase("en-US"),
@@ -330,7 +326,6 @@ export function decodedRankedKills(
       kill.reportCode === expected.code &&
       encounters.has(kill.bossId) &&
       kill.difficulty === MYTHIC_DIFFICULTY &&
-      !(specContradicted && kill.fightId === expected.ranked.fightId) &&
       // A combined zone's fights name no raid, so the boss has to place them.
       lookupRaidForEvidence(kill)?.raidId === expected.journalRaidId &&
       currentContentEligibilityByRaidId(

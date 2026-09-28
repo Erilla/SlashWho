@@ -798,8 +798,7 @@ describe("ranked Mythic backfill", () => {
       40989140,
       Date.UTC(2021, 0, 1),
       "Holy"
-    ],
-    ["a conflicting per-fight spec", 40989140, Date.UTC(2018, 0, 1), "Shadow"]
+    ]
   ])("rejects %s", async (_reason, canonicalId, startTime, fightSpec) => {
     const fetch = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1629,6 +1628,10 @@ describe("reading each ranked report once (#712)", () => {
       rankedCharacters?: null;
       requestCap?: number;
       cursor?: WarcraftLogsRankedBackfillCursor;
+      /** Walk Kin'garoth's ranking before Argus's. */
+      kingarothFirst?: boolean;
+      /** Reshapes the night's kills before they are answered. */
+      reshape?: (fights: ReturnType<typeof fight>[]) => void;
     }> = {}
   ) => {
     const reads: string[] = [];
@@ -1651,10 +1654,15 @@ describe("reading each ranked report once (#712)", () => {
                 character: {
                   id: 40989140,
                   damage: {
-                    rankings: [
-                      { encounterID: 2092, totalKills: 1 },
-                      { encounterID: 2088, totalKills: 1 }
-                    ]
+                    rankings: options.kingarothFirst
+                      ? [
+                          { encounterID: 2088, totalKills: 1 },
+                          { encounterID: 2092, totalKills: 1 }
+                        ]
+                      : [
+                          { encounterID: 2092, totalKills: 1 },
+                          { encounterID: 2088, totalKills: 1 }
+                        ]
                   },
                   healing: { rankings: [] }
                 }
@@ -1698,6 +1706,7 @@ describe("reading each ranked report once (#712)", () => {
           // on in this zone.
           fight(12, 2069, "Varimathras")
         ];
+        options.reshape?.(fights);
         entry.fights =
           typeof variables.fightId === "number"
             ? fights.filter(({ id }) => id === variables.fightId)
@@ -1728,6 +1737,64 @@ describe("reading each ranked report once (#712)", () => {
       "https://www.warcraftlogs.com/reports/night#fight=10",
       "https://www.warcraftlogs.com/reports/night#fight=11"
     ]);
+  });
+
+  it("credits a kill whose ranking records another spec, whichever boss comes first", async () => {
+    // Break caught in review of #741: only the ranked fight a read was for
+    // was spec-checked, so whether Kin'garoth -- ranked Holy, logged Shadow --
+    // was credited depended on which boss the walk reached first. The kill is
+    // the character's either way: identity is the report's, by canonical id
+    // and a unique actor in the fight.
+    const shadowKingaroth = (fights: ReturnType<typeof fight>[]) => {
+      fights[1]!.friendlySpecs = ["Shadow"];
+    };
+    for (const kingarothFirst of [false, true]) {
+      const { result } = await walk({
+        kingarothFirst,
+        reshape: shadowKingaroth
+      });
+      const fightUrls = (
+        result as { kills: readonly { fightUrl: string }[] }
+      ).kills.map((kill) => kill.fightUrl);
+      expect(fightUrls.sort(), String(kingarothFirst)).toEqual([
+        "https://www.warcraftlogs.com/reports/night#fight=10",
+        "https://www.warcraftlogs.com/reports/night#fight=11"
+      ]);
+    }
+  });
+
+  it("credits no kill of a fight the character's actor was not in", async () => {
+    const { result } = await walk({
+      reshape: (fights) => {
+        fights[1]!.friendlyPlayers = [99];
+      }
+    });
+
+    expect(
+      (result as { kills: readonly { fightUrl: string }[] }).kills.map(
+        (kill) => kill.fightUrl
+      )
+    ).toEqual(["https://www.warcraftlogs.com/reports/night#fight=10"]);
+  });
+
+  it("stops on drift when the report's kills leave out the ranked fight", async () => {
+    // Break caught in review of #741: a read asking for the one ranked fight
+    // had to get exactly it back. Asking for every kill, a report missing
+    // the ranked one would otherwise be a silent miss.
+    // Whichever boss is read first: Argus's own read, or Kin'garoth's read
+    // of the report that Argus's ranking then names.
+    for (const kingarothFirst of [false, true]) {
+      const { result } = await walk({
+        kingarothFirst,
+        reshape: (fights) => {
+          fights.splice(0, 1);
+        }
+      });
+
+      expect(result, String(kingarothFirst)).toMatchObject({
+        limitation: { code: "schema_drift" }
+      });
+    }
   });
 
   it("carries every fight the one read accepted in a capped walk's cursor", async () => {

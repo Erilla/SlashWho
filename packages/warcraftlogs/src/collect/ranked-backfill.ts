@@ -110,7 +110,6 @@ export async function getRankedKillReports(
   >();
   const names = () =>
     rankedNames.size > 0 ? { rankedNames: [...rankedNames.values()] } : {};
-  const hydratedFights = new Set(acceptedFights);
   const limited = (
     query: WarcraftLogsQueryType,
     limitation: WarcraftLogsLimitation
@@ -161,7 +160,9 @@ export async function getRankedKillReports(
     // One read covers every kill of the zone's ranked encounters in a
     // report, so a report is read at most once a zone. Per zone, because a
     // zone walked again under another partition ranks other encounters.
-    const readReports = new Set<string>();
+    // Each read report's Mythic kill fights, or "gone" for one Warcraft
+    // Logs no longer serves.
+    const readReports = new Map<string, ReadonlySet<number> | "gone">();
     const partition = progress.partitionIds?.[progress.zoneIndex];
     if (partition === undefined)
       return limited("zone_rankings", {
@@ -241,12 +242,19 @@ export async function getRankedKillReports(
         ) {
           const ref = refs[progress.reportIndex]!;
           const fightKey = `${ref.code}:${ref.fightId}`;
-          if (
-            hydratedFights.has(fightKey) ||
-            acceptedFights.has(fightKey) ||
-            readReports.has(ref.code)
-          )
+          if (acceptedFights.has(fightKey)) continue;
+          const read = readReports.get(ref.code);
+          if (read !== undefined) {
+            // The ranking names a Mythic kill of a report whose kills were
+            // read without it: not the report the ranking described.
+            if (read !== "gone" && !read.has(ref.fightId)) {
+              return limited("report_hydration", {
+                kind: "limitation",
+                code: "schema_drift"
+              });
+            }
             continue;
+          }
           const detail = await request(
             "report_hydration",
             historicRankedReportQuery,
@@ -259,7 +267,7 @@ export async function getRankedKillReports(
             });
           if (detail.kind !== "success") {
             if (detail.code === "not_found" || detail.code === "private") {
-              readReports.add(ref.code);
+              readReports.set(ref.code, "gone");
               continue;
             }
             return limited("report_hydration", detail);
@@ -287,22 +295,24 @@ export async function getRankedKillReports(
               );
             }
           }
-          // Every kill of the zone's ranked encounters in the report was
-          // decoded, so later rankings of its accepted fights read nothing
-          // again. The report is done once its ranked fight was accepted, or
-          // when it cannot credit anyone. A ranked fight it rejected -- one
-          // metric's spec contradicting the fight, say -- is left to the
-          // other metric's ranking, which reads it again, as before (#712).
-          const report = record(
-            record(record(detail.value)?.data)?.reportData
-          )?.report;
-          if (
-            decoded.some((kill) => kill.fightId === ref.fightId) ||
-            report === null ||
-            record(report)?.rankedCharacters === null
-          ) {
-            readReports.add(ref.code);
-          }
+          // Everything the decoder judges -- zone, identity, and every kill
+          // of the zone's ranked encounters -- is the report's, not the
+          // ranked fight's, so no later ranking of the report can change the
+          // answer (#712).
+          const readFights = record(
+            record(record(record(detail.value)?.data)?.reportData)?.report
+          )?.fights;
+          readReports.set(
+            ref.code,
+            new Set(
+              (Array.isArray(readFights) ? readFights : []).flatMap(
+                (fight: unknown) => {
+                  const id = record(fight)?.id;
+                  return typeof id === "number" ? [id] : [];
+                }
+              )
+            )
+          );
           for (const kill of decoded) {
             acceptedFights.add(`${kill.reportCode}:${kill.fightId}`);
             kills.set(kill.fightUrl, kill);
