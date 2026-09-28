@@ -205,6 +205,8 @@ export interface EvidenceRunRow {
   omitted_invalid_timestamp: boolean;
   parse_limitation_codes_seen?: string[] | null;
   light_refresh?: boolean;
+  raiderio_limitation_code?: string | null;
+  kill_scan_skipped?: boolean;
   retry_after_at: Date | null;
   error_code: string | null;
   created_at: Date;
@@ -374,7 +376,7 @@ function evidenceRunClassNameSql(alias = "character_evidence_runs"): string {
 // What a run was reserved to do. Selected everywhere a run is mapped, so a
 // re-claimed tier search is still a tier search.
 function evidenceRunModeSql(alias = "character_evidence_runs"): string {
-  return `${alias}.mode, ${alias}.origin, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh`;
+  return `${alias}.mode, ${alias}.origin, ${alias}.tier_search_raid_id, ${alias}.omitted_invalid_timestamp, ${alias}.parse_limitation_codes_seen, ${alias}.light_refresh, ${alias}.raiderio_limitation_code, ${alias}.kill_scan_skipped`;
 }
 
 const evidenceRunColumnNames = [
@@ -427,6 +429,10 @@ export function mapEvidenceRun(row: EvidenceRunRow): CharacterEvidenceRun {
       ? { parseLimitationCodesSeen: row.parse_limitation_codes_seen }
       : {}),
     ...(row.light_refresh ? { lightRefresh: true } : {}),
+    ...(row.raiderio_limitation_code
+      ? { raiderIoLimitationCode: row.raiderio_limitation_code }
+      : {}),
+    ...(row.kill_scan_skipped ? { killScanSkipped: true } : {}),
     retryAfterAt: row.retry_after_at,
     errorCode: row.error_code,
     createdAt: row.created_at,

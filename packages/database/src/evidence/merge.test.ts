@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type {
   CharacterMythicKillPerformance,
+  CharacterRaiderIoFirstKillInput,
   CharacterTierBestParseInput,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe
@@ -9,7 +10,8 @@ import type {
 import {
   type EvidencePublishInput,
   type StoredEvidenceForMerge,
-  mergePublishedEvidence
+  mergePublishedEvidence,
+  mergeRaiderIoFirstKills
 } from "./merge";
 
 const earlier = new Date("2026-09-01T00:00:00.000Z");
@@ -379,5 +381,136 @@ describe("mergePublishedEvidence timestamps", () => {
       state: "available",
       percentile: 60
     });
+  });
+});
+
+describe("mergeRaiderIoFirstKills", () => {
+  function firstKill(
+    raidSlug: string,
+    bossSlug: string,
+    overrides: Partial<CharacterRaiderIoFirstKillInput> = {}
+  ): CharacterRaiderIoFirstKillInput {
+    return {
+      raidSlug,
+      bossSlug,
+      killedAt: "2026-07-20T17:25:57.301Z",
+      guild: {
+        name: "Fixture Guild Alfa",
+        realm: "twisting-nether",
+        region: "eu"
+      },
+      loggedEncounterId: 700_001,
+      encounterState: "read",
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: null,
+      ...overrides
+    };
+  }
+  const midnightFalls = firstKill("tier-mn-1", "midnight-falls");
+  const queenAnsurek = firstKill("nerubar-palace", "queen-ansurek", {
+    killedAt: "2024-10-01T20:00:00.000Z",
+    loggedEncounterId: 1_234
+  });
+  const stored = [midnightFalls, queenAnsurek];
+  const bosses = (kills: readonly CharacterRaiderIoFirstKillInput[]) =>
+    kills.map((kill) => kill.bossSlug);
+
+  it("carries every stored kill forward when the run did not read Raider.IO", () => {
+    expect(
+      bosses(mergeRaiderIoFirstKills(stored, undefined, "complete", false))
+    ).toEqual(["queen-ansurek", "midnight-falls"]);
+  });
+
+  it.each([
+    ["partial", "partial" as const, false],
+    ["targeted", "complete" as const, true]
+  ])(
+    "carries every stored kill forward on a %s publish",
+    (_name, state, targeted) => {
+      expect(
+        bosses(
+          mergeRaiderIoFirstKills(
+            stored,
+            { kills: [], askedRaidSlugs: ["tier-mn-1"], limitationCode: null },
+            state,
+            targeted
+          )
+        )
+      ).toEqual(["queen-ansurek", "midnight-falls"]);
+    }
+  );
+
+  it("keeps on a complete publish what the run found again, and every raid it did not ask about", () => {
+    // Break caught: a complete publish dropping first kills of raids whose
+    // tiers the run deliberately skipped, as #592 once did to stored kills.
+    expect(
+      bosses(
+        mergeRaiderIoFirstKills(
+          stored,
+          { kills: [], askedRaidSlugs: ["tier-mn-1"], limitationCode: null },
+          "complete",
+          false
+        )
+      )
+    ).toEqual(["queen-ansurek"]);
+  });
+
+  it("never loses a read encounter to a later failed read", () => {
+    const merged = mergeRaiderIoFirstKills(
+      stored,
+      {
+        kills: [
+          firstKill("tier-mn-1", "midnight-falls", {
+            killedAt: "2026-07-20T17:25:57.000Z",
+            encounterState: "unavailable",
+            encounterLimitationCode: "rate_limited"
+          })
+        ],
+        askedRaidSlugs: ["tier-mn-1"],
+        limitationCode: "rate_limited"
+      },
+      "partial",
+      false
+    );
+    expect(merged.find((kill) => kill.bossSlug === "midnight-falls")).toEqual(
+      midnightFalls
+    );
+  });
+
+  it("keeps a found world rank when a later lookup has none", () => {
+    const merged = mergeRaiderIoFirstKills(
+      [
+        firstKill("tier-mn-1", "midnight-falls", {
+          historicWorldRank: 3,
+          historicRankCheckedAt: "2026-09-01T00:00:00.000Z"
+        })
+      ],
+      {
+        kills: [midnightFalls],
+        askedRaidSlugs: ["tier-mn-1"],
+        limitationCode: null
+      },
+      "complete",
+      false
+    );
+    expect(merged[0]).toMatchObject({
+      historicWorldRank: 3,
+      historicRankCheckedAt: "2026-09-01T00:00:00.000Z"
+    });
+  });
+
+  it("never duplicates a boss", () => {
+    const merged = mergeRaiderIoFirstKills(
+      stored,
+      {
+        kills: [midnightFalls, queenAnsurek],
+        askedRaidSlugs: ["tier-mn-1", "nerubar-palace"],
+        limitationCode: null
+      },
+      "complete",
+      false
+    );
+    expect(bosses(merged)).toEqual(["queen-ansurek", "midnight-falls"]);
   });
 });

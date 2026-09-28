@@ -325,6 +325,14 @@ export interface CharacterEvidenceRun {
   origin: EvidenceRunOrigin;
   /** The Journal raid id a `tier_search` run searches, and null otherwise. */
   tierSearchRaidId: string | null;
+  /** Why this run's Raider.IO logged-encounter reads fell short (#732). Absent when they did not. */
+  raiderIoLimitationCode?: string | null;
+  /**
+   * The run published without scanning the Warcraft Logs kill history, as a
+   * light or targeted run does. Absent when it scanned. A negative conclusion
+   * never rests on such a run.
+   */
+  killScanSkipped?: boolean;
 }
 
 /**
@@ -513,6 +521,128 @@ export type CharacterCuttingEdgeInput = Readonly<{
   completedAt: string;
 }>;
 
+export type RaiderIoLoggedEncounterRole = "tank" | "healer" | "dps";
+
+/** One raider on a Raider.IO logged encounter's roster, as stored (#732). */
+export interface RaiderIoLoggedEncounterMemberInput {
+  raiderIoCharacterId: number;
+  name: string;
+  /** The Blizzard realm slug: lower case, accents dropped, as a character key. */
+  realm: string;
+  region: string;
+  className: string;
+  specName: string;
+  role: RaiderIoLoggedEncounterRole;
+  /** Null when Raider.IO did not say; never zero. */
+  itemLevel: number | null;
+}
+
+/**
+ * Raider.IO's parsed combat log of one Mythic kill. Shared: stored once for
+ * every character and run that names it. A visible roster is kept as first
+ * read; a private one may be replaced by a later read. Never its uploaders,
+ * never the response.
+ */
+export interface RaiderIoLoggedEncounterInput {
+  loggedEncounterId: number;
+  raidSlug: string;
+  bossSlug: string;
+  pulledAt: string;
+  defeatedAt: string;
+  durationMs: number;
+  /** Null for a kill with no guild: a pug. */
+  guild: { name: string; realm: string; region: string } | null;
+  itemLevel: { average: number; min: number; max: number };
+  deathCount: number;
+  vantusCount: number;
+  rosterState: "available" | "private";
+  /** Empty when the roster is private. */
+  members: readonly RaiderIoLoggedEncounterMemberInput[];
+}
+
+export interface StoredRaiderIoLoggedEncounter extends RaiderIoLoggedEncounterInput {
+  /** ISO 8601 of the read that stored this answer. */
+  readAt: string;
+}
+
+/** Raider.IO's permanent refusals of a logged encounter: a deleted log, a 403, or a log of another kill. */
+export type RaiderIoLoggedEncounterUnavailableCode =
+  "not_found" | "private" | "schema_drift";
+
+/**
+ * A logged encounter Raider.IO answered for permanently without one. Stored
+ * so later runs do not ask again until it is due a re-read, and never over a
+ * read encounter.
+ */
+export interface RaiderIoLoggedEncounterUnavailableInput {
+  loggedEncounterId: number;
+  code: RaiderIoLoggedEncounterUnavailableCode;
+}
+
+export interface StoredRaiderIoLoggedEncounterUnavailable extends RaiderIoLoggedEncounterUnavailableInput {
+  readAt: string;
+}
+
+/** What one run learned about logged encounters, to store in one call. */
+export type RaiderIoLoggedEncounterAnswers = Readonly<{
+  encounters: readonly RaiderIoLoggedEncounterInput[];
+  unavailable: readonly RaiderIoLoggedEncounterUnavailableInput[];
+}>;
+
+/** The stored answers among some ids: read encounters and permanent refusals. */
+export type StoredRaiderIoLoggedEncounterAnswers = Readonly<{
+  encounters: readonly StoredRaiderIoLoggedEncounter[];
+  unavailable: readonly StoredRaiderIoLoggedEncounterUnavailable[];
+}>;
+
+/**
+ * A stored encounter as a dossier may show it. `members` leaves out every
+ * raider under an active suppression, so a removed character never appears on
+ * anyone's dossier; `roleCounts` counts everyone Raider.IO listed.
+ */
+export interface PublishedRaiderIoLoggedEncounter extends StoredRaiderIoLoggedEncounter {
+  roleCounts: Readonly<Record<RaiderIoLoggedEncounterRole, number>>;
+}
+
+/**
+ * One Raider.IO Mythic first kill of the run's character, as a run publishes
+ * it (#732). `read` names a stored logged encounter. `unavailable` with an id
+ * and a code is an encounter not read, and why; `unavailable` with neither is
+ * a kill Raider.IO holds no log of.
+ */
+export interface CharacterRaiderIoFirstKillInput {
+  raidSlug: string;
+  bossSlug: string;
+  /** The logged encounter's defeat once read; until then Raider.IO's first-defeated time. */
+  killedAt: string;
+  /** Raider.IO's attribution from the kill list, shown only while the log is unread. */
+  guild: { name: string; realm: string; region: string } | null;
+  loggedEncounterId: number | null;
+  encounterState: "read" | "unavailable";
+  encounterLimitationCode: string | null;
+  historicWorldRank: number | null;
+  /** When the rank was last looked up; set with a null rank too, so a checked kill is not asked about again. */
+  historicRankCheckedAt: string | null;
+}
+
+export interface StoredCharacterRaiderIoFirstKill extends CharacterRaiderIoFirstKillInput {
+  /** The stored encounter a `read` row names, as a dossier may show it; null otherwise. */
+  encounter: PublishedRaiderIoLoggedEncounter | null;
+}
+
+/** What one run hands storage about the character's Raider.IO first kills. */
+export type RaiderIoFirstKillsPublication = Readonly<{
+  kills: readonly CharacterRaiderIoFirstKillInput[];
+  /**
+   * The Raider.IO raids the run's kill-list requests answered for. A complete
+   * publish keeps stored first kills of every other raid: the run
+   * deliberately did not look there.
+   */
+  askedRaidSlugs: readonly string[];
+  /** Why the logged-encounter phase fell short, or null. Makes a partial run explicable. */
+  limitationCode: string | null;
+}>;
+
 export interface CompletedCharacterEvidence {
   run: CharacterEvidenceRun;
   /** Internal cache generation used to invalidate evidence after a parser fix. */
@@ -523,6 +653,7 @@ export interface CompletedCharacterEvidence {
   cuttingEdges: readonly CharacterCuttingEdgeInput[];
   /** True only when this run completed its Blizzard achievement phase. */
   cuttingEdgesCollected?: boolean;
+  raiderIoFirstKills?: readonly StoredCharacterRaiderIoFirstKill[];
   wipeCapable: boolean;
 }
 
@@ -734,6 +865,8 @@ export interface StagedEvidenceCollection {
   tierBests: readonly CharacterTierBestParseInput[];
   /** Blizzard cutting-edge facts collected with this run. */
   cuttingEdges?: readonly CharacterCuttingEdgeInput[];
+  /** The run's Raider.IO first kills. Absent means the run did not read them. */
+  raiderIoFirstKills?: RaiderIoFirstKillsPublication;
   /**
    * Fight URLs the run got a ranking answer about, so a republished stage
    * records the attempts it paid for rather than making the next run pay
@@ -819,6 +952,8 @@ export type EvidenceRunCost = Readonly<{
      */
     raiderIoHistoric?: number;
     raiderIoRankings?: number;
+    /** Raider.IO logged-encounter reads (#732). Absent is zero. */
+    raiderIoLoggedEncounters?: number;
     blizzardAchievements?: number;
   }>;
   /**
@@ -1011,6 +1146,11 @@ export interface EvidenceRepository {
       tierBests: readonly CharacterTierBestParseInput[];
       cuttingEdges?: readonly CharacterCuttingEdgeInput[];
       /**
+       * The run's Raider.IO first kills (#732). Absent means the run did not
+       * read the kill list, and every stored first kill is carried forward.
+       */
+      raiderIoFirstKills?: RaiderIoFirstKillsPublication;
+      /**
        * Fight URLs this run asked about and got an answer for, whatever the
        * answer was. Stamped onto those kills so a later run can tell them
        * from fights nothing has ever requested (#297); every other kill keeps
@@ -1027,6 +1167,24 @@ export interface EvidenceRepository {
       completedAt: Date;
     }
   ): Promise<void>;
+  /**
+   * Stores what a run learned about logged encounters. Outside any snapshot
+   * transaction on purpose: a reader reaches an encounter only through a
+   * published run's first kills. A visible roster is never overwritten, and
+   * a permanent refusal never overwrites a read.
+   */
+  saveRaiderIoLoggedEncounters?(
+    answers: RaiderIoLoggedEncounterAnswers,
+    readAt: Date
+  ): Promise<void>;
+  /** The stored answers among these ids, each read encounter with its whole roster. */
+  raiderIoLoggedEncounters?(
+    ids: readonly number[]
+  ): Promise<StoredRaiderIoLoggedEncounterAnswers>;
+  /** The first kills of the character's newest publication. */
+  storedRaiderIoFirstKills?(
+    key: CharacterKey
+  ): Promise<readonly CharacterRaiderIoFirstKillInput[]>;
   fail(id: string, code: string): Promise<void>;
   /**
    * Holds a finished collection so a retry republishes it rather than paying

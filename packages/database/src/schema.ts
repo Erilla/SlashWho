@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   bigserial,
   boolean,
   check,
@@ -858,6 +859,9 @@ export const characterEvidenceRuns = pgTable(
     // parses only. It is a third way to be partial, alongside the two
     // limitation codes, and the completion check below reads it as one.
     killScanSkipped: boolean("kill_scan_skipped").default(false).notNull(),
+    // A fourth way to be partial (#732): the run's Raider.IO logged-encounter
+    // reads fell short. Null for a run whose reads did not.
+    raiderIoLimitationCode: text("raiderio_limitation_code"),
     // When this run's history scan last finished cleanly. Null on a run that
     // skipped the scan or raised a scan limitation, so the newest non-null
     // value is the only thing that may license skipping the next scan.
@@ -952,15 +956,15 @@ export const characterEvidenceRuns = pgTable(
       "character_evidence_runs_publication_scope_check",
       sql`${table.publicationScope} = 'full' OR (${table.publicationScope} = 'tier' AND ${table.mode} = 'tier_search')`
     ),
-    // A partial run must name a shortfall, in one of three channels: the
-    // history scan's, the parse budget's, or a scan the run deliberately did
-    // not perform. Requiring `limitation_code` alone was the pre-#280 shape,
+    // A partial run must name a shortfall, in one of four channels: the
+    // history scan's, the parse budget's, a scan the run deliberately did
+    // not perform, or its Raider.IO logged-encounter reads (#732). Requiring `limitation_code` alone was the pre-#280 shape,
     // when a parse cap could not stand on its own; requiring either code was
     // the pre-#367 shape, which rejected a parse-only resume whose work fitted
     // inside its budget.
     check(
       "character_evidence_runs_completion_limitations_check",
-      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL OR ${table.killScanSkipped})) OR ${table.status} NOT IN ('complete', 'partial')`
+      sql`(${table.status} = 'complete' AND ${table.limitationCode} IS NULL) OR (${table.status} = 'partial' AND (${table.limitationCode} IS NOT NULL OR ${table.parseLimitationCode} IS NOT NULL OR ${table.killScanSkipped} OR ${table.raiderIoLimitationCode} IS NOT NULL)) OR ${table.status} NOT IN ('complete', 'partial')`
     )
   ]
 );
@@ -1167,9 +1171,19 @@ export const characterEvidenceRunCosts = pgTable(
      *
      * Null on a row recorded before they were counted, which is not a zero:
      * those runs did ask both providers, and nothing counted what it cost.
+     *
+     * `raiderio_historic_requests` also counts the one character profile read
+     * the logged-encounter phase may make to learn the character's Raider.IO
+     * id (#732).
      */
     raiderIoHistoricRequests: integer("raiderio_historic_requests"),
     raiderIoRankingsRequests: integer("raiderio_rankings_requests"),
+    /** Raider.IO logged-encounter reads (#732). Zero on a run that read none. */
+    raiderIoLoggedEncounterRequests: integer(
+      "raiderio_logged_encounter_requests"
+    )
+      .default(0)
+      .notNull(),
     blizzardAchievementsRequests: integer("blizzard_achievements_requests"),
     /** `CharacterGuilds`, which only a tier search reads. */
     characterGuildsRequests: integer("character_guilds_requests")
@@ -1398,6 +1412,129 @@ export const characterMythicWipes = pgTable(
     check(
       "character_mythic_wipes_guild_identity_check",
       sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL)`
+    )
+  ]
+);
+
+/**
+ * Raider.IO's answer about one logged encounter (#732): a read kill, or a
+ * permanent refusal with only its code. Shared across characters and runs; a
+ * reader reaches it only through a published run's
+ * `character_raiderio_first_kills`.
+ */
+export const raiderIoLoggedEncounters = pgTable(
+  "raiderio_logged_encounters",
+  {
+    loggedEncounterId: bigint("logged_encounter_id", { mode: "number" })
+      .primaryKey()
+      .notNull(),
+    unavailableCode: text("unavailable_code"),
+    raidSlug: text("raid_slug"),
+    bossSlug: text("boss_slug"),
+    pulledAt: timestamp("pulled_at", { withTimezone: true }),
+    defeatedAt: timestamp("defeated_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+    guildName: text("guild_name"),
+    guildRealm: text("guild_realm"),
+    guildRegion: text("guild_region"),
+    itemLevelAverage: doublePrecision("item_level_average"),
+    itemLevelMin: doublePrecision("item_level_min"),
+    itemLevelMax: doublePrecision("item_level_max"),
+    deathCount: integer("death_count"),
+    vantusCount: integer("vantus_count"),
+    rosterState: text("roster_state"),
+    readAt: timestamp("read_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    check(
+      "raiderio_logged_encounters_answer_check",
+      sql`(${table.unavailableCode} IS NULL AND ${table.raidSlug} IS NOT NULL AND ${table.bossSlug} IS NOT NULL AND ${table.pulledAt} IS NOT NULL AND ${table.defeatedAt} IS NOT NULL AND ${table.durationMs} IS NOT NULL AND ${table.itemLevelAverage} IS NOT NULL AND ${table.itemLevelMin} IS NOT NULL AND ${table.itemLevelMax} IS NOT NULL AND ${table.deathCount} IS NOT NULL AND ${table.vantusCount} IS NOT NULL AND ${table.rosterState} IS NOT NULL) OR (${table.unavailableCode} IN ('not_found', 'private', 'schema_drift') AND ${table.raidSlug} IS NULL AND ${table.bossSlug} IS NULL AND ${table.pulledAt} IS NULL AND ${table.defeatedAt} IS NULL AND ${table.durationMs} IS NULL AND ${table.guildName} IS NULL AND ${table.itemLevelAverage} IS NULL AND ${table.itemLevelMin} IS NULL AND ${table.itemLevelMax} IS NULL AND ${table.deathCount} IS NULL AND ${table.vantusCount} IS NULL AND ${table.rosterState} IS NULL)`
+    ),
+    check(
+      "raiderio_logged_encounters_roster_state_check",
+      sql`${table.rosterState} IS NULL OR ${table.rosterState} IN ('available', 'private')`
+    ),
+    check(
+      "raiderio_logged_encounters_guild_identity_check",
+      sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL AND ${table.guildRegion} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL AND ${table.guildRegion} IS NOT NULL)`
+    ),
+    check(
+      "raiderio_logged_encounters_counts_check",
+      sql`${table.durationMs} >= 0 AND ${table.deathCount} >= 0 AND ${table.vantusCount} >= 0`
+    )
+  ]
+);
+
+export const raiderIoLoggedEncounterMembers = pgTable(
+  "raiderio_logged_encounter_members",
+  {
+    loggedEncounterId: bigint("logged_encounter_id", { mode: "number" })
+      .notNull()
+      .references(() => raiderIoLoggedEncounters.loggedEncounterId, {
+        onDelete: "cascade"
+      }),
+    raiderIoCharacterId: bigint("raiderio_character_id", {
+      mode: "number"
+    }).notNull(),
+    name: text("name").notNull(),
+    // Keyed as `suppressed_characters` is, so a removed raider is left off.
+    normalizedName: text("normalized_name").notNull(),
+    realm: text("realm").notNull(),
+    region: text("region").notNull(),
+    className: text("class_name").notNull(),
+    specName: text("spec_name").notNull(),
+    role: text("role").notNull(),
+    itemLevel: doublePrecision("item_level")
+  },
+  (table) => [
+    primaryKey({
+      name: "raiderio_logged_encounter_members_pk",
+      columns: [table.loggedEncounterId, table.raiderIoCharacterId]
+    }),
+    check(
+      "raiderio_logged_encounter_members_role_check",
+      sql`${table.role} IN ('tank', 'healer', 'dps')`
+    )
+  ]
+);
+
+/** One run's Raider.IO first kills, part of its snapshot (#732). */
+export const characterRaiderIoFirstKills = pgTable(
+  "character_raiderio_first_kills",
+  {
+    evidenceRunId: uuid("evidence_run_id")
+      .notNull()
+      .references(() => characterEvidenceRuns.id, { onDelete: "cascade" }),
+    raidSlug: text("raid_slug").notNull(),
+    bossSlug: text("boss_slug").notNull(),
+    killedAt: timestamp("killed_at", { withTimezone: true }).notNull(),
+    guildName: text("guild_name"),
+    guildRealm: text("guild_realm"),
+    guildRegion: text("guild_region"),
+    loggedEncounterId: bigint("logged_encounter_id", { mode: "number" }),
+    encounterState: text("encounter_state").notNull(),
+    encounterLimitationCode: text("encounter_limitation_code"),
+    historicWorldRank: integer("historic_world_rank"),
+    historicRankCheckedAt: timestamp("historic_rank_checked_at", {
+      withTimezone: true
+    })
+  },
+  (table) => [
+    primaryKey({
+      name: "character_raiderio_first_kills_pk",
+      columns: [table.evidenceRunId, table.raidSlug, table.bossSlug]
+    }),
+    check(
+      "character_raiderio_first_kills_encounter_state_check",
+      sql`(${table.encounterState} = 'read' AND ${table.loggedEncounterId} IS NOT NULL AND ${table.encounterLimitationCode} IS NULL) OR (${table.encounterState} = 'unavailable' AND ((${table.loggedEncounterId} IS NULL AND ${table.encounterLimitationCode} IS NULL) OR (${table.loggedEncounterId} IS NOT NULL AND ${table.encounterLimitationCode} IS NOT NULL)))`
+    ),
+    check(
+      "character_raiderio_first_kills_guild_identity_check",
+      sql`(${table.guildName} IS NULL AND ${table.guildRealm} IS NULL AND ${table.guildRegion} IS NULL) OR (${table.guildName} IS NOT NULL AND ${table.guildRealm} IS NOT NULL AND ${table.guildRegion} IS NOT NULL)`
+    ),
+    check(
+      "character_raiderio_first_kills_historic_world_rank_check",
+      sql`${table.historicWorldRank} IS NULL OR ${table.historicWorldRank} > 0`
     )
   ]
 );

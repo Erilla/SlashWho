@@ -2,8 +2,10 @@ import { parsePerformanceValues } from "../mappers";
 import type {
   CharacterMythicKillInput,
   CharacterMythicWipeInput,
+  CharacterRaiderIoFirstKillInput,
   CharacterTierBestParseInput,
   EvidenceRepository,
+  RaiderIoFirstKillsPublication,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe
 } from "../repositories";
@@ -227,4 +229,72 @@ export function mergePublishedEvidence(
     wipes: [...wipes.values()],
     tierBests: [...tierBests.values()]
   };
+}
+
+const firstKillKey = (kill: CharacterRaiderIoFirstKillInput) =>
+  `${kill.raidSlug}\0${kill.bossSlug}`;
+
+function mergeFirstKill(
+  previous: CharacterRaiderIoFirstKillInput,
+  incoming: CharacterRaiderIoFirstKillInput
+): CharacterRaiderIoFirstKillInput {
+  // A logged encounter never changes, so one already read is never lost to a
+  // later read that failed.
+  const keepRead =
+    previous.encounterState === "read" &&
+    incoming.encounterState !== "read" &&
+    previous.loggedEncounterId === incoming.loggedEncounterId;
+  return {
+    ...incoming,
+    ...(keepRead
+      ? {
+          killedAt: previous.killedAt,
+          encounterState: "read" as const,
+          encounterLimitationCode: null
+        }
+      : {}),
+    historicWorldRank: incoming.historicWorldRank ?? previous.historicWorldRank,
+    historicRankCheckedAt:
+      incoming.historicRankCheckedAt ?? previous.historicRankCheckedAt
+  };
+}
+
+/**
+ * The Raider.IO first kills one publish writes: the character's whole set,
+ * merged. The rules follow `mergePublishedEvidence`: a run that did not read
+ * the kill list, a partial run and a targeted one carry everything forward; a
+ * complete one keeps what it found again plus every raid it did not ask
+ * about. A Raider.IO first kill never touches a Warcraft Logs kill.
+ */
+export function mergeRaiderIoFirstKills(
+  stored: readonly CharacterRaiderIoFirstKillInput[],
+  input: RaiderIoFirstKillsPublication | undefined,
+  state: "complete" | "partial",
+  targeted: boolean
+): CharacterRaiderIoFirstKillInput[] {
+  const merged = new Map<string, CharacterRaiderIoFirstKillInput>();
+  const asked = new Set(input?.askedRaidSlugs ?? []);
+  for (const kill of stored) {
+    const carried =
+      input === undefined ||
+      targeted ||
+      state === "partial" ||
+      !asked.has(kill.raidSlug);
+    if (carried) merged.set(firstKillKey(kill), kill);
+  }
+  if (input !== undefined && !targeted) {
+    const previous = new Map(stored.map((kill) => [firstKillKey(kill), kill]));
+    for (const kill of input.kills) {
+      const before = previous.get(firstKillKey(kill));
+      merged.set(
+        firstKillKey(kill),
+        before === undefined ? kill : mergeFirstKill(before, kill)
+      );
+    }
+  }
+  return [...merged.values()].sort(
+    (a, b) =>
+      a.killedAt.localeCompare(b.killedAt) ||
+      firstKillKey(a).localeCompare(firstKillKey(b))
+  );
 }
