@@ -120,6 +120,16 @@ export {
 } from "./throttle-attribution";
 export type { ThrottledProvider, ThrottleUnit } from "./throttle-attribution";
 export { measuredRepositories } from "./measured-repositories";
+export {
+  compareByLevelThenKey,
+  legacyResolveSubjects
+} from "./dossier-subjects";
+export type {
+  DossierSubject,
+  RankedSubject,
+  ResolvedSubjects,
+  SubjectRepositories
+} from "./dossier-subjects";
 export { queueWaitMs } from "./queue-wait";
 export { createRateLimiter } from "./rate-limit";
 export type {
