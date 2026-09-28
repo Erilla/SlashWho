@@ -578,6 +578,129 @@ describe("character connections: observation writes", () => {
     });
   });
 
+  async function groupOf(key: CharacterKey): Promise<string | undefined> {
+    const result = await pool.query<{ group_id: string }>(
+      `SELECT member.group_id FROM character_group_members member JOIN characters c ON c.id = member.character_id
+         WHERE c.region = $1 AND c.realm_slug = $2 AND c.normalized_name = $3`,
+      [key.region, key.realm, key.name]
+    );
+    return result.rows[0]?.group_id;
+  }
+
+  describe("group recompute, maintenance pass and rebuild", () => {
+    it("merges into one group after a write, then splits when a link is retracted", async () => {
+      const first = await publishedRun();
+      const written = await connections().writeObservations({
+        runId: first,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: [
+              { key: altKey, source: "claimed" },
+              { key: thirdKey, source: "claimed" }
+            ]
+          }
+        ]
+      });
+      await connections().recomputeGroupsOf(written.changedCharacterIds);
+      expect(await groupOf(altKey)).toBe(await groupOf(rootKey));
+      expect(await groupOf(thirdKey)).toBe(await groupOf(rootKey));
+
+      const second = await publishedRun([
+        observation(rootKey, "Ryii"),
+        observation(altKey, "Alt", "claimed")
+      ]);
+      const retracted = await connections().writeObservations({
+        runId: second,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          }
+        ]
+      });
+      await connections().recomputeGroupsOf(retracted.changedCharacterIds);
+      expect(await groupOf(thirdKey)).not.toBe(await groupOf(rootKey));
+      const stamps = await pool.query<{ fresh: boolean }>(
+        `SELECT recomputed_at >= now() - interval '1 minute' AS fresh FROM character_groups`
+      );
+      expect(stamps.rows.every((row) => row.fresh)).toBe(true);
+    });
+
+    it("counts a manual connection as a link, excluded or not", async () => {
+      await publishedRun([observation(rootKey, "Ryii")]);
+      await publishedRunFor(altKey, [observation(altKey, "Alt")]);
+      await repositories.manualConnections.add(rootKey, altKey);
+      const ids = await pool.query<{ id: string }>(`SELECT id FROM characters`);
+      await connections().recomputeGroupsOf(ids.rows.map((row) => row.id));
+      expect(await groupOf(altKey)).toBe(await groupOf(rootKey));
+    });
+
+    it("recomputes every group in a pass, stops at its budget, and records a full cycle", async () => {
+      await publishedRun();
+      const first = await connections().recomputePass({ budgetMs: 30_000 });
+      expect(first.cycleCompleted).toBe(true);
+      const state = await pool.query(
+        `SELECT cursor_group_id, last_cycle_completed_at IS NOT NULL AS completed, last_cycle_started_at <= last_cycle_completed_at AS ordered FROM character_groups_maintenance`
+      );
+      expect(state.rows[0]).toMatchObject({
+        cursor_group_id: null,
+        completed: true,
+        ordered: true
+      });
+      const partial = await connections().recomputePass({ budgetMs: 0 });
+      expect(partial.cycleCompleted).toBe(false);
+    });
+
+    it("rebuilds from snapshots under the exclusive lock, excluding concurrent writes", async () => {
+      // Break caught: a write interleaving with the rebuild's delete and
+      // re-insert left observations the ledger could not explain.
+      const runId = await publishedRun();
+      const hold = await pool.connect();
+      try {
+        await hold.query("BEGIN");
+        await hold.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended('character-groups-rebuild', 0))"
+        );
+        await expect(
+          connections().writeObservations({
+            runId,
+            observerKey: rootKey,
+            families: [
+              {
+                family: "raiderio",
+                decision: "added_only",
+                reason: "raiderio_limited",
+                sweepReservationId: null,
+                observed: [{ key: altKey, source: "claimed" }]
+              }
+            ]
+          })
+        ).rejects.toThrow(/lock timeout/);
+      } finally {
+        await hold.query("ROLLBACK");
+        hold.release();
+      }
+      const rebuilt = await connections().rebuild();
+      expect(rebuilt.groups).toBeGreaterThan(0);
+      const ledger = await pool.query(
+        `SELECT DISTINCT reason, decision FROM character_connection_write_log`
+      );
+      expect(ledger.rows).toContainEqual({
+        reason: "rebuild",
+        decision: "replaced"
+      });
+    });
+  });
+
   describe("failure paths", () => {
     it("rejects a missing run id and writes nothing", async () => {
       await expect(

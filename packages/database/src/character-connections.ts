@@ -1,11 +1,14 @@
 import type { Pool, PoolClient } from "pg";
 import {
+  assignGroupIds,
   canonicalCharacterId,
+  components,
   familyOf,
   type CharacterKey,
   type ConnectionFamily,
   type ObservationSource
 } from "@slashwho/domain";
+import { REBUILD_SQL } from "./character-groups-backfill-sql";
 import type {
   CharacterConnectionRepository,
   FamilyObservationWrite,
@@ -232,18 +235,229 @@ export function createCharacterConnectionRepositories(
         return { changedCharacterIds: [...changed].sort(), unknownCharacters };
       });
     },
-    recomputeGroupsOf() {
-      return Promise.reject(new Error("not_implemented"));
+    async recomputeGroupsOf(seedIds) {
+      const done = new Set<string>();
+      for (const seed of seedIds) {
+        if (done.has(seed)) continue;
+        const members = await withTransaction(pool, async (client) => {
+          await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+          await lockRebuildShared(client);
+          await lockGroups(client);
+          return recomputeComponent(client, seed);
+        });
+        for (const id of members) done.add(id);
+      }
     },
-    recomputePass() {
-      return Promise.reject(new Error("not_implemented"));
+
+    async recomputePass({ budgetMs }) {
+      const startedAt = Date.now();
+      let groupsRecomputed = 0;
+      for (;;) {
+        const step = await withTransaction(pool, async (client) => {
+          await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+          await lockRebuildShared(client);
+          await lockGroups(client);
+          const state = await client.query<{ cursor_group_id: string | null }>(
+            `UPDATE character_groups_maintenance
+             SET cycle_started_at = COALESCE(cycle_started_at, now())
+             WHERE id = 1 RETURNING cursor_group_id`
+          );
+          const cursor = state.rows[0]?.cursor_group_id ?? null;
+          // Ungrouped characters first (new since the last pass), then groups in id order.
+          const ungrouped = await client.query<{ id: string }>(
+            `SELECT c.id FROM characters c LEFT JOIN character_group_members m ON m.character_id = c.id
+             WHERE m.character_id IS NULL ORDER BY c.id LIMIT 1`
+          );
+          if (ungrouped.rows[0]) {
+            await recomputeComponent(client, ungrouped.rows[0].id);
+            return { done: false };
+          }
+          const next = await client.query<{ id: string; seed: string }>(
+            `SELECT g.id, (SELECT character_id FROM character_group_members WHERE group_id = g.id ORDER BY character_id LIMIT 1) AS seed
+             FROM character_groups g WHERE $1::uuid IS NULL OR g.id > $1::uuid ORDER BY g.id LIMIT 1`,
+            [cursor]
+          );
+          const group = next.rows[0];
+          if (!group) {
+            await client.query(
+              `UPDATE character_groups_maintenance
+               SET last_cycle_started_at = cycle_started_at, last_cycle_completed_at = now(),
+                   cycle_started_at = NULL, cursor_group_id = NULL
+               WHERE id = 1`
+            );
+            return { done: true };
+          }
+          if (group.seed) await recomputeComponent(client, group.seed);
+          await client.query(
+            `UPDATE character_groups_maintenance SET cursor_group_id = $1 WHERE id = 1`,
+            [group.id]
+          );
+          return { done: false };
+        });
+        if (step.done) return { groupsRecomputed, cycleCompleted: true };
+        groupsRecomputed += 1;
+        if (Date.now() - startedAt >= budgetMs)
+          return { groupsRecomputed, cycleCompleted: false };
+      }
     },
-    rebuild() {
-      return Promise.reject(new Error("not_implemented"));
+
+    async rebuild() {
+      return withTransaction(pool, async (client) => {
+        await lockRebuildExclusive(client);
+        await lockGroups(client);
+        await client.query(`DELETE FROM character_connections WHERE kind = 'observed'`);
+        await client.query(`DELETE FROM character_connection_writes`);
+        await client.query(`DELETE FROM character_groups`);
+        await client.query(REBUILD_SQL.pinLatest);
+        await client.query(REBUILD_SQL.pinSwept);
+        await client.query(REBUILD_SQL.raiderio);
+        await client.query(REBUILD_SQL.fingerprint);
+        await client.query(REBUILD_SQL.markerAndLedger);
+        await client.query(REBUILD_SQL.groups);
+        const counts = await client.query<{
+          observers: string;
+          links: string;
+          groups: string;
+        }>(
+          `SELECT (SELECT count(*) FROM character_connection_writes)::text AS observers,
+                  (SELECT count(*) FROM character_connections WHERE kind = 'observed')::text AS links,
+                  (SELECT count(*) FROM character_groups)::text AS groups`
+        );
+        const row = counts.rows[0]!;
+        return {
+          observers: Number(row.observers),
+          links: Number(row.links),
+          groups: Number(row.groups)
+        };
+      });
     }
   };
   return { characterConnections };
 }
+
+/**
+ * Recompute the component containing `seed`: load it through counting links,
+ * split or merge against the stored groups, and write the result. Returns
+ * every character visited.
+ */
+async function recomputeComponent(
+  client: PoolClient,
+  seed: string
+): Promise<string[]> {
+  const visited = new Set<string>([seed]);
+  const links: { a: string; b: string }[] = [];
+  let frontier = [seed];
+  while (frontier.length > 0) {
+    const edges = await client.query<{ a: string; b: string }>(
+      COUNTING_LINKS_FROM,
+      [frontier]
+    );
+    const next: string[] = [];
+    for (const edge of edges.rows) {
+      links.push(edge);
+      for (const id of [edge.a, edge.b]) {
+        if (!visited.has(id)) {
+          visited.add(id);
+          next.push(id);
+        }
+      }
+    }
+    frontier = next;
+  }
+  // The component may have been larger before: include the old group's other
+  // members so a split assigns them too.
+  const old = await client.query<{ character_id: string; group_id: string }>(
+    `SELECT character_id, group_id FROM character_group_members
+     WHERE group_id IN (SELECT group_id FROM character_group_members WHERE character_id = ANY($1))`,
+    [[...visited]]
+  );
+  const nodes = new Set([
+    ...visited,
+    ...old.rows.map((row) => row.character_id)
+  ]);
+  const extraLinks = old.rows.some((row) => !visited.has(row.character_id))
+    ? (
+        await client.query<{ a: string; b: string }>(COUNTING_LINKS_FROM, [
+          [...nodes].filter((id) => !visited.has(id))
+        ])
+      ).rows
+    : [];
+  const parts = components(
+    nodes,
+    [...links, ...extraLinks].filter(
+      (link) => nodes.has(link.a) && nodes.has(link.b)
+    )
+  );
+  const membership = new Map(
+    old.rows.map((row) => [row.character_id, row.group_id])
+  );
+  const groupRows = await client.query<{ id: string; created_at: Date }>(
+    `SELECT id, created_at FROM character_groups WHERE id = ANY($1)`,
+    [[...new Set(membership.values())]]
+  );
+  const groups = new Map(
+    groupRows.rows.map((row) => [
+      row.id,
+      { id: row.id, createdAt: row.created_at }
+    ])
+  );
+  const { assignments, deletedGroupIds } = assignGroupIds(
+    parts,
+    membership,
+    groups
+  );
+  for (const assignment of assignments) {
+    const groupId =
+      assignment.groupId ??
+      (
+        await client.query<{ id: string }>(
+          `INSERT INTO character_groups DEFAULT VALUES RETURNING id`
+        )
+      ).rows[0]!.id;
+    await client.query(
+      `UPDATE character_groups SET recomputed_at = now() WHERE id = $1`,
+      [groupId]
+    );
+    await client.query(
+      `INSERT INTO character_group_members (character_id, group_id) SELECT unnest($1::uuid[]), $2
+       ON CONFLICT (character_id) DO UPDATE SET group_id = EXCLUDED.group_id`,
+      [assignment.members, groupId]
+    );
+  }
+  if (deletedGroupIds.length > 0) {
+    await client.query(`DELETE FROM character_groups WHERE id = ANY($1)`, [
+      deletedGroupIds
+    ]);
+  }
+  return [...nodes];
+}
+
+/**
+ * Counting links touching any of $1:
+ * - observed links, except pairs that have a rejection row;
+ * - every resolved manual connection, excluded or not.
+ * In phase 1 nothing writes rejections; honouring them now keeps a phase 3
+ * rollback safe.
+ */
+const COUNTING_LINKS_FROM = `
+  SELECT connection.character_low_id AS a, connection.character_high_id AS b
+  FROM character_connections connection
+  WHERE connection.kind = 'observed'
+    AND (connection.character_low_id = ANY($1) OR connection.character_high_id = ANY($1))
+    AND NOT EXISTS (
+      SELECT 1 FROM character_connections rejection
+      WHERE rejection.kind = 'rejected'
+        AND rejection.character_low_id = connection.character_low_id
+        AND rejection.character_high_id = connection.character_high_id
+    )
+  UNION
+  SELECT manual.root_character_id, target.id
+  FROM manual_dossier_connections manual
+  JOIN characters target ON target.region = manual.connected_region
+    AND target.realm_slug = manual.connected_realm_slug
+    AND target.normalized_name = manual.connected_normalized_name
+  WHERE target.id <> manual.root_character_id
+    AND (manual.root_character_id = ANY($1) OR target.id = ANY($1))`;
 
 async function logWrite(
   client: PoolClient,
