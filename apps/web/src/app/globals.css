@@ -1148,7 +1148,7 @@ a {
 }
 
 .dossier-guild-timeline-bar {
-  cursor: default;
+  cursor: pointer;
   outline: none;
 }
 
@@ -1159,6 +1159,7 @@ a {
 }
 
 .dossier-guild-timeline-current {
+  cursor: pointer;
   outline: none;
 }
 
@@ -1173,10 +1174,10 @@ a {
   pointer-events: none;
 }
 
-/* Beside a current-guild ring, on the page rather than on a bar. */
+/* Beside a current-guild ring, on the page rather than on a bar. It takes the
+   pointer, so the name opens the ring's menu as the ring does. */
 .dossier-guild-timeline-ring-label {
   fill: var(--text);
-  pointer-events: none;
 }
 
 /* Above the timeline rather than over it, growing upwards however long the

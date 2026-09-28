@@ -86,7 +86,7 @@ it("draws a bar per guild seen on more than one raid night", () => {
       today="2026-09-26"
     />
   );
-  const bars = screen.getAllByRole("img", { name: /raid night/ });
+  const bars = screen.getAllByRole("button", { name: /raid night/ });
   expect(bars.map((bar) => bar.getAttribute("aria-label"))).toEqual([
     expect.stringMatching(
       /^SeriouslyCasual\. 8 Mar 2023 to 10 Dec 2023\. 3 raid nights: Ryun/
@@ -106,7 +106,7 @@ it("shows the details in a tooltip on hover and on focus", () => {
       today="2026-09-26"
     />
   );
-  const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
   const nightsLine = () =>
     document.querySelector(".dossier-guild-timeline-tooltip span")?.textContent;
   fireEvent.mouseEnter(casualBar!);
@@ -132,7 +132,7 @@ it("opens a bar's guild on Raider.IO or Warcraft Logs from its context menu", ()
       today="2026-09-26"
     />
   );
-  const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
   expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   // fireEvent returns false when the handler cancels the event, which is
   // what keeps the browser's own menu from opening over the timeline's.
@@ -156,6 +156,15 @@ it("opens a bar's guild on Raider.IO or Warcraft Logs from its context menu", ()
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   }
+  // Each site's official, unaltered mark (docs/brand-assets.md).
+  expect(raiderIo.querySelector("img")).toHaveAttribute(
+    "src",
+    "/brand/raiderio-mark.png"
+  );
+  expect(warcraftLogs.querySelector("img")).toHaveAttribute(
+    "src",
+    "/brand/warcraft-logs-mark.png"
+  );
   // A menu and a tooltip would compete for the same few lines of detail.
   expect(
     document.querySelector(".dossier-guild-timeline-tooltip")
@@ -172,7 +181,7 @@ it("works a bar's context menu from the keyboard", () => {
       today="2026-09-26"
     />
   );
-  const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
   casualBar!.focus();
   fireEvent.contextMenu(casualBar!);
   const [raiderIo, warcraftLogs] = screen.getAllByRole("menuitem");
@@ -186,6 +195,103 @@ it("works a bar's context menu from the keyboard", () => {
   fireEvent.keyDown(warcraftLogs!, { key: "Escape" });
   expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   expect(casualBar).toHaveFocus();
+  // Back on its bar, the focus tooltip returns with it.
+  expect(
+    document.querySelector(".dossier-guild-timeline-tooltip")?.textContent
+  ).toContain("3 raid nights: Ryun");
+});
+
+it("returns focus to the bar when a menu link is chosen from the keyboard", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
+  casualBar!.focus();
+  fireEvent.contextMenu(casualBar!);
+  // Enter on a link is a click with no pointer behind it, so detail is 0.
+  fireEvent.click(screen.getAllByRole("menuitem")[0]!, { detail: 0 });
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  expect(casualBar).toHaveFocus();
+  fireEvent.contextMenu(casualBar!);
+  // A pointer click leaves focus where the pointer put it.
+  fireEvent.click(screen.getAllByRole("menuitem")[0]!, { detail: 1 });
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  expect(casualBar).not.toHaveFocus();
+});
+
+it("opens and closes a bar's menu with a click", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
+  expect(casualBar).toHaveAttribute("aria-haspopup", "menu");
+  expect(casualBar).toHaveAttribute("aria-expanded", "false");
+  fireEvent.pointerDown(casualBar!);
+  fireEvent.click(casualBar!);
+  expect(
+    screen.getByRole("menu", { name: "Links for SeriouslyCasual" })
+  ).toBeVisible();
+  expect(casualBar).toHaveAttribute("aria-expanded", "true");
+  // A second press on the same bar is its own click, not an outside one.
+  fireEvent.pointerDown(casualBar!);
+  fireEvent.click(casualBar!);
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  expect(casualBar).toHaveAttribute("aria-expanded", "false");
+});
+
+it("opens a bar's menu with Enter or Space", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
+  for (const key of ["Enter", " "]) {
+    casualBar!.focus();
+    expect(fireEvent.keyDown(casualBar!, { key })).toBe(false);
+    expect(screen.getAllByRole("menuitem")[0]).toHaveFocus();
+    fireEvent.keyDown(screen.getAllByRole("menuitem")[0]!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  }
+});
+
+it("opens a current guild's ring on Raider.IO or Warcraft Logs", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const ring = screen.getByRole("button", { name: /^Rancour today/ });
+  expect(ring).toHaveAttribute("aria-haspopup", "menu");
+  fireEvent.click(ring);
+  const menu = screen.getByRole("menu", { name: "Links for Rancour" });
+  expect(
+    within(menu).getByRole("menuitem", { name: /on Raider\.IO/ })
+  ).toHaveAttribute("href", "https://raider.io/guilds/eu/draenor/Rancour");
+  expect(
+    within(menu).getByRole("menuitem", { name: /on Warcraft Logs/ })
+  ).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/guild/eu/draenor/Rancour"
+  );
+  fireEvent.click(ring);
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  expect(fireEvent.contextMenu(ring)).toBe(false);
+  expect(screen.getByRole("menu", { name: "Links for Rancour" })).toBeVisible();
+  fireEvent.keyDown(screen.getAllByRole("menuitem")[0]!, { key: "Escape" });
+  expect(ring).toHaveFocus();
 });
 
 it("closes a bar's context menu on a click elsewhere or a scroll", () => {
@@ -196,7 +302,7 @@ it("closes a bar's context menu on a click elsewhere or a scroll", () => {
       today="2026-09-26"
     />
   );
-  const [casualBar, rancourBar] = screen.getAllByRole("img", {
+  const [casualBar, rancourBar] = screen.getAllByRole("button", {
     name: /raid night/
   });
   fireEvent.contextMenu(casualBar!);
@@ -300,14 +406,14 @@ const tooltip = () =>
 it("shows every tooltip above the frame, whatever its lane, when it fits under the header", () => {
   withPage({ headerBottom: 112, frameTop: 400, tooltipHeight: 60 }, () => {
     renderTwoLanes();
-    const bars = screen.getAllByRole("img", { name: /raid night/ });
+    const bars = screen.getAllByRole("button", { name: /raid night/ });
     const lanes = new Set(
       bars.map((bar) => bar.querySelector("rect")!.getAttribute("y"))
     );
     expect(lanes.size).toBeGreaterThan(1);
     const targets = [
       ...bars,
-      ...screen.getAllByRole("img", { name: / today\./ }),
+      ...screen.getAllByRole("button", { name: / today\./ }),
       document.querySelector(".dossier-guild-timeline-band")!
     ];
     for (const target of targets) {
@@ -330,7 +436,7 @@ it("puts a tooltip back beside its bar when the header leaves no room above the 
   // 112 + 60 + the gap does not fit above a frame starting at 150.
   withPage({ headerBottom: 112, frameTop: 150, tooltipHeight: 60 }, () => {
     renderTwoLanes();
-    const bars = screen.getAllByRole("img", { name: /raid night/ });
+    const bars = screen.getAllByRole("button", { name: /raid night/ });
     const lower = bars.reduce((lowest, bar) =>
       Number(bar.querySelector("rect")!.getAttribute("y")) >
       Number(lowest.querySelector("rect")!.getAttribute("y"))
@@ -356,7 +462,7 @@ it("moves an open tooltip above the frame once the page scrolls it clear of the 
     },
     () => {
       renderTwoLanes();
-      const [bar] = screen.getAllByRole("img", { name: /raid night/ });
+      const [bar] = screen.getAllByRole("button", { name: /raid night/ });
       act(() => bar!.focus());
       expect(tooltip()).toHaveClass("dossier-guild-timeline-tooltip--below");
       frameTop = 400;
@@ -417,7 +523,7 @@ it("keeps a focused bar's tooltip when focus scrolls the bar into view", () => {
       get: () => 500,
       set: () => {}
     });
-    const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+    const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
     const barX = Number(casualBar!.querySelector("rect")!.getAttribute("x"));
     act(() => casualBar!.focus());
     // Focusing it makes the browser scroll it into view, after `focus`.
@@ -442,7 +548,7 @@ it("hides a hovered bar's tooltip when the timeline scrolls", () => {
     const region = screen.getByRole("region", {
       name: "Guild history timeline, scrolls horizontally"
     });
-    const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+    const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
     fireEvent.mouseEnter(casualBar!);
     scrollTo(region, 10);
     expect(
@@ -461,7 +567,7 @@ it("colours the tooltip's character names by class", () => {
       />
     </DossierCharacterProvider>
   );
-  const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  const [casualBar] = screen.getAllByRole("button", { name: /raid night/ });
   fireEvent.mouseEnter(casualBar!);
   const name = screen.getByText("Ryun", {
     selector: ".dossier-guild-timeline-tooltip .dossier-character-name"
@@ -552,13 +658,13 @@ it("scrolls horizontally in a keyboard-reachable region", () => {
 
 function currentMarkers() {
   const ring = (guild: string) =>
-    screen.getByRole("img", {
+    screen.getByRole("button", {
       name: `${guild} today. 1 character in the latest snapshot`
     });
   const barY = (guild: string) =>
     Number(
       screen
-        .getByRole("img", { name: new RegExp(`^${guild}\\. .*raid night`) })
+        .getByRole("button", { name: new RegExp(`^${guild}\\. .*raid night`) })
         .querySelector("rect")
         ?.getAttribute("y")
     );
@@ -623,7 +729,9 @@ it("gives a current guild's marker its own named row when a later guild ends its
 it("keeps a guild's colour when a character is hidden", () => {
   const colourOf = (name: string) =>
     screen
-      .getAllByRole("img", { name: new RegExp(`^${name}\\. .*raid night`) })[0]
+      .getAllByRole("button", {
+        name: new RegExp(`^${name}\\. .*raid night`)
+      })[0]
       ?.querySelector("rect")
       ?.getAttribute("fill");
   const { rerender } = render(
@@ -656,11 +764,11 @@ it("leaves out hidden characters' nights", () => {
   );
   expect(
     screen
-      .getAllByRole("img", { name: /raid night/ })
+      .getAllByRole("button", { name: /raid night/ })
       .map((bar) => bar.getAttribute("aria-label")?.split(".")[0])
   ).toEqual(["Rancour"]);
   expect(
-    screen.queryByRole("img", { name: /^SeriouslyCasual today/ })
+    screen.queryByRole("button", { name: /^SeriouslyCasual today/ })
   ).not.toBeInTheDocument();
 });
 
