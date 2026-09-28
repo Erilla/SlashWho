@@ -546,6 +546,38 @@ nearly all of them duplicate copies. On one tier with no `rankedCharacters`
 at all (2017), a read of each ranked fight became a read of each report: 73
 reads to 48.
 
+### Reports that rank nobody (#742)
+
+Logs from before `rankedCharacters` existed answer it with `null`: all 48
+of one character's Tomb of Sargeras reports did (July to November 2017).
+Nothing in those reports names the character by id. The ranking does. It is
+asked for by the character's Warcraft Logs id and names the report and fight,
+so the character was one of that fight's players. Such a report is proved
+through the ranked fight instead:
+
+- **The actor** is the one player in the ranked fight's `friendlyPlayers`
+  carrying a name the character is known by, whose `friendlySpecs` entry is
+  the spec the ranking gives. Known names are the current one, the linked
+  historic aliases, and any name the walk has already proved by canonical id.
+  Two players with known names, a different spec, or no known name at all
+  prove nothing, and credit nothing.
+- **Any ranked fight can prove it.** A report that ranks nobody and is not
+  proved yet stays in memory for the rest of the zone, so another boss's or
+  the other metric's ranking of it is decoded again without a second read.
+  The kills credited do not depend on which boss the walk reached first.
+- **What it credits** once proved is what a proved report always credits:
+  every kill of the zone's ranked encounters that the actor was in.
+- **Stopping:** once three reports that rank nobody have credited nothing, and
+  the walk has accepted no kill, it reads no more reports. The count runs
+  across the whole walk, partitions included, and restarts when a capped walk
+  resumes.
+
+Measured live on 2026-09-28 (one character in Tomb, serial requests): all
+73 ranked fights held exactly one player with the character's former name
+and the ranked spec, and none held the current name. With the former name
+linked, the walk credited 154 kills in all 48 reports, up from none. Without
+it, the walk read 3 reports instead of 48, about 95 points less a press.
+
 Before #733, a press searched every connected character's guilds whether or
 not they raided the tier. From 25 to 28 September 2026 that was 406 attendance
 pages, about 10,000 points, and not one report hydrated: 13 of the 14

@@ -6947,6 +6947,11 @@ describe("searching one tier from the dossier", () => {
     expect(options.tierSearch).toMatchObject({
       formerNames: [{ name: "erilla", realm: "neptulon" }]
     });
+    // And the ranked walk: a report that ranks nobody is proved by the name
+    // on its ranked fight (#742).
+    expect(options.rankedBackfill).toMatchObject({
+      formerNames: [{ name: "erilla", realm: "neptulon" }]
+    });
   });
 
   it("ignores the tier's parse marks for the one run", async () => {

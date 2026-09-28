@@ -15,6 +15,7 @@ import type {
 import {
   nonEmptyString,
   nonNegativeInteger,
+  normalizedRealm,
   positiveInteger,
   record
 } from "./primitives";
@@ -244,19 +245,27 @@ export function decodedUnderRankedName(
  * check on the one fight a read was for; applied to that fight alone, it made
  * the kills a read credits depend on which boss the walk reached first. A
  * spec the log records differently makes the kill no less the character's.
+ *
+ * A report that ranks nobody (`rankedCharacters: null`, as 2017 logs do) is
+ * proved by the ranking instead: see `actorProvedByRanking` (#742).
  */
 export function decodedRankedKills(
   value: unknown,
   expected: {
     code: string;
-    /** The ranked fight that led here. */
-    ranked: Readonly<{ fightId: number }>;
+    /** The ranked fight that led here, and the spec it was ranked as. */
+    ranked: Readonly<{ fightId: number; spec?: string }>;
     zoneId: number;
     /** The zone's encounters the character is ranked on. */
     encounterIds: readonly number[];
     characterId: number;
     journalRaidId: string;
     region: CharacterKey["region"];
+    /**
+     * The names, with realm slug, the character is known to have raided
+     * under: the current one, linked former ones, and any the walk proved.
+     */
+    knownNames: readonly Readonly<{ name: string; realm: string }>[];
   }
 ): readonly WarcraftLogsFirstKillEvidence[] | WarcraftLogsLimitation {
   const report = record(record(record(value)?.data)?.reportData)?.report;
@@ -270,22 +279,56 @@ export function decodedRankedKills(
     return { kind: "limitation", code: "schema_drift" };
   const ranked = entry.rankedCharacters;
   const actors = record(entry.masterData)?.actors;
-  if (ranked === null) return [];
   // The ranking named this fight a Mythic kill of this report. A kills-only
   // read that leaves it out is not the report the ranking described.
-  if (
-    !fights.some(
-      (fight) => positiveInteger(record(fight)?.id) === expected.ranked.fightId
-    )
-  )
+  const rankedFight = fights
+    .map(record)
+    .find((fight) => positiveInteger(fight?.id) === expected.ranked.fightId);
+  if (!rankedFight) return { kind: "limitation", code: "schema_drift" };
+  if (!Array.isArray(actors))
     return { kind: "limitation", code: "schema_drift" };
-  if (!Array.isArray(ranked) || !Array.isArray(actors))
-    return { kind: "limitation", code: "schema_drift" };
+  const alias =
+    ranked === null
+      ? actorProvedByRanking(rankedFight, actors, expected)
+      : Array.isArray(ranked)
+        ? actorProvedByCanonicalId(ranked, actors, expected)
+        : undefined;
+  if (alias === undefined) return { kind: "limitation", code: "schema_drift" };
+  if (alias === null) return [];
+  const decoded = decodedHydratedReport(value, alias);
+  if (decoded.kind !== "evidence") return decoded;
+  if (decoded.limitation) return decoded.limitation;
+  const encounters = new Set(expected.encounterIds.map(String));
+  return decoded.kills.filter(
+    (kill) =>
+      kill.reportCode === expected.code &&
+      encounters.has(kill.bossId) &&
+      kill.difficulty === MYTHIC_DIFFICULTY &&
+      // A combined zone's fights name no raid, so the boss has to place them.
+      lookupRaidForEvidence(kill)?.raidId === expected.journalRaidId &&
+      currentContentEligibilityByRaidId(
+        kill.killedAt,
+        expected.journalRaidId
+      ) === true
+  );
+}
+
+/**
+ * The report's actor for the character, proved by the report's own
+ * `rankedCharacters`: the one entry with the character's canonical id, and
+ * the one actor that entry's name and server describe. Null when either is
+ * missing or ambiguous.
+ */
+function actorProvedByCanonicalId(
+  ranked: readonly unknown[],
+  actors: readonly unknown[],
+  expected: Readonly<{ characterId: number; region: CharacterKey["region"] }>
+): CharacterKey | null {
   const identities = ranked.map(record);
   const canonical = identities.filter(
     (item) => positiveInteger(item?.canonicalID) === expected.characterId
   );
-  if (canonical.length !== 1) return [];
+  if (canonical.length !== 1) return null;
   const same = (
     item: Record<string, unknown> | null,
     actor: Record<string, unknown> | null
@@ -310,27 +353,77 @@ export function decodedRankedKills(
         same(canonical[0]!, actor) &&
         identities.filter((item) => same(item, actor)).length === 1
     );
-  if (matches.length !== 1) return [];
+  if (matches.length !== 1) return null;
   const actor = matches[0]!;
-  const alias = {
+  return {
     region: expected.region,
     realm: String(actor.server).toLocaleLowerCase("en-US"),
     name: String(actor.name).toLocaleLowerCase("en-US")
-  } as CharacterKey;
-  const decoded = decodedHydratedReport(value, alias);
-  if (decoded.kind !== "evidence") return decoded;
-  if (decoded.limitation) return decoded.limitation;
-  const encounters = new Set(expected.encounterIds.map(String));
-  return decoded.kills.filter(
-    (kill) =>
-      kill.reportCode === expected.code &&
-      encounters.has(kill.bossId) &&
-      kill.difficulty === MYTHIC_DIFFICULTY &&
-      // A combined zone's fights name no raid, so the boss has to place them.
-      lookupRaidForEvidence(kill)?.raidId === expected.journalRaidId &&
-      currentContentEligibilityByRaidId(
-        kill.killedAt,
-        expected.journalRaidId
-      ) === true
+  };
+}
+
+/**
+ * The report's actor for the character, proved by the ranking alone, for a
+ * report that ranks nobody (#742). The ranking is the character's own, asked
+ * for by Warcraft Logs id, and it names this fight, so the character was one
+ * of its players. The one player there carrying a name the character is
+ * known by, and logged as the spec the ranking gives, is them.
+ *
+ * A name nobody knows proves nothing: a character renamed since raided under
+ * a name only a link, or another report's `rankedCharacters`, can supply.
+ * Two players with known names, or a spec that differs, prove nothing
+ * either. Null in each case; undefined when the fight's players have
+ * drifted.
+ */
+function actorProvedByRanking(
+  fight: Record<string, unknown>,
+  actors: readonly unknown[],
+  expected: Readonly<{
+    ranked: Readonly<{ spec?: string }>;
+    region: CharacterKey["region"];
+    knownNames: readonly Readonly<{ name: string; realm: string }>[];
+  }>
+): CharacterKey | null | undefined {
+  const players = fight.friendlyPlayers;
+  const specs = fight.friendlySpecs;
+  if (
+    !Array.isArray(players) ||
+    !Array.isArray(specs) ||
+    players.length !== specs.length
+  )
+    return undefined;
+  const spec = expected.ranked.spec?.toLocaleLowerCase("en-US");
+  if (!spec) return null;
+  const known = new Map(
+    expected.knownNames.map((item) => {
+      const name = item.name.normalize("NFC").toLocaleLowerCase("en-US");
+      return [`${normalizedRealm(item.realm)}\0${name}`, item] as const;
+    })
   );
+  const byId = new Map(
+    actors
+      .map(record)
+      .filter((actor) => actor?.type === "Player")
+      .map((actor) => [positiveInteger(actor?.id), actor] as const)
+  );
+  const matches = players.flatMap((id: unknown, index) => {
+    const actor = byId.get(positiveInteger(id));
+    const name = nonEmptyString(actor?.name);
+    const server = nonEmptyString(actor?.server);
+    if (!name || !server) return [];
+    const item = known.get(
+      `${normalizedRealm(server)}\0${name.normalize("NFC").toLocaleLowerCase("en-US")}`
+    );
+    return item ? [{ item, spec: specs[index] as unknown }] : [];
+  });
+  if (matches.length !== 1) return null;
+  const { item, spec: logged } = matches[0]!;
+  if (typeof logged !== "string" || logged.toLocaleLowerCase("en-US") !== spec)
+    return null;
+  const alias = {
+    region: expected.region,
+    realm: item.realm.toLocaleLowerCase("en-US"),
+    name: item.name.normalize("NFC").toLocaleLowerCase("en-US")
+  };
+  return isValidCharacterKey(alias) ? alias : null;
 }

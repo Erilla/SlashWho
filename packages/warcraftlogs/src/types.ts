@@ -478,6 +478,13 @@ export interface WarcraftLogsGateway {
       requestCap: number;
       characterId?: number;
       cursor?: WarcraftLogsRankedBackfillCursor | undefined;
+      /**
+       * Former names, with realm slug, the character raided under. A report
+       * that ranks nobody is proved by a known name on its ranked fight, and
+       * a night from before a rename carries only the name of the night
+       * (#742).
+       */
+      formerNames?: readonly Readonly<{ name: string; realm: string }>[];
       onRequest?(event: WarcraftLogsRequestEvent): void;
       /**
        * Called when the walk stops short, naming the read that stopped it:
@@ -594,6 +601,8 @@ export interface WarcraftLogsGateway {
         journalRaidId: string;
         requestCap: number;
         cursor?: WarcraftLogsRankedBackfillCursor | undefined;
+        /** Former names the walk may prove a report that ranks nobody by. */
+        formerNames?: readonly Readonly<{ name: string; realm: string }>[];
       }>;
       /**
        * Called once per upstream request this call issues, naming the class of
