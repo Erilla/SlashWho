@@ -316,18 +316,29 @@ Raider.IO failure cannot drop what it once helped find. After a full scan, it
 is only the kills attendance recovered.
 
 Recovery's requests are counted apart from the history scan:
-`guild_attendance_requests` per attendance page, and
+`guild_report_requests` per page of a guild's reports, and
 `report_hydration_requests` per report read, whether a search hit or a re-read.
 All three draw on the same scan cap. Rows written before the split read zero in
-both, with their recovery counted inside `history_scan_requests`.
+both, with their recovery counted inside `history_scan_requests`. Rows written
+before #712 count recovery's pages in `guild_attendance_requests` instead, and
+read zero in `guild_report_requests`.
 
-A search gallops through a guild's attendance, as the tier search does: it
-doubles its way to the first page that is not wholly newer than every wanted
-night, bisects for it, and walks on from there until it is past the oldest.
-A night 40 pages back costs about a dozen pages rather than 41. Before, the
-walk read every page from page one, so `guild_attendance_requests` grew with
-how old the kill was, and a kill far enough back could not be reached within
-the cap at all.
+A search lists the guild's reports that started in the kill's night window:
+from 16 hours before the kill to 2 hours after it, the same lead and clock
+slack a span is allowed. Nights that overlap are listed once. Each report in
+the window that the run has not read is hydrated. A page holds up to 100
+reports and costs about 1 point, so a night is usually one request, however
+old it is.
+
+Before #712, a search galloped through the guild's attendance: every report
+the guild ever logged, newest first, at about a point a report. A night 40
+pages back cost about a dozen pages of 25, and the walk had to pass the night
+by two days before it could stop. The listing is a superset of attendance
+(31 reports against 25 for one guild, none missing, measured 2026-09-28).
+What it lacks is attendance's player list, which let a walk skip a report
+that did not name the character. So every report on the night is hydrated,
+at about 2 points each, where attendance could rule some out. A night rarely
+holds more than three.
 
 A search never limits the run: a guild Warcraft Logs does not know, a page it
 will not serve, or a spent budget recovers nothing and leaves the run's status
@@ -377,8 +388,9 @@ state. So a night searched to the end and found empty is remembered in
 (#434). The memory is kept per character and per collection version, and
 lapses because a log can still be uploaded late.
 
-Only a search that finished counts: attendance walked past the night, the
-guild's pages ran out, or Warcraft Logs has no such guild. A transient refusal,
+Only a search that finished counts: every night's listing read to its last
+page, or Warcraft Logs has no such guild (it answers "No guild exists for
+this name/server/region."). A transient refusal,
 a report that could not be read, or a spent budget proves nothing, so the kill
 is searched again next run. Losing the memory costs a repeated search, never a
 kill, so failing to read or write it never fails the run.
@@ -404,8 +416,9 @@ distinguishes, and a query must not merge them:
   spent. `0` is a search that found nothing.
 
 Points are not split by class, so weigh cost with the per-request figures
-measured one request at a time: about 28 points an attendance page
-(2026-09-23) and about 2 a hydrated report (2026-09-26, see
+measured one request at a time: about 1 point a guild listing page
+(2026-09-28), about 28 an attendance page (2026-09-23), and about 2 a
+hydrated report (2026-09-26, see
 [What one request costs](#what-one-request-costs)).
 
 ```sql
@@ -416,6 +429,7 @@ SELECT raiderio_historic_outcome,
        coalesce(sum(verified_kills_skipped_empty), 0) AS kills_skipped_empty,
        count(attendance_recovered_kills) AS searches,
        coalesce(sum(attendance_recovered_kills), 0) AS kills_recovered,
+       sum(guild_report_requests) AS guild_report_pages,
        sum(guild_attendance_requests) AS attendance_pages,
        sum(report_hydration_requests) AS reports_hydrated,
        round(
@@ -572,7 +586,7 @@ SELECT mode,
        round(
          avg(
            history_scan_requests + history_actor_requests
-           + character_guilds_requests
+           + character_guilds_requests + guild_report_requests
            + guild_attendance_requests + report_hydration_requests
            + zone_rankings_requests + fight_parses_requests
            + ranking_identities_requests

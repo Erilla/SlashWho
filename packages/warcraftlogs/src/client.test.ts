@@ -41,6 +41,35 @@ function verifiedIn(name: string, realm = "silvermoon") {
   ];
 }
 
+/**
+ * A page of `GuildReports`: a guild's reports that started in a window. A
+ * bare code starts an hour before `verifiedIn`'s kill.
+ */
+function guildReports(
+  reports: ReadonlyArray<
+    string | Readonly<{ code: string; startTime: number }>
+  >,
+  hasMorePages = false
+): Response {
+  return jsonResponse({
+    data: {
+      reportData: {
+        reports: {
+          data: reports.map((report) =>
+            typeof report === "string"
+              ? {
+                  code: report,
+                  startTime: Date.parse("2001-01-01T19:00:00.000Z")
+                }
+              : report
+          ),
+          has_more_pages: hasMorePages
+        }
+      }
+    }
+  });
+}
+
 function fixture(name: FixtureName): unknown {
   return JSON.parse(
     readFileSync(resolve(fixtureDirectory, `${name}.json`), "utf8")
@@ -3643,8 +3672,8 @@ describe("Warcraft Logs gateway", () => {
     });
   });
 
-  it("recovers participant-attributed kills and wipes from guild attendance", async () => {
-    const attendancePages: number[] = [];
+  it("recovers participant-attributed kills and wipes from a guild's reports", async () => {
+    const listingPages: number[] = [];
     const multiwordRealmKey: CharacterKey = {
       region: "eu",
       realm: "aerie-peak",
@@ -3674,21 +3703,11 @@ describe("Warcraft Logs gateway", () => {
           }
         });
       }
-      if (body.query.includes("GuildAttendance")) {
-        attendancePages.push(body.variables.page!);
-        return jsonResponse({
-          data: {
-            guildData: {
-              guild: {
-                attendance: {
-                  data: [{ code: "omittedReport" }],
-                  has_more_pages: body.variables.page === 1
-                }
-              }
-            }
-          }
-        });
+      if (body.query.includes("GuildReports")) {
+        listingPages.push(body.variables.page!);
+        return guildReports(["omittedReport"], body.variables.page === 1);
       }
+
       if (body.query.includes("ReportByCode")) {
         return jsonResponse({
           data: {
@@ -3782,15 +3801,14 @@ describe("Warcraft Logs gateway", () => {
       // What recovery yielded, so its cost can be weighed against it later.
       attendanceRecoveredKills: 1
     });
-    expect(attendancePages).toEqual([1, 2]);
+    expect(listingPages).toEqual([1, 2]);
   });
 
-  it("hydrates only attendance reports the history scan has not read and that may list the character", async () => {
-    // Break caught: attendance lists every report a guild ever logged. Ryii's
-    // two guilds held 1,740 against 141 with Ryii in them and 20 missing from
-    // Ryii's own history, so hydrating each one cost 1,811 requests a run
-    // against a 300 cap. Every run ended `request_cap`, none kept a cursor
-    // for the walk, and the character was re-collected forever.
+  it("hydrates every report on the night that the history scan has not read", async () => {
+    // A guild's report listing names no players, so nothing on the night can
+    // be ruled out before it is read; only what the scan already read is
+    // skipped. Before #712, attendance's player list did that filtering, at
+    // about a point for every report the guild ever logged.
     const hydrated: string[] = [];
     const report = (code: string) => ({
       code,
@@ -3811,12 +3829,6 @@ describe("Warcraft Logs gateway", () => {
             characterData: {
               character: {
                 server: { normalizedName: "Silvermoon" },
-                guilds: [
-                  {
-                    name: "Guild",
-                    server: { slug: "silvermoon", region: { slug: "EU" } }
-                  }
-                ],
                 recentReports: {
                   data: [report("scannedReport")],
                   has_more_pages: false
@@ -3826,35 +3838,12 @@ describe("Warcraft Logs gateway", () => {
           }
         });
       }
-      if (body.query.includes("GuildAttendance")) {
-        return jsonResponse({
-          data: {
-            guildData: {
-              guild: {
-                attendance: {
-                  data: [
-                    { code: "scannedReport", players: [{ name: "Sentinel" }] },
-                    { code: "strangersReport", players: [{ name: "Other" }] },
-                    { code: "omittedReport", players: [{ name: "SENTINEL" }] },
-                    // Not listing players is not listing the character's
-                    // absence, so these must still be read.
-                    { code: "unlistedReport" },
-                    { code: "emptyListReport", players: [] },
-                    { code: "malformedListReport", players: [{ name: null }] },
-                    {
-                      code: "suffixedReport",
-                      players: [
-                        { name: "Other" },
-                        { name: "Sentinel-Silvermoon" }
-                      ]
-                    }
-                  ],
-                  has_more_pages: false
-                }
-              }
-            }
-          }
-        });
+      if (body.query.includes("GuildReports")) {
+        return guildReports([
+          "scannedReport",
+          "strangersReport",
+          "omittedReport"
+        ]);
       }
       if (body.query.includes("ReportByCode")) {
         hydrated.push(body.variables.code!);
@@ -3869,16 +3858,10 @@ describe("Warcraft Logs gateway", () => {
       verifiedKills: verifiedIn("Guild")
     });
 
-    expect(hydrated).toEqual([
-      "omittedReport",
-      "unlistedReport",
-      "emptyListReport",
-      "malformedListReport",
-      "suffixedReport"
-    ]);
+    expect(hydrated).toEqual(["strangersReport", "omittedReport"]);
   });
 
-  describe("searching attendance only for verified kills", () => {
+  describe("searching a guild's reports only for verified kills", () => {
     const night = Date.parse("2020-01-21T19:34:00.000Z");
     const hours = (count: number) => count * 60 * 60 * 1_000;
     const history = (reports: unknown[] = []) =>
@@ -3895,25 +3878,6 @@ describe("Warcraft Logs gateway", () => {
                 }
               ],
               recentReports: { data: reports, has_more_pages: false }
-            }
-          }
-        }
-      });
-    const attendancePage = (
-      data: ReadonlyArray<{ code: string; startTime: number }>,
-      hasMorePages: boolean
-    ) =>
-      jsonResponse({
-        data: {
-          guildData: {
-            guild: {
-              attendance: {
-                data: data.map((entry) => ({
-                  ...entry,
-                  players: [{ name: "Sentinel" }]
-                })),
-                has_more_pages: hasMorePages
-              }
             }
           }
         }
@@ -3942,7 +3906,7 @@ describe("Warcraft Logs gateway", () => {
         parseRequestCap: 1
       });
 
-      expect(queries).not.toContain("GuildAttendance");
+      expect(queries).not.toContain("GuildReports");
       expect(queries).not.toContain("ReportByCode");
     });
 
@@ -3985,7 +3949,7 @@ describe("Warcraft Logs gateway", () => {
         verifiedKills: verified
       });
 
-      expect(queries).not.toContain("GuildAttendance");
+      expect(queries).not.toContain("GuildReports");
     });
 
     it("keeps a verified kill searchable when its report omitted a fight", async () => {
@@ -4034,7 +3998,7 @@ describe("Warcraft Logs gateway", () => {
         verifiedKills: verified
       });
 
-      expect(queries).toContain("GuildAttendance");
+      expect(queries).toContain("GuildReports");
     });
 
     // A report holding one Mythic Queen Azshara kill by the character.
@@ -4093,8 +4057,8 @@ describe("Warcraft Logs gateway", () => {
         };
         actorSelections.push(...(body.query.match(/actors[^{]*\{/g) ?? []));
         if (body.query.includes("RecentReports")) return history();
-        if (body.query.includes("GuildAttendance")) {
-          return attendancePage(
+        if (body.query.includes("GuildReports")) {
+          return guildReports(
             [{ code: "killNight", startTime: night - hours(1) }],
             false
           );
@@ -4130,18 +4094,23 @@ describe("Warcraft Logs gateway", () => {
       // Factories, not held responses: cloning a held response per call
       // breaks once a collected clone cancels the original's body.
       for (const refusal of [
+        // Recorded 2026-09-28: an unknown guild is an error beside
+        // `reports: null`.
         () =>
           jsonResponse({
-            errors: [{ message: "No guild exists for this name/server/region" }]
+            errors: [
+              { message: "No guild exists for this name/server/region." }
+            ],
+            data: { reportData: { reports: null } }
           }),
-        () => jsonResponse({ data: { guildData: { guild: null } } }),
+        () => jsonResponse({ data: { reportData: { reports: null } } }),
         () => new Response("upstream-body-marker", { status: 503 })
       ]) {
         const { client } = clientFor((url, init) => {
           if (url.pathname === "/oauth/token") return token();
           const body = JSON.parse(String(init?.body)) as { query: string };
           if (body.query.includes("RecentReports")) return history();
-          if (body.query.includes("GuildAttendance")) return refusal();
+          if (body.query.includes("GuildReports")) return refusal();
           return emptyZoneRankingsResponse();
         });
 
@@ -4182,7 +4151,7 @@ describe("Warcraft Logs gateway", () => {
         storedKillReportCodes: ["storedRecovery"]
       });
 
-      expect(queries).not.toContain("GuildAttendance");
+      expect(queries).not.toContain("GuildReports");
       expect(queries.filter((query) => query === "ReportByCode")).toHaveLength(
         1
       );
@@ -4331,9 +4300,17 @@ describe("Warcraft Logs gateway", () => {
     });
 
     describe("reporting a night searched to the end and found empty (#434)", () => {
-      // What a verified kill's search concluded, from one attendance setup.
+      type Listing = Readonly<{
+        name: string;
+        realm: string;
+        region: string;
+        startTime: number;
+        endTime: number;
+        page: number;
+      }>;
+      // What a verified kill's search concluded, from one listing setup.
       const searchWith = async (
-        attendance: (page: number) => Response,
+        listing: (variables: Listing) => Response,
         options: Readonly<{
           requestCap?: number;
           hydration?: (code: string) => Response;
@@ -4343,11 +4320,11 @@ describe("Warcraft Logs gateway", () => {
           if (url.pathname === "/oauth/token") return token();
           const body = JSON.parse(String(init?.body)) as {
             query: string;
-            variables: { page?: number; code?: string };
+            variables: Listing & { code?: string };
           };
           if (body.query.includes("RecentReports")) return history();
-          if (body.query.includes("GuildAttendance")) {
-            return attendance(body.variables.page!);
+          if (body.query.includes("GuildReports")) {
+            return listing(body.variables);
           }
           if (body.query.includes("ReportByCode")) {
             return (
@@ -4363,121 +4340,124 @@ describe("Warcraft Logs gateway", () => {
           verifiedKills: verified
         });
       };
-      // Factories: a response body can be read once, and these serve many runs.
-      const pastTheNight = () =>
-        attendancePage(
-          [{ code: "monthBefore", startTime: night - hours(24 * 30) }],
-          true
-        );
-      const onTheNight = () =>
-        attendancePage(
+      // A factory: a response body can be read once, and this serves many runs.
+      const onTheNight = (hasMorePages = false) =>
+        guildReports(
           [{ code: "killNight", startTime: night - hours(1) }],
-          true
+          hasMorePages
         );
 
-      it("reports a night the walk passed without finding the kill", async () => {
+      it("reports a night listed to its end without finding the kill", async () => {
         // Break caught: a kill whose first defeat was never logged has
         // nothing to hold it, so every full run walked the guild's
         // attendance back to its night again. Yawnersw spent 39 pages, about
         // 1,090 of its 1,168 points, finding nothing (2026-09-23).
-        const result = await searchWith((page) =>
-          page === 1 ? onTheNight() : pastTheNight()
-        );
+        const result = await searchWith(() => onTheNight());
 
         expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
       });
 
       it("reports a guild Warcraft Logs does not have", async () => {
-        // Recorded 2026-09-23: an unknown guild is `guild: null`, no errors.
+        // Recorded 2026-09-28: an error beside `reports: null`.
         const result = await searchWith(() =>
-          jsonResponse({ data: { guildData: { guild: null } } })
+          jsonResponse({
+            errors: [
+              { message: "No guild exists for this name/server/region." }
+            ],
+            data: { reportData: { reports: null } }
+          })
         );
 
         expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
       });
 
-      it("reports a guild whose attendance is empty", async () => {
-        const result = await searchWith(() => attendancePage([], false));
+      it("reports a night the guild logged nothing on", async () => {
+        const result = await searchWith(() => guildReports([]));
 
         expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
       });
 
       it("does not report a kill the search recovered", async () => {
-        const result = await searchWith(
-          (page) => (page === 1 ? onTheNight() : pastTheNight()),
-          { hydration: (code) => hydratedKill(code) }
-        );
+        const result = await searchWith(() => onTheNight(), {
+          hydration: (code) => hydratedKill(code)
+        });
 
         expect(result).toMatchObject({ attendanceRecoveredKills: 1 });
         expect(result).not.toHaveProperty("attendanceSearchedEmpty");
       });
 
-      it("gallops to an old night instead of reading every newer page", async () => {
-        // Break caught: recovery walked the attendance one page at a time
-        // from page one, about 28 points a page, so a kill years back cost
-        // every page in between -- or, past the cap, was never reached.
-        const pagesRead: number[] = [];
+      it("lists an old night in one request, however far back it lies", async () => {
+        // Break caught: recovery galloped through the guild's attendance,
+        // every report it ever logged at about a point a report, so a night
+        // 40 pages back cost a dozen pages of 25 (#712). A listing asks for
+        // the night's reports alone, for a point.
+        const listed: Listing[] = [];
         const result = await searchWith(
-          (page) => {
-            pagesRead.push(page);
-            if (page < 41) {
-              return attendancePage(
-                [
-                  {
-                    code: `newer${page}`,
-                    startTime: night + hours(24 * (100 - page))
-                  }
-                ],
-                true
-              );
-            }
-            return page === 41 ? onTheNight() : pastTheNight();
+          (variables) => {
+            listed.push(variables);
+            return onTheNight();
           },
           { hydration: (code) => hydratedKill(code) }
         );
 
         expect(result).toMatchObject({ attendanceRecoveredKills: 1 });
-        expect(new Set(pagesRead).size).toBe(pagesRead.length);
-        expect(pagesRead.length).toBeLessThanOrEqual(13);
+        // A report may open up to 16 hours before the kill, and up to the
+        // two hours of clock slack after it.
+        expect(listed).toEqual([
+          {
+            name: "Guild",
+            realm: "silvermoon",
+            region: "eu",
+            startTime: night - hours(16),
+            endTime: night + hours(2),
+            page: 1
+          }
+        ]);
       });
 
-      it("still reports a night passed by a galloping walk", async () => {
-        const result = await searchWith((page) =>
-          page < 30
-            ? attendancePage(
-                [
-                  {
-                    code: `newer${page}`,
-                    startTime: night + hours(24 * (100 - page))
-                  }
-                ],
-                true
-              )
-            : pastTheNight()
-        );
+      it("reads every page of a night before reporting it empty", async () => {
+        const pages: number[] = [];
+        const result = await searchWith(({ page }) => {
+          pages.push(page);
+          return guildReports(
+            [{ code: `night${page}`, startTime: night - hours(1) }],
+            page < 3
+          );
+        });
 
+        expect(pages).toEqual([1, 2, 3]);
         expect(result).toMatchObject({ attendanceSearchedEmpty: verified });
       });
 
-      it("proves nothing from a walk that did not finish", async () => {
-        // A transient refusal, a report that could not be read, or a budget
-        // spent before the night was reached leaves the kill unproven: it is
-        // searched for again rather than forgotten.
+      it("proves nothing from a search that did not finish", async () => {
+        // A transient refusal, a page or report that could not be read, or a
+        // budget spent before the night was listed leaves the kill unproven:
+        // it is searched for again rather than forgotten.
         for (const run of [
           () =>
             searchWith(
               () => new Response("upstream-body-marker", { status: 503 })
             ),
           () =>
-            searchWith((page) => (page === 1 ? onTheNight() : pastTheNight()), {
+            searchWith(() =>
+              jsonResponse({ data: { reportData: { reports: null } } })
+            ),
+          () =>
+            searchWith(({ page }) =>
+              page === 1
+                ? onTheNight(true)
+                : new Response("upstream-body-marker", { status: 503 })
+            ),
+          () =>
+            searchWith(() => onTheNight(), {
               hydration: () =>
                 new Response("upstream-body-marker", { status: 503 })
             }),
           () =>
             searchWith(
-              () =>
-                attendancePage(
-                  [{ code: "weekLater", startTime: night + hours(24 * 7) }],
+              ({ page }) =>
+                guildReports(
+                  [{ code: `night${page}`, startTime: night - hours(1) }],
                   true
                 ),
               { requestCap: 3 }
@@ -4559,14 +4539,14 @@ describe("Warcraft Logs gateway", () => {
         verifiedKills: verified
       });
 
-      expect(queries).not.toContain("GuildAttendance");
+      expect(queries).not.toContain("GuildReports");
     });
 
-    it("searches only the kill's guild, on its night, and stops paging once past it", async () => {
+    it("lists only the kill's guild, for its night, and reads what the scan did not", async () => {
       // Break caught: the walk read every page of every guild and hydrated
       // every report on them. Only the named guild's reports from the night
-      // of the kill can hold it, and pages are newest first.
-      const walked: string[] = [];
+      // of the kill can hold it.
+      const listed: string[] = [];
       const hydrated: string[] = [];
       const { client } = clientFor((url, init) => {
         if (url.pathname === "/oauth/token") return token();
@@ -4575,26 +4555,14 @@ describe("Warcraft Logs gateway", () => {
           variables: { name?: string; page?: number; code?: string };
         };
         if (body.query.includes("RecentReports")) return history();
-        if (body.query.includes("GuildAttendance")) {
-          walked.push(`${body.variables.name}:${body.variables.page}`);
-          return body.variables.page === 1
-            ? attendancePage(
-                [
-                  { code: "weekLater", startTime: night + hours(24 * 7) },
-                  // Opened after Raider.IO's time: its clock can run an
-                  // hour early, as it does for Ryun's Queen Azshara.
-                  { code: "openedLater", startTime: night + hours(1) },
-                  { code: "killNight", startTime: night - hours(1) },
-                  { code: "nightBefore", startTime: night - hours(20) }
-                ],
-                true
-              )
-            : body.variables.page === 2
-              ? attendancePage(
-                  [{ code: "monthBefore", startTime: night - hours(24 * 30) }],
-                  true
-                )
-              : attendancePage([], false);
+        if (body.query.includes("GuildReports")) {
+          listed.push(`${body.variables.name}:${body.variables.page}`);
+          return guildReports([
+            { code: "killNight", startTime: night - hours(1) },
+            // Opened after Raider.IO's time: its clock can run an hour
+            // early, as it does for Ryun's Queen Azshara.
+            { code: "openedLater", startTime: night + hours(1) }
+          ]);
         }
         if (body.query.includes("ReportByCode")) {
           hydrated.push(body.variables.code!);
@@ -4611,86 +4579,55 @@ describe("Warcraft Logs gateway", () => {
         onRequest: (event) => requests.push(event.query)
       });
 
-      expect(hydrated).toEqual(["openedLater", "killNight"]);
-      // Page two is wholly older than the night by more than the overlap
-      // pages can have at a boundary, so page three is never asked for.
-      expect(walked).toEqual(["Guild:1", "Guild:2"]);
+      expect(hydrated).toEqual(["killNight", "openedLater"]);
+      expect(listed).toEqual(["Guild:1"]);
       // Recovery is counted apart from the history scan, so what it costs
       // can be read without subtracting it back out of history pages.
       expect(requests.filter((query) => query === "history_scan")).toHaveLength(
         1
       );
       expect(
-        requests.filter((query) => query === "guild_attendance")
-      ).toHaveLength(2);
+        requests.filter((query) => query === "guild_reports")
+      ).toHaveLength(1);
+      expect(requests).not.toContain("guild_attendance");
       expect(
         requests.filter((query) => query === "report_hydration")
       ).toHaveLength(2);
       // Searched and found nothing: a measured zero, not an absent value.
       expect(result).toMatchObject({ attendanceRecoveredKills: 0 });
     });
-  });
 
-  it("matches an attendance name written in another Unicode form", async () => {
-    // Break caught: a decomposed accent is a different string, so an exact
-    // comparison would rule out the very report attendance exists to recover.
-    const hydrated: string[] = [];
-    const { client } = clientFor((url, init) => {
-      if (url.pathname === "/oauth/token") return token();
-      const body = JSON.parse(String(init?.body)) as {
-        query: string;
-        variables: { code?: string };
-      };
-      if (body.query.includes("RecentReports")) {
-        return jsonResponse({
-          data: {
-            characterData: {
-              character: {
-                server: { normalizedName: "Silvermoon" },
-                guilds: [
-                  {
-                    name: "Guild",
-                    server: { slug: "silvermoon", region: { slug: "EU" } }
-                  }
-                ],
-                recentReports: { data: [], has_more_pages: false }
-              }
-            }
-          }
-        });
-      }
-      if (body.query.includes("GuildAttendance")) {
-        return jsonResponse({
-          data: {
-            guildData: {
-              guild: {
-                attendance: {
-                  data: [
-                    {
-                      code: "decomposedReport",
-                      players: [{ name: "Zoë" }]
-                    }
-                  ],
-                  has_more_pages: false
-                }
-              }
-            }
-          }
-        });
-      }
-      if (body.query.includes("ReportByCode")) {
-        hydrated.push(body.variables.code!);
-        return jsonResponse({ data: { reportData: { report: null } } });
-      }
-      return emptyZoneRankingsResponse();
+    it("lists nights that overlap once, and nights apart separately", async () => {
+      const windows: [number, number][] = [];
+      const { client } = clientFor((url, init) => {
+        if (url.pathname === "/oauth/token") return token();
+        const body = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: { startTime?: number; endTime?: number };
+        };
+        if (body.query.includes("RecentReports")) return history();
+        if (body.query.includes("GuildReports")) {
+          windows.push([body.variables.startTime!, body.variables.endTime!]);
+          return guildReports([]);
+        }
+        return emptyZoneRankingsResponse();
+      });
+      const week = hours(24 * 7);
+
+      await client.getFirstKillReports(key, {
+        requestCap: 20,
+        parseRequestCap: 1,
+        verifiedKills: [night + week, night, night + hours(3)].map((at) => ({
+          at: new Date(at).toISOString(),
+          guild: verified[0]!.guild
+        }))
+      });
+
+      expect(windows).toEqual([
+        [night - hours(16), night + hours(5)],
+        [night + week - hours(16), night + week + hours(2)]
+      ]);
     });
-
-    await client.getFirstKillReports(
-      { region: "eu", realm: "silvermoon", name: "zoë" },
-      { requestCap: 5, parseRequestCap: 1, verifiedKills: verifiedIn("Guild") }
-    );
-
-    expect(hydrated).toEqual(["decomposedReport"]);
   });
 
   it("still hydrates the reports a drifted history page never decoded", async () => {
@@ -4722,22 +4659,8 @@ describe("Warcraft Logs gateway", () => {
         variables: { code?: string };
       };
       if (body.query.includes("RecentReports")) return jsonResponse(page);
-      if (body.query.includes("GuildAttendance")) {
-        return jsonResponse({
-          data: {
-            guildData: {
-              guild: {
-                attendance: {
-                  data: [
-                    { code: "lateReport", players: [{ name: "Sentinel" }] },
-                    { code: "driftedReport", players: [{ name: "Sentinel" }] }
-                  ],
-                  has_more_pages: false
-                }
-              }
-            }
-          }
-        });
+      if (body.query.includes("GuildReports")) {
+        return guildReports(["lateReport", "driftedReport"]);
       }
       if (body.query.includes("ReportByCode")) {
         hydrated.push(body.variables.code!);
@@ -4797,22 +4720,8 @@ describe("Warcraft Logs gateway", () => {
               }
         );
       }
-      if (body.query.includes("GuildAttendance")) {
-        return jsonResponse({
-          data: {
-            guildData: {
-              guild: {
-                attendance: {
-                  data: [
-                    { code: "lateReport", players: [{ name: "Sentinel" }] }
-                  ],
-                  has_more_pages: false
-                }
-              }
-            }
-          }
-        });
-      }
+      if (body.query.includes("GuildReports"))
+        return guildReports(["lateReport"]);
       if (body.query.includes("ReportByCode")) {
         hydrated.push(body.variables.code!);
         return jsonResponse({ data: { reportData: { report: null } } });

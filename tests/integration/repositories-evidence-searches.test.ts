@@ -1368,6 +1368,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
           historyScan: 12,
           historyActors: 9,
           guildAttendance: 4,
+          guildReports: 5,
           reportHydration: 2,
           zoneRankings: 3,
           fightParses: 24,
@@ -1462,6 +1463,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
           fight_parses_requests: 24,
           ranking_identities_requests: 1,
           guild_attendance_requests: 4,
+          guild_report_requests: 5,
           report_hydration_requests: 2,
           raiderio_historic_outcome: "evidence",
           raiderio_historic_ms: 840,
@@ -1930,8 +1932,8 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
             max_raiderio_rankings: 6,
             mean_blizzard: "1.0",
             max_blizzard: 1,
-            // 12 + 9 + 4 + 2 + 3 + 24 + 1, over the counted row alone.
-            mean_warcraft_logs: "55.0"
+            // 12 + 9 + 5 + 4 + 2 + 3 + 24 + 1, over the counted row alone.
+            mean_warcraft_logs: "60.0"
           })
         ]);
       });
@@ -2021,6 +2023,7 @@ describe("PostgreSQL repositories: evidence searches and costs", () => {
           kills_skipped_empty: "1",
           searches: "1",
           kills_recovered: "1",
+          guild_report_pages: "5",
           attendance_pages: "4",
           reports_hydrated: "2"
         });

@@ -15,6 +15,12 @@ export const MYTHIC_DIFFICULTY = 5;
 // number, and make a light refresh's one page dearer. Measured in
 // docs/operations/evidence-run-cost.md.
 export const REPORTS_PER_PAGE = 10;
+/**
+ * A guild listing that loads no report part costs about 1 point for up to 100
+ * reports (1.83 for a full 100), so its page is as large as Warcraft Logs
+ * serves.
+ */
+export const GUILD_REPORTS_PER_PAGE = 100;
 
 export const resolveCharacterQuery = `
   query ResolveCharacter($name: String!, $realm: String!, $region: String!) {
@@ -147,6 +153,24 @@ export const guildAttendanceQuery = `
           data { code startTime players { name } }
           has_more_pages
         }
+      }
+    }
+  }
+`;
+
+/**
+ * A guild's reports that started inside a window, both ends inclusive. It
+ * lists every report attendance lists and more, for 1 point a request against
+ * attendance's ~1 a report, but names no players (measured 2026-09-28, #712).
+ * An unknown guild is a GraphQL error, "No guild exists for this
+ * name/server/region.", with `reports: null`.
+ */
+export const guildReportsQuery = `
+  query GuildReports($name: String!, $realm: String!, $region: String!, $startTime: Float!, $endTime: Float!, $page: Int!) {
+    reportData {
+      reports(guildName: $name, guildServerSlug: $realm, guildServerRegion: $region, startTime: $startTime, endTime: $endTime, limit: ${GUILD_REPORTS_PER_PAGE}, page: $page) {
+        data { code startTime }
+        has_more_pages
       }
     }
   }

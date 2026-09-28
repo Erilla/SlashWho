@@ -2889,6 +2889,11 @@ describe("applicant evidence job handler", () => {
                 durationMs: 0
               });
               options.onRequest?.({
+                query: "guild_reports",
+                limited: false,
+                durationMs: 0
+              });
+              options.onRequest?.({
                 query: "zone_rankings",
                 limited: false,
                 durationMs: 0
@@ -2950,6 +2955,7 @@ describe("applicant evidence job handler", () => {
               historyActors: 0,
               characterGuilds: 0,
               guildAttendance: 0,
+              guildReports: 1,
               reportHydration: 0,
               zoneRankings: 1,
               fightParses: 1,

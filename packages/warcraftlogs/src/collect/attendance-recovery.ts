@@ -1,12 +1,11 @@
 import {
-  ATTENDANCE_PAGE_OVERLAP_MS,
   ATTENDANCE_REPORT_LEAD_MS,
   REPORT_COVER_SLACK_MS,
   uncoveredVerifiedKills
 } from "../attendance-coverage";
-import { guildAttendancePage, guildIsAbsent } from "../decode/attendance";
+import { guildReportsPage } from "../decode/attendance";
 import { decodedHydratedReport } from "../decode/reports";
-import { guildAttendanceQuery, reportByCodeQuery } from "../queries";
+import { guildReportsQuery, reportByCodeQuery } from "../queries";
 import type {
   WarcraftLogsReportResult,
   WarcraftLogsVerifiedKill
@@ -86,14 +85,16 @@ export type AttendanceRecovery = Readonly<{
 }>;
 
 /**
- * Character histories can omit reports that are still listed in a guild's
- * attendance history. Attendance is searched only for a verified kill no
- * decoded report accounts for, in the guild that kill was in and on its
- * night: a guild's attendance is every report it ever logged, and walking all
- * of it cost Ryii 1,811 requests a run against a 300 cap. It is discovery only
- * -- a report is hydrated and run through the same actor/fight attribution
- * decoder as history, and its player list only ever rules a report out. Wipes
- * in a hydrated report are kept; no report is read for wipes alone.
+ * Character histories can omit reports that are still listed under the guild
+ * they were logged in. A guild is searched only for a verified kill no decoded
+ * report accounts for, in the guild that kill was in and on its night: the
+ * guild's reports that started in that night's window, listed for a point a
+ * page. It replaced walking the guild's attendance, which is every report it
+ * ever logged at about a point a report, galloping back to the night (#712).
+ * It is discovery only -- a report is hydrated and run through the same
+ * actor/fight attribution decoder as history. The listing names no players,
+ * so every report on the night is read, where attendance could rule some
+ * out. Wipes in a hydrated report are kept; no report is read for wipes alone.
  *
  * Nothing stored depends on it, so a search that cannot finish -- a guild
  * Warcraft Logs does not know, a page it will not serve, a spent budget --
@@ -105,7 +106,7 @@ export async function recoverFromAttendance(
   run: CollectionRun,
   scan: HistoryScan
 ): Promise<AttendanceRecovery> {
-  const { key, options, kills, wipes, scannedReportCodes } = run;
+  const { options, kills, wipes, scannedReportCodes } = run;
   const uncovered = uncoveredVerifiedKills(
     options.verifiedKills ?? [],
     scan.spans
@@ -128,136 +129,47 @@ export async function recoverFromAttendance(
     target.wanted.push({ verified, at });
     recoveryTargets.set(guildKey, target);
   }
-  // Only a walk that finished counts: a spent budget, a transient refusal or a
-  // report that could not be read leaves a kill unproven, and it is searched
-  // again.
+  // Only a search that finished counts: a spent budget, a transient refusal
+  // or a report that could not be read leaves a kill unproven, and it is
+  // searched again.
   const searchedEmpty: WarcraftLogsVerifiedKill[] = [];
   search: for (const { guild, wanted: targets } of recoveryTargets.values()) {
-    const times = targets.map((target) => target.at);
-    const pagedPast =
-      Math.min(...times) -
-      ATTENDANCE_REPORT_LEAD_MS -
-      ATTENDANCE_PAGE_OVERLAP_MS;
-    // A report with no start time cannot be placed, so it is read rather
-    // than assumed to be from another night. A report may start after the
-    // verified time by the same clock slack a span is allowed.
-    const wanted = (startTime: number | null) =>
-      startTime === null ||
-      times.some(
-        (at) =>
-          startTime <= at + REPORT_COVER_SLACK_MS &&
-          startTime >= at - ATTENDANCE_REPORT_LEAD_MS
-      );
-    // Whether this guild's walk reached a conclusion: past every wanted
-    // night, out of pages, or told the guild does not exist.
-    let concluded: boolean;
+    // Whether this guild's search reached a conclusion: every night listed
+    // to its last page, or told the guild does not exist.
+    let concluded = true;
     let unreadable = false;
-    type Page = NonNullable<ReturnType<typeof guildAttendancePage>>;
-    const pages = new Map<number, Page>();
-    // A page, or why the walk has to end without one: the budget ran out,
-    // or Warcraft Logs answered with something that settles the walk one
-    // way or the other.
-    const page = async (
-      number: number
-    ): Promise<Page | "budget" | { concluded: boolean }> => {
-      const cached = pages.get(number);
-      if (cached) return cached;
-      if (run.historyRequests >= options.requestCap) return "budget";
-      searched = true;
-      const attendance = await run.counted("guild_attendance", () =>
-        run.ctx.graphql(
-          guildAttendanceQuery,
-          {
-            name: guild.name,
-            realm: guild.realm,
-            region: guild.region,
-            page: number
-          },
-          options.signal
-        )
-      );
-      run.historyRequests += 1;
-      if (attendance.kind !== "success") {
+    guild: for (const [startTime, endTime] of nightWindows(targets)) {
+      for (let number = 1; ; number++) {
+        if (run.historyRequests >= options.requestCap) break search;
+        searched = true;
+        const listing = await run.counted("guild_reports", () =>
+          run.ctx.graphql(
+            guildReportsQuery,
+            {
+              name: guild.name,
+              realm: guild.realm,
+              region: guild.region,
+              startTime,
+              endTime,
+              page: number
+            },
+            options.signal
+          )
+        );
+        run.historyRequests += 1;
         // A guild Warcraft Logs does not have holds nothing to find. Any
-        // other refusal may pass, so it proves nothing.
-        return { concluded: attendance.code === "not_found" };
-      }
-      const decoded = guildAttendancePage(attendance.value, key.name);
-      if (decoded === null) {
-        // `guild: null` is Warcraft Logs saying it has no such guild; a
-        // page that is otherwise unreadable proves nothing.
-        return { concluded: guildIsAbsent(attendance.value) };
-      }
-      pages.set(number, decoded);
-      return decoded;
-    };
-    const starts = (value: Page) =>
-      value.reports.map((report) => report.startTime);
-    // Newest first, and pages overlap by hours at a boundary, so a page is
-    // wholly newer than every wanted night only when each report on it is
-    // more than the overlap beyond the newest. An undated report says
-    // nothing about its reach, and it is wanted, so it stops the gallop.
-    const newestWanted = Math.max(...times) + REPORT_COVER_SLACK_MS;
-    const newerThanNights = (value: Page) =>
-      value.reports.length > 0 &&
-      starts(value).every(
-        (start) =>
-          start !== null && start > newestWanted + ATTENDANCE_PAGE_OVERLAP_MS
-      );
-    const pastNights = (value: Page) =>
-      value.reports.length > 0 &&
-      starts(value).every((start) => start !== null && start < pagedPast);
-
-    walk: {
-      // Attendance is every report the guild ever logged, and an old night
-      // sits behind years of newer ones: gallop to the first page that is
-      // not wholly newer, then bisect for it, as the tier search does. A
-      // page skipped on the way is wholly newer than every wanted night,
-      // so it holds no report the walk would have hydrated.
-      let before = 0;
-      let first = 1;
-      for (;;) {
-        const value = await page(first);
-        if (value === "budget") break search;
-        if (!("reports" in value)) {
-          concluded = value.concluded;
-          break walk;
+        // other refusal, or a page that cannot be read, proves nothing.
+        if (listing.kind !== "success") {
+          concluded = listing.code === "not_found";
+          break guild;
         }
-        if (!newerThanNights(value)) break;
-        // The whole of this guild's attendance is newer than the nights.
-        if (!value.hasMorePages) {
-          concluded = true;
-          break walk;
+        const page = guildReportsPage(listing.value);
+        if (page === null) {
+          concluded = false;
+          break guild;
         }
-        before = first;
-        first *= 2;
-      }
-      while (first - before > 1) {
-        const middle = Math.floor((before + first) / 2);
-        const value = await page(middle);
-        if (value === "budget") break search;
-        if (!("reports" in value)) {
-          concluded = value.concluded;
-          break walk;
-        }
-        if (newerThanNights(value)) before = middle;
-        else first = middle;
-      }
-
-      for (let number = first; ; number++) {
-        const attendancePage = await page(number);
-        if (attendancePage === "budget") break search;
-        if (!("reports" in attendancePage)) {
-          concluded = attendancePage.concluded;
-          break walk;
-        }
-        for (const {
-          code,
-          startTime,
-          listsCharacter
-        } of attendancePage.reports) {
+        for (const { code } of page.reports) {
           if (scannedReportCodes.has(code)) continue;
-          if (listsCharacter === false || !wanted(startTime)) continue;
           if (run.historyRequests >= options.requestCap) break search;
           const decoded = await hydrateReport(run, code);
           scannedReportCodes.add(code);
@@ -275,12 +187,7 @@ export async function recoverFromAttendance(
           }
           for (const wipe of decoded.wipes) wipes.set(wipe.fightUrl, wipe);
         }
-        // Out of pages, or a page wholly past every wanted night: nothing
-        // older can hold one.
-        if (!attendancePage.hasMorePages || pastNights(attendancePage)) {
-          concluded = true;
-          break walk;
-        }
+        if (!page.hasMorePages) break;
       }
     }
     if (!concluded || unreadable) continue;
@@ -293,4 +200,28 @@ export async function recoverFromAttendance(
     }
   }
   return { searched, recoveredKills, searchedEmpty };
+}
+
+/**
+ * The start-time windows a kill's report can fall in, one a night, with
+ * overlapping nights merged so no report is listed twice. A report may open up
+ * to a lead before the kill, and after it by the clock slack a span is
+ * allowed.
+ */
+function nightWindows(
+  targets: readonly { at: number }[]
+): (readonly [number, number])[] {
+  const windows = targets
+    .map(
+      ({ at }) =>
+        [at - ATTENDANCE_REPORT_LEAD_MS, at + REPORT_COVER_SLACK_MS] as const
+    )
+    .sort(([a], [b]) => a - b);
+  const merged: [number, number][] = [];
+  for (const [start, end] of windows) {
+    const last = merged.at(-1);
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  return merged;
 }
