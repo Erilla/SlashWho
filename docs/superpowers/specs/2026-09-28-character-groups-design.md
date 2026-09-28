@@ -45,6 +45,11 @@ account's characters, stored up to six times over.
   still shown, every limitation it shows is still shown, and no stored row is
   deleted or rewritten. See [Preserved behaviour](#preserved-behaviour).
 
+The cost saving is modest. 9 of 78 discovery runs on test in 28 days would
+have been skipped, about 12%, each up to 300 Blizzard requests. The case for
+this change rests on instant pages for siblings and one consistent list, and
+it should be weighed on those.
+
 ## Decision
 
 Characters are linked by **connections**, and the characters a chain of
@@ -52,27 +57,49 @@ connections reaches form a **group**. A dossier is the group of the character
 that was opened, seen from that character. Reach is fully transitive: every
 member of a group sees the identical list.
 
+### Maintainer decisions
+
+Recorded here because each overrides a deliberate earlier rule or accepts a
+stated risk. All were made on 2026-09-28.
+
+- **Fully transitive reach, kept after review.** One wrong link, most likely a
+  false fingerprint match, joins two whole accounts on every page of both
+  until a reviewer rejects it. Two alternatives were considered and declined:
+  holding fingerprint links that would bridge two multi-member groups, and
+  capping group size. The safeguards are the merge alert and "Not the same
+  person". On test no current link joins two groups that each have more than
+  one member, so the risk has not yet occurred. This replaces the deliberate
+  one-hop rule in `CONTEXT.md`'s "Known reverse declaration".
+- **One shared dossier.** Reviewer edits apply to the whole group. One
+  reviewer's exclusion greys the character on every member's page, up to 23
+  pages on test today.
+- **Links stop merging after 90 days unobserved.** See
+  [Link expiry](#link-expiry).
+
 ### Data model
 
 **`character_connections`**: a link observed by discovery, or a reviewer's
 rejection of one. One row per link.
 
-| Column                       | Meaning                                                                                                                          |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `character_low_id`           | One end of the link.                                                                                                             |
-| `character_high_id`          | The other end. The pair is stored in a fixed order (`low < high`, enforced by a check), so A–B and B–A are the same link.        |
-| `kind`                       | `observed` or `rejected`.                                                                                                        |
-| `source`                     | For an `observed` link, the discovery source: `claimed`, `declared_main`, `fingerprint` or `profile_guess`. Null for `rejected`. |
-| `observed_from_character_id` | The starting character of the discovery that observed it. Null for `rejected`.                                                   |
-| `discovery_run_id`           | The run that observed it. Null for `rejected`.                                                                                   |
-| `observed_at`                | When the link was observed or rejected.                                                                                          |
+| Column                       | Meaning                                                                                                                                            |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `character_low_id`           | One end of the link.                                                                                                                               |
+| `character_high_id`          | The other end. The pair is stored in a fixed order (`low < high`, enforced by a check), so A–B and B–A are the same link.                          |
+| `kind`                       | `observed` or `rejected`.                                                                                                                          |
+| `source`                     | For an `observed` link, the discovery source: `claimed`, `declared_main`, `fingerprint` or `profile_guess`. Null for `rejected`.                   |
+| `observed_from_character_id` | The starting character of the discovery that observed it. Null for `rejected`.                                                                     |
+| `discovery_run_id`           | The run that observed it. Null for `rejected`.                                                                                                     |
+| `observed_at`                | When the link was last observed, or when it was rejected. Re-observing a link moves it forward.                                                    |
+| `rejection_id`               | For a `rejected` link, the reviewer action that wrote it. One action can write several rows, and undoing it deletes them all. Null for `observed`. |
+| `rejected_from_character_id` | For a `rejected` link, the character whose page the rejection was made on. Null for `observed`.                                                    |
 
 - **One observed row per observer.** An `observed` link is unique on
   `(low, high, source, observed_from_character_id)`, so each starting character
   holds its own observation of a pair.
 - **A rejection overrides every observation.** A `rejected` link is unique on
   `(low, high)`, and while it exists no observation of that pair connects
-  anything.
+  anything. An action that would reject a pair already rejected keeps the
+  existing row.
 
 **`character_groups`**: one row per group, holding `id`, `created_at` and
 `last_discovered_at`. `last_discovered_at` is the newest completion of any
@@ -86,11 +113,14 @@ is a group of one.
 `dossier_character_exclusions` stay where they are, with their rows unchanged.
 They are read as group data:
 
-- A manual connection made from any member is an edge of the group. Its target
-  is keyed by region, realm and name, so a pending target, one not discovered
-  yet, needs no character row. It becomes part of the group once discovery
-  creates the character.
-- An exclusion made from any member applies to the whole group.
+- **Manual connections.** A manual connection is a link between the member it
+  was made from and its target, so it follows both characters through any
+  merge or split. Its target is keyed by region, realm and name, so a pending
+  target, one not discovered yet, needs no character row. It becomes part of
+  the group once discovery creates the character.
+- **Exclusions.** An exclusion applies to the group that contains the member it
+  was made from. If a split puts the excluded character in a different group,
+  the exclusion has no effect there. It applies again if the two are rejoined.
 
 **Snapshots** and their memberships are still written by every discovery
 run, unchanged. They are the immutable record of what each run found. The
@@ -107,7 +137,10 @@ A discovery's snapshot publication and its group update are one transaction:
 
 1. Take the transaction-level advisory lock that serialises every group
    update. Publications are rare (78 in 28 days on test), so one global lock is
-   correct and costs nothing measurable.
+   correct and costs nothing measurable. The transaction makes no provider
+   call. Discovery finishes every Raider.IO and Blizzard read before it opens
+   the transaction, and the transaction holds only database writes and the
+   recompute.
 2. Write the snapshot, exactly as today.
 3. Update the run's observed connections, following the retraction rules
    below.
@@ -146,9 +179,31 @@ kill evidence".
 - **A failed discovery** changes nothing, and `last_discovered_at` does not
   move.
 
-A link observed only from a character nobody reopens is never re-checked. The
-same is true of today's snapshots, which persist until their root is searched
-again. Link expiry is out of scope.
+### Link expiry
+
+Characters are keyed by region, realm and name. A sold or transferred
+character, or a name reused after a deletion, can therefore carry an old link
+that is no longer true. With groups, such a link would show on every member's
+page and keep two sets of characters merged indefinitely, so observed links
+expire.
+
+- **What expiry does.** An `observed` link whose `observed_at` is more than 90
+  days old (`CONNECTION_MERGE_TTL_DAYS`, a domain constant with its own test)
+  stops connecting groups.
+- **What it doesn't do.** The link still shows its other end on its
+  observer's own page, as a stale snapshot shows its members on its root's page
+  today. That page's members are its group plus the far ends of its own
+  expired links, labelled by those links.
+- **When it's applied.** The worker's maintenance cleanup recomputes, under the
+  same advisory lock, every group that holds a link which crossed the limit
+  since its last pass. Expiry needs no publication to take effect.
+- **Renewal.** Re-observing a link renews it. A complete full discovery from
+  the observer that no longer sees the link retracts it, as described above.
+- **What never expires.** Manual connections and rejections are reviewer
+  statements.
+
+On test on 2026-09-28 every link was at most 14 days old, so nothing expires
+at migration.
 
 ### Convergence
 
@@ -164,6 +219,18 @@ admission. The handler already runs Raider.IO before asking for an admission,
 so this is a job option, not a new handler. A Raider.IO-only discovery queues
 further Raider.IO-only discoveries only for members it newly adds, so the chain
 stops once nothing new turns up.
+
+The chain is capped, because the worker has no Raider.IO rate limiter of its
+own:
+
+- one publication queues at most 25 Raider.IO-only discoveries
+  (`RAIDER_IO_CHAIN_CAP_PER_PUBLICATION`);
+- a character gets at most one Raider.IO-only discovery within
+  `FRESHNESS_HOURS`.
+
+A member left out by the cap is still in the group and is discovered in full
+when someone opens it. Convergence is best effort, and a skipped member costs
+completeness, never a character already found.
 
 The fingerprint sweep still runs only from a character discovered in full.
 Reusing one sweep for siblings on the same roster is #719.
@@ -201,19 +268,27 @@ Active runs stay one per starting character, which is today's unique index on
 
 **Dossier read (`GET /api/dossiers/{character}`).**
 
-- **Members:** the group's members, ranked and capped by
-  `DOSSIER_CHARACTER_CEILING` as today.
+- **Members:** the group's members, plus the far ends of the opened
+  character's own expired links (see [Link expiry](#link-expiry)). They are
+  ranked and capped by `DOSSIER_CHARACTER_CEILING` as today.
 - **URL and root:** the URL stays the opened character's, and the response's
   `root` is the opened character.
 - **Labels:** the opened character's row is labelled `input`. Every other
-  member's label comes from its strongest link in the group:
-  1. Raider.IO-sourced (`claimed`, `declared_main`, `profile_guess`), which
-     the reviewer surface already shows as Raider.IO-declared;
-  2. then `fingerprint`;
-  3. then manual.
+  member's label describes how it relates to the opened character. A path's
+  strength is its weakest link, and the label is that weakest link on the
+  strongest path from the opened character to the member.
+  - **Link strength, strongest first:** manual; then Raider.IO-sourced
+    (`claimed`, `declared_main`, `profile_guess`); then `fingerprint`.
+  - **Why manual ranks first:** a manual link is a reviewer's assertion. It
+    passes on the label of whatever lies beyond it, which is what the manual
+    connection's own discovered characters show today.
+  - **Why not the strongest link in the group:** a character reached by a
+    fingerprint link and then a Raider.IO claim is labelled fingerprint-derived
+    on the page it was reached from, not Raider.IO-declared.
 
-  That is today's order: a snapshot's label already wins over a manual
-  connection's. The reviewer surface keeps its existing three labels.
+  On test's links, labels by path weaken none of the 286 labels shown today.
+  "The strongest link in the group" would have overstated 10 of them. The
+  reviewer surface keeps its existing three labels.
 
 - **Research state and limitations:** the union over the members' latest
   snapshots. A limitation is phrased about the character whose discovery
@@ -250,16 +325,26 @@ character as `root`, meaning the page it was reserved for.
   discovery found.
 - It changes no connection and never splits the group.
 
-**"Not the same person" (new).** A reviewer action for a wrong link, most
-likely a false fingerprint match.
+**"Not the same person" (new).** A reviewer action that removes one character
+(X) from the group of the page it is taken on (opened character O). Rejecting a
+single pair would not be enough, because groups are built from paths. If X
+stays connected to O through a third character, rejecting only the direct link
+does nothing visible.
 
-- It writes a `rejected` link between the two characters and recomputes, so the
-  wrong character leaves the group together with anything that was only
-  connected through it.
-- The rejected character is listed once on the page it was rejected from, so
-  the rejection can be undone there. Undoing it deletes the rejection and
+- **Which links are cut.** Set X aside and find the characters still reachable
+  from O. The action writes a `rejected` link, all under one `rejection_id`,
+  between X and each of those characters that X links to directly. Then it
   recomputes.
-- No rejections exist today, so nothing existing changes.
+- **What leaves with X.** X leaves the group together with exactly the
+  characters that were only reachable from O through X, however many other
+  paths existed.
+- **Undoing it.** X is listed once, as rejected, on O's page, so the action can
+  be undone there. Undoing deletes every row with that `rejection_id` and
+  recomputes.
+- **If a later link rejoins them.** A link discovered later from a different
+  character can join X's side and O's side again. The merge alert fires, and
+  the reviewer rejects again.
+- **Nothing existing changes.** There are no rejections today.
 
 **Tier search.** It searches every included group member, as it searches
 every included dossier character today.
@@ -278,16 +363,25 @@ deploy, not a promise.
 | P2  | No existing row is deleted or rewritten: `snapshots`, `snapshot_characters`, `discovery_runs`, `manual_dossier_connections`, `dossier_character_exclusions`, the `fingerprint_sweep_*` tables and every evidence table. No table is dropped in this change. | The migration only creates and inserts. A migration test compares row counts and checksums of those tables before and after.                                                   |
 | P3  | Evidence is untouched. It stays keyed per character, and no evidence run is queued or cancelled by the migration.                                                                                                                                           | Covered by P2. The migration has no evidence side effects to test.                                                                                                             |
 | P4  | Every limitation a dossier shows today is still shown on its group's page.                                                                                                                                                                                  | A unit test on the union, and an integration test with a partial snapshot inside an otherwise complete group.                                                                  |
-| P5  | A member's source label never weakens. A character a dossier labels Raider.IO-declared today is never shown as fingerprint-derived.                                                                                                                         | A unit test on the label ordering.                                                                                                                                             |
+| P5  | A member's source label never weakens. A character a dossier labels Raider.IO-declared today is never shown as fingerprint-derived.                                                                                                                         | A unit test on path labels. The replay script also compares every label shown today with its path label and fails on a weaker one (0 of 286 on test).                          |
 | P6  | Manual connections and exclusions keep their rows and their effect. The 4 manual connections on test (none pending, none excluded) still bring in their targets.                                                                                            | Covered by P1 and P2, plus an end-to-end test that adds, excludes and removes a connection.                                                                                    |
 | P7  | Where this change does alter what is shown, it only adds characters.                                                                                                                                                                                        | The replay script below reports added characters and fails on any removed one.                                                                                                 |
 
 **Replay before switching.** `scripts/diagnostics/character-groups-replay.mts`
 runs read-only against a deployment's database. For every existing root it
-compares today's dossier with the root's group and prints four counts: removed
-(which must be 0), unchanged, grew, and groups over `DOSSIER_CHARACTER_CEILING`.
-It is run against test before the pull request merges and again after the
-deploy.
+compares today's dossier with the root's group and prints five counts:
+
+- characters removed, which must be 0;
+- weakened labels, which must also be 0;
+- dossiers unchanged;
+- dossiers grown;
+- groups over `DOSSIER_CHARACTER_CEILING`.
+
+It is run against every environment that holds data, before that
+environment's deploy and again after it. On 2026-09-28 that is test only:
+production is not stood up yet. The migration's P1 check will fail a deploy
+if it trips, which is intended, and the replay is what finds that out before
+the deploy does.
 
 On test on 2026-09-28, the same comparison run as ad hoc SQL gave:
 
@@ -314,8 +408,10 @@ person already found, and no new combination is created.
 
 ## Migration
 
-One Drizzle migration and its journal entry. Before numbering it, check
-`origin/main` for a migration added in parallel.
+One Drizzle migration and its journal entry: `0067`, after #734's `0066`.
+Recheck `origin/main` before merging. A migration merged in parallel takes the
+number, and then this one is renumbered: file, journal index, `when` and the
+migrations test.
 
 1. **Create** `character_connections`, `character_groups` and
    `character_group_members`.
@@ -357,10 +453,11 @@ edited in the same pull request.
 ## Error handling
 
 - **Merge alert.** A publication that merges two groups of more than one member
-  each logs `character_groups_merged` with both sizes. It also sends it to
-  `MAINTAINER_ALERT_WEBHOOK_URL` when that is set, so a wrong fingerprint match
-  joining two accounts is seen and can be rejected. Delivery is best effort and
-  never fails the publication.
+  each logs `character_groups_merged` with both sizes and the source of the
+  bridging link. It also sends it to `MAINTAINER_ALERT_WEBHOOK_URL` when that
+  is set. With fully transitive reach this is the main safeguard, so that a
+  wrong fingerprint match joining two accounts is seen and rejected. Delivery
+  is best effort and never fails the publication.
 - **Recompute fails.** The whole publication rolls back, snapshot included, and
   the run takes today's retry path for a failed publication. A snapshot never
   commits without its group update.
@@ -376,17 +473,25 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
 
 - **Unit.** Group recomputation covers:
   - merges;
-  - a split on a rejection, including what leaves with the rejected character;
+  - "Not the same person" when X is linked to O directly and through a third
+    character, including exactly what leaves with X, and undoing it;
   - a split on a retraction;
   - a partial run never retracting;
   - a Raider.IO-only run leaving fingerprint links alone;
+  - a link crossing `CONNECTION_MERGE_TTL_DAYS`: it stops merging, still shows
+    on its observer's page, and is renewed by re-observation;
+  - the Raider.IO-only chain stopping at its cap and at `FRESHNESS_HOURS`;
+  - an exclusion after a split that separates it from the excluded character;
   - the id-survival rule;
-  - the label ordering (P5) and the limitation union (P4).
+  - path labels (P5), including the fingerprint-then-claimed chain, and the
+    limitation union (P4).
 - **Integration (PostgreSQL).**
   - A reader never observes a half-recomputed group while a publication is in
     flight.
   - Two concurrent publications merging the same groups produce one group.
   - A failed recompute rolls the snapshot back with it.
+  - The maintenance pass applies expiry under the advisory lock without a
+    publication.
   - The migration backfills seeded snapshots shaped like test's (identical,
     containing, manual) into the expected groups. It passes P1, and fails when a
     member is deliberately made unreachable.
@@ -404,6 +509,7 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
 - Reusing one fingerprint sweep across siblings on the same roster (#719).
 - Collecting evidence for every new member when it joins, rather than when a
   read reaches it.
-- Expiring links that nobody has re-observed.
+- Re-checking expired links automatically. They stop merging, and are renewed
+  only when their observer is discovered again.
 - Dropping snapshots, `manual_dossier_connections` or
   `dossier_character_exclusions`.
