@@ -15,6 +15,7 @@ import type {
 import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 import type {
+  CharacterConnectionRepository,
   DiscoverCharacterJob,
   DiscoveryQueue,
   DiscoveryWorkContext,
@@ -540,6 +541,49 @@ function runtimeFakes(
       return evidenceWorkHandler;
     },
     sleeps
+  };
+}
+
+/**
+ * The hourly maintenance cycle's own setup, built on {@link runtimeFakes}: a
+ * runtime whose maintenance handler can be invoked directly, with its own
+ * logger capturing every record written during the run.
+ */
+function maintenanceHarness(
+  overrides: {
+    characterConnections?: Partial<CharacterConnectionRepository>;
+    clearStaleCredentials?: Repositories["evidence"]["clearStaleCredentials"];
+  } = {}
+) {
+  const fakes = runtimeFakes();
+  if (overrides.characterConnections) {
+    fakes.repositories.characterConnections =
+      overrides.characterConnections as CharacterConnectionRepository;
+  }
+  if (overrides.clearStaleCredentials) {
+    fakes.cleanup.evidence.mockImplementation(overrides.clearStaleCredentials);
+  }
+  const logged: Record<string, unknown>[] = [];
+  const logger = {
+    info: vi.fn((record: Record<string, unknown>) => {
+      logged.push(record);
+    })
+  };
+  return {
+    fakes,
+    logged,
+    run: async () => {
+      const runtime = await createWorkerRuntime(
+        config,
+        fakes.dependencies,
+        logger
+      );
+      try {
+        await fakes.maintenanceHandler?.();
+      } finally {
+        await runtime.stop();
+      }
+    }
   };
 }
 
@@ -1811,6 +1855,32 @@ describe("worker runtime", () => {
       "private-value"
     );
     await runtime.stop();
+  });
+
+  it("recomputes character groups after the cleanup, even when the cleanup failed", async () => {
+    // Break caught: a cleanup failure rethrew before the recompute ran, so
+    // manual edits never reached the groups and drift failed the replay.
+    const recomputePass = vi.fn(async () => ({
+      groupsRecomputed: 2,
+      ungroupedAssigned: 1,
+      cycleCompleted: false
+    }));
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass },
+      clearStaleCredentials: async () => {
+        throw new Error("database_unavailable");
+      }
+    });
+    await expect(run()).rejects.toThrow("database_unavailable");
+    expect(recomputePass).toHaveBeenCalledWith({ budgetMs: 30_000 });
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        event: "character_groups_recompute",
+        groupsRecomputed: 2,
+        ungroupedAssigned: 1,
+        cycleCompleted: false
+      })
+    );
   });
 
   it("writes one timed record per fingerprint admission, however it ends", async () => {

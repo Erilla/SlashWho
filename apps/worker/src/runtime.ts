@@ -998,7 +998,7 @@ function createApplicantSheetTick(
 }
 
 /** The hourly cleanup of expired caches, stale credentials and old costs. */
-async function maintenanceCleanup(context: WorkerContext): Promise<void> {
+async function cacheCleanup(context: WorkerContext): Promise<void> {
   const { repositories, queue, clock, logger } = context;
   const startedAt = clock();
   let removedEvidenceRuns: number | undefined;
@@ -1040,6 +1040,45 @@ async function maintenanceCleanup(context: WorkerContext): Promise<void> {
     throw error;
   }
   record();
+}
+
+/** How long one maintenance cycle may spend recomputing character groups (#738). */
+const CHARACTER_GROUPS_RECOMPUTE_BUDGET_MS = 30_000;
+
+/**
+ * The hourly maintenance: the existing cache cleanup, then the character
+ * groups recompute. The recompute runs even when the cleanup failed, and a
+ * recompute failure never hides the cleanup's own.
+ */
+async function maintenanceCleanup(context: WorkerContext): Promise<void> {
+  try {
+    await cacheCleanup(context);
+  } finally {
+    await characterGroupsRecompute(context);
+  }
+}
+
+async function characterGroupsRecompute(context: WorkerContext): Promise<void> {
+  const { repositories, clock, logger } = context;
+  const connections = repositories.characterConnections;
+  if (!connections) return;
+  const startedAt = clock();
+  try {
+    const result = await connections.recomputePass({
+      budgetMs: CHARACTER_GROUPS_RECOMPUTE_BUDGET_MS
+    });
+    logger?.info({
+      event: "character_groups_recompute",
+      ...result,
+      durationMs: elapsedMs(clock, startedAt)
+    });
+  } catch (error) {
+    logger?.info({
+      event: "character_groups_write_failed",
+      errorName: errorName(error),
+      durationMs: elapsedMs(clock, startedAt)
+    });
+  }
 }
 
 export async function createWorkerRuntime(

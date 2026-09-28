@@ -86,6 +86,11 @@ const allowlist = new Set([
   "removedEvidenceRuns",
   "removedCollectionStages",
   "removedRunCosts",
+  // Character groups recompute and write (#738).
+  "groupsRecomputed",
+  "cycleCompleted",
+  "ungroupedAssigned",
+  "unknownCharacters",
   // Webhook delivery failures name the alert, never the webhook.
   "alertEvent",
   // Measurement totals outside the provider-prefixed families below.

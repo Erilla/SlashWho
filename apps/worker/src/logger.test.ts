@@ -458,4 +458,33 @@ describe("worker logger", () => {
       }))
     );
   });
+
+  it("keeps the character groups maintenance and write fields", () => {
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    });
+
+    logger.info({
+      event: "character_groups_recompute",
+      groupsRecomputed: 3,
+      ungroupedAssigned: 1,
+      cycleCompleted: true,
+      durationMs: 12
+    });
+    logger.info({ event: "character_groups_write", unknownCharacters: 1 });
+
+    const parsed = lines.map(
+      (line) => JSON.parse(line) as Record<string, unknown>
+    );
+    expect(parsed[0]).toMatchObject({
+      event: "character_groups_recompute",
+      groupsRecomputed: 3,
+      ungroupedAssigned: 1,
+      cycleCompleted: true,
+      durationMs: 12
+    });
+    expect(parsed[0]).not.toHaveProperty("droppedFields");
+    expect(parsed[1]).toMatchObject({ unknownCharacters: 1 });
+  });
 });
