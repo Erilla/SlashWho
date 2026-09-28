@@ -65,6 +65,19 @@ never presence-checked; once a re-read shows the roster, it is checked like
 any newly read kill. A kill already accepted stays accepted when its roster
 becomes hidden.
 
+A tier whose raids all closed before the character's kill-scan floor is
+asked once per character, and again only once that read is about 90 days old
+(each character's expiry is offset by up to two weeks so they don't fall due
+together), or once a collection fix bumps its version. The ask costs one
+Raider.IO request and no Warcraft Logs points: its kills are evidence only,
+never a place to search. Between asks, the character's stored first kills in
+such a tier are re-read from what was stored, under the same rules as above,
+without asking for the kill list. Whether a kill's presence was checked is
+recorded on the kill itself, so a kill accepted behind a hidden roster is
+checked once the roster opens, however many runs that takes, and a partial
+run cannot carry it past the check. A tier is marked as read only by a
+complete run whose logged-encounter reads fell short of nothing.
+
 A raider removed from SlashWho (`suppressed_characters`) is left off every
 roster a dossier shows, while the player and role counts stay Raider.IO's. The
 stored rows are kept; removal suppresses reads, as it does everywhere else.
