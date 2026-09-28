@@ -3,6 +3,13 @@ export {
   recoverStrandedContinuations
 } from "./discovery-job-handler";
 export { collectionProgress } from "./collection-progress";
+export {
+  continuationCycleWrite,
+  firstSweepCycleWrite,
+  liveSweepCompletionWrite,
+  raiderIoPublicationWrite,
+  type SweepForWrite
+} from "./observation-writes";
 export { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 export { startApplicantCollection } from "./start-applicant-collection";
 export { createApplicantEvidenceJobHandler } from "./applicant-evidence-job-handler";

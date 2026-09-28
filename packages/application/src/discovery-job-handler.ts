@@ -2,6 +2,7 @@ import type {
   DiscoverCharacterJob,
   DiscoveryWorkContext,
   JobTelemetry,
+  ObservationWriteInput,
   Repositories
 } from "@slashwho/database";
 import type {
@@ -23,6 +24,12 @@ import { bestEffort } from "./best-effort";
 import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
+import {
+  continuationCycleWrite,
+  firstSweepCycleWrite,
+  liveSweepCompletionWrite,
+  raiderIoPublicationWrite
+} from "./observation-writes";
 import {
   BLIZZARD_FAST_CALL_MS,
   createMeasurementScope,
@@ -419,6 +426,33 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
     };
   }
 
+  /**
+   * Phase 1's best-effort observation write (#738). It runs after the
+   * publication committed and after the run's timing log, never throws, and
+   * ignores the job's abort signal, so it cannot change an outcome.
+   */
+  async function writeCommittedObservations(
+    write: ObservationWriteInput
+  ): Promise<void> {
+    const connections = options.repositories.characterConnections;
+    if (!connections) return;
+    try {
+      const result = await connections.writeObservations(write);
+      await connections.recomputeGroupsOf(result.changedCharacterIds);
+      if (result.unknownCharacters > 0) {
+        options.logger?.info({
+          event: "character_groups_write",
+          unknownCharacters: result.unknownCharacters
+        });
+      }
+    } catch (error) {
+      options.logger?.info({
+        event: "character_groups_write_failed",
+        errorName: error instanceof Error ? error.name : "unknown"
+      });
+    }
+  }
+
   return {
     async execute(
       runId: string,
@@ -514,6 +548,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       let resume: Awaited<
         ReturnType<Repositories["fingerprintSweeps"]["getResumeState"]>
       > = null;
+      // Set only after a publication call resolves, which is only after its
+      // transaction committed (#738). Written in the outer finally, so a
+      // follow-up that throws, or an abort, cannot skip it.
+      let pendingWrite: ObservationWriteInput | null = null;
       /**
        * Re-enqueues a continuation cycle that made no progress, giving up once
        * the same chain has done so too many times in a row. Returns true when
@@ -694,6 +732,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   runId,
                   live.snapshotId
                 );
+                pendingWrite = liveSweepCompletionWrite({
+                  runId,
+                  rootKey: run.rootKey,
+                  characters: outcome.characters
+                });
                 record.outcome = "fingerprint_continuation_pending";
                 return;
               }
@@ -906,6 +949,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       record.outcome = "continuation_superseded";
                       return;
                     }
+                    pendingWrite = continuationCycleWrite({
+                      runId,
+                      rootKey: run.rootKey,
+                      sweep,
+                      reservationId: admission.reservationId
+                    });
                   } else {
                     const excludedTournamentCharacters = new Set(
                       outcome.state === "partial"
@@ -951,6 +1000,15 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       cursor,
                       { signal: context.signal }
                     );
+                    pendingWrite = firstSweepCycleWrite({
+                      runId,
+                      rootKey: run.rootKey,
+                      raiderIoCharacters: outcome.characters,
+                      raiderIoLimitation,
+                      sweep,
+                      excludedTournamentIds: excludedTournamentCharacters,
+                      reservationId: admission.reservationId
+                    });
                   }
                   record.outcome = "snapshot";
                   record.state =
@@ -1030,6 +1088,13 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               },
               { signal: context.signal }
             );
+            pendingWrite = raiderIoPublicationWrite({
+              runId,
+              rootKey: run.rootKey,
+              characters: outcome.characters,
+              limitationCode:
+                outcome.state === "partial" ? outcome.limitationCode : null
+            });
             return;
           }
         }
@@ -1128,6 +1193,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
           options.logger.info({ ...record, ...scope.totals() });
         }
+        if (pendingWrite) await writeCommittedObservations(pendingWrite);
       }
     }
   };

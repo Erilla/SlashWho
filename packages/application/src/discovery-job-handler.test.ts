@@ -3,6 +3,7 @@ import type {
   DiscoveryRun,
   FingerprintAdmission,
   FingerprintSweepCursor,
+  ObservationWriteInput,
   Repositories,
   SnapshotCharacterInput,
   StoredSnapshot
@@ -824,6 +825,8 @@ function handlerHarness(
   };
 
   const enqueuedFingerprintAdmissions: string[] = [];
+  // Runs after the id is recorded, so a test can make the follow-up throw.
+  let enqueueFollowUp: ((id: string) => Promise<void>) | null = null;
   const created: CreateSnapshotInput[] = [];
   const amended: {
     snapshotId: string;
@@ -876,6 +879,7 @@ function handlerHarness(
     },
     enqueueFingerprintAdmission: async (id: string) => {
       enqueuedFingerprintAdmissions.push(id);
+      await enqueueFollowUp?.(id);
     },
     ...(options.maxJobLifetimeMs === undefined
       ? {}
@@ -895,6 +899,10 @@ function handlerHarness(
     /** Forces every later admission; null restores the `admitted` default. */
     set admission(value: FingerprintAdmission | null) {
       nextAdmission = value;
+    },
+    /** Runs inside every later admission enqueue, after it is recorded. */
+    set enqueueFingerprintAdmission(value: (id: string) => Promise<void>) {
+      enqueueFollowUp = value;
     },
     requestedAdmissions,
     /** The outcome label of the most recent execution. */
@@ -3137,5 +3145,206 @@ describe("discovery job handler", () => {
     );
 
     expect(harness.enqueuedFingerprintAdmissions).toEqual([harness.runId]);
+  });
+});
+
+function recordingConnections() {
+  const writes: ObservationWriteInput[] = [];
+  const recomputed: string[][] = [];
+  return {
+    writes,
+    recomputed,
+    repository: {
+      async writeObservations(input: ObservationWriteInput) {
+        writes.push(input);
+        return { changedCharacterIds: ["x"], unknownCharacters: 0 };
+      },
+      async recomputeGroupsOf(ids: readonly string[]) {
+        recomputed.push([...ids]);
+      },
+      async recomputePass() {
+        return {
+          groupsRecomputed: 0,
+          ungroupedAssigned: 0,
+          cycleCompleted: true
+        };
+      },
+      async rebuild() {
+        return { observers: 0, links: 0, groups: 0 };
+      }
+    }
+  };
+}
+
+describe("observation writes after publication", () => {
+  it("writes a Raider.IO publication after it commits", async () => {
+    const repositories = createMemoryRepositories();
+    const connections = recordingConnections();
+    repositories.characterConnections = connections.repository;
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await handlerFor(repositories, new MutableGateway()).execute(
+      run.id,
+      delivery()
+    );
+    expect(connections.writes).toHaveLength(1);
+    expect(connections.writes[0]).toMatchObject({
+      runId: run.id,
+      observerKey: rootKey,
+      families: [{ family: "raiderio" }]
+    });
+    expect(connections.recomputed).toEqual([["x"]]);
+  });
+
+  it("writes nothing when the publication did not commit", async () => {
+    const repositories = createMemoryRepositories();
+    const connections = recordingConnections();
+    repositories.characterConnections = connections.repository;
+    repositories.snapshots.create = async () => {
+      throw new Error("database_unavailable");
+    };
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await handlerFor(repositories, new MutableGateway())
+      .execute(run.id, delivery())
+      .catch(() => undefined);
+    expect(connections.writes).toEqual([]);
+  });
+
+  it("writes after a follow-up throws", async () => {
+    // Break caught: enqueueFingerprintAdmission throwing after commit skipped
+    // the write, and check (a) reset the three days for nothing.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 5
+    });
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+    harness.enqueueFingerprintAdmission = async () => {
+      throw new Error("queue_unavailable");
+    };
+    await harness.handler.execute(harness.runId).catch(() => undefined);
+    expect(
+      connections.writes.map((write) =>
+        write.families.map((family) => family.family)
+      )
+    ).toEqual([["raiderio", "fingerprint"]]);
+  });
+
+  it("writes when aborted after commit, and still ends cancelled", async () => {
+    // Path a returns straight after `snapshots.create`, so an abort there has
+    // nothing left to throw. A cycle-1 sweep that is still sweeping has a
+    // follow-up after its commit; one that honours the abort ends cancelled.
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 5
+    });
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+    const controller = new AbortController();
+    const snapshots = harness.repositories.snapshots;
+    const publish = snapshots.createAndFinishFingerprintSweep.bind(snapshots);
+    snapshots.createAndFinishFingerprintSweep = async (...arguments_) => {
+      const stored = await publish(...arguments_);
+      controller.abort(new Error("shutdown"));
+      return stored;
+    };
+    harness.enqueueFingerprintAdmission = async () => {
+      controller.signal.throwIfAborted();
+    };
+    await expect(
+      harness.handler.execute(harness.runId, {
+        attempt: 1,
+        maxAttempts: 3,
+        signal: controller.signal
+      })
+    ).rejects.toThrow("shutdown");
+    expect(connections.writes).toHaveLength(1);
+  });
+
+  it("logs a failed write and changes nothing else", async () => {
+    const repositories = createMemoryRepositories();
+    const logged: Record<string, unknown>[] = [];
+    repositories.characterConnections = {
+      ...recordingConnections().repository,
+      async writeObservations() {
+        throw new Error("lock timeout");
+      }
+    };
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await handlerFor(repositories, new MutableGateway(), {
+      logger: { info: (value) => logged.push(value) }
+    }).execute(run.id, delivery());
+    expect(logged.map((record) => record.event)).toContain(
+      "character_groups_write_failed"
+    );
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({ state: "complete" });
+  });
+
+  it("writes a continuation cycle as fingerprint only, with its reservation", async () => {
+    const harness = handlerHarness({
+      roster: rosterOf(12),
+      sweepRequestCap: 5
+    });
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+    await harness.handler.execute(harness.runId);
+    await harness.handler.execute(
+      harness.runId,
+      undefined,
+      continuation(harness)
+    );
+    expect(connections.writes[1]!.families).toEqual([
+      expect.objectContaining({
+        family: "fingerprint",
+        sweepReservationId: expect.any(String)
+      })
+    ]);
+  });
+
+  it("writes nothing for a continuation the amend found superseded", async () => {
+    const harness = handlerHarness({
+      roster: rosterOf(12),
+      sweepRequestCap: 5
+    });
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+    await harness.handler.execute(harness.runId);
+    harness.repositories.snapshots.amendAndFinishFingerprintSweep = async () =>
+      null;
+    await harness.handler.execute(
+      harness.runId,
+      undefined,
+      continuation(harness)
+    );
+    expect(harness.lastOutcome()).toBe("continuation_superseded");
+    expect(connections.writes).toHaveLength(1);
+  });
+
+  it("only adds Raider.IO observations on a live-sweep completion", async () => {
+    const harness = handlerHarness({
+      roster: rosterOf(400),
+      sweepRequestCap: 50
+    });
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+    await harness.handler.execute(harness.runId);
+    const fresh = await harness.repositories.runs.createOrReuse(
+      harness.rootKey,
+      "anonymous"
+    );
+    harness.admission = { kind: "not_due" };
+    await harness.handler.execute(fresh.id);
+    expect(harness.lastOutcome()).toBe("fingerprint_continuation_pending");
+    expect(connections.writes[1]).toMatchObject({
+      runId: fresh.id,
+      families: [
+        {
+          family: "raiderio",
+          decision: "added_only",
+          reason: "live_sweep_completion"
+        }
+      ]
+    });
   });
 });
