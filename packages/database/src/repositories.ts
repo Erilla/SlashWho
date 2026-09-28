@@ -804,6 +804,11 @@ export type EvidenceRunCost = Readonly<{
     /** Absent is zero: only a tier search reads it. */
     characterGuilds?: number;
     guildAttendance: number;
+    /**
+     * `GuildReports`, the pages attendance recovery lists a kill's night from.
+     * Absent is zero: callers written before #712 walked attendance instead.
+     */
+    guildReports?: number;
     reportHydration: number;
     zoneRankings: number;
     fightParses: number;

@@ -108,11 +108,13 @@ function graphQlErrorLimitation(value: unknown): WarcraftLogsLimitation | null {
   // "This report does not exist." is what Warcraft Logs answers for a missing
   // report code (recorded 2026-09-23), with `report: null` beside it. Read as
   // `unavailable`, a deleted report looked transient and held a run partial
-  // on every retry.
+  // on every retry. An unknown guild in a report listing is "No guild exists
+  // for this name/server/region." (recorded 2026-09-28).
   if (
     code === "NOT_FOUND" ||
     message?.includes("not found") ||
-    message?.includes("does not exist")
+    message?.includes("does not exist") ||
+    message?.startsWith("no guild exists")
   ) {
     return { kind: "limitation", code: "not_found" };
   }

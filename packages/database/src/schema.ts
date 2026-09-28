@@ -1129,6 +1129,14 @@ export const characterEvidenceRunCosts = pgTable(
     guildAttendanceRequests: integer("guild_attendance_requests")
       .default(0)
       .notNull(),
+    /**
+     * `GuildReports`, one per page of a guild's reports from the night of a
+     * kill attendance recovery searches for (#712). Recovery walked attendance
+     * before this column, so its older rows count recovery in
+     * `guild_attendance_requests` and read zero here. Tier searches still walk
+     * attendance.
+     */
+    guildReportRequests: integer("guild_report_requests").default(0).notNull(),
     reportHydrationRequests: integer("report_hydration_requests")
       .default(0)
       .notNull(),
