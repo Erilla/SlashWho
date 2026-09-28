@@ -249,6 +249,63 @@ describe("database migrations", () => {
         [fp, "fingerprint"]
       ]);
       await insertPublishedReservation(pool, run);
+
+      // A second root whose *newer* snapshot has no published sweep and
+      // drops its fingerprint member (a not_due refresh); its *older*
+      // snapshot did publish a sweep and still has that member. Raider.IO
+      // backfill must pin the newer run (the plain "latest" snapshot);
+      // fingerprint backfill must pin the older, swept run. If either
+      // pinned-temp-table CTE were transposed with the other, or a later
+      // statement re-queried `snapshots` instead of the pinned table, this
+      // would attribute the wrong run to the wrong family.
+      const swappedRoot = await insertCharacter(
+        pool,
+        "eu",
+        "draenor",
+        "shendral"
+      );
+      const swappedFingerprintAlt = await insertCharacter(
+        pool,
+        "eu",
+        "draenor",
+        "mirendor"
+      );
+      const unlinkedCharacter = await insertCharacter(
+        pool,
+        "eu",
+        "draenor",
+        "solitaire"
+      );
+      const olderSweptRun = await insertCompletedRun(pool, swappedRoot, {
+        startedAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+        completedAt: new Date(Date.now() - 2 * 60 * 60 * 1000)
+      });
+      await insertSnapshot(
+        pool,
+        olderSweptRun,
+        swappedRoot,
+        [
+          [swappedRoot, "input"],
+          [swappedFingerprintAlt, "fingerprint"]
+        ],
+        { refreshedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) }
+      );
+      const olderReservationId = await insertPublishedReservation(
+        pool,
+        olderSweptRun
+      );
+      const newerUnsweptRun = await insertCompletedRun(pool, swappedRoot, {
+        startedAt: new Date(Date.now() - 30 * 60 * 1000),
+        completedAt: new Date(Date.now() - 10 * 60 * 1000)
+      });
+      await insertSnapshot(
+        pool,
+        newerUnsweptRun,
+        swappedRoot,
+        [[swappedRoot, "input"]],
+        { refreshedAt: new Date(Date.now() - 10 * 60 * 1000) }
+      );
+
       const before = await checksum(pool, [
         "snapshots",
         "snapshot_characters",
@@ -272,11 +329,61 @@ describe("database migrations", () => {
       );
       expect(groups.rows[0]!.n).toBe("1");
       const ledger = await pool.query(
-        `SELECT family, decision, reason FROM character_connection_write_log ORDER BY family`
+        `SELECT family, decision, reason FROM character_connection_write_log WHERE observer_character_id = $1 ORDER BY family`,
+        [root]
       );
       expect(ledger.rows).toEqual([
         { family: "fingerprint", decision: "replaced", reason: "backfill" },
         { family: "raiderio", decision: "replaced", reason: "backfill" }
+      ]);
+
+      const swappedFingerprintConnection = await pool.query<{
+        discovery_run_id: string;
+        observed_from_character_id: string;
+      }>(
+        `SELECT discovery_run_id, observed_from_character_id FROM character_connections
+         WHERE kind = 'observed' AND source = 'fingerprint' AND observed_from_character_id = $1`,
+        [swappedRoot]
+      );
+      expect(swappedFingerprintConnection.rows).toEqual([
+        {
+          discovery_run_id: olderSweptRun,
+          observed_from_character_id: swappedRoot
+        }
+      ]);
+
+      const swappedMarkers = await pool.query<{
+        family: string;
+        run_id: string;
+      }>(
+        `SELECT family, run_id FROM character_connection_writes WHERE observer_character_id = $1 ORDER BY family`,
+        [swappedRoot]
+      );
+      expect(swappedMarkers.rows).toEqual([
+        { family: "fingerprint", run_id: olderSweptRun },
+        { family: "raiderio", run_id: newerUnsweptRun }
+      ]);
+
+      const swappedFingerprintLedger = await pool.query<{
+        sweep_reservation_id: string;
+      }>(
+        `SELECT sweep_reservation_id FROM character_connection_write_log
+         WHERE observer_character_id = $1 AND family = 'fingerprint'`,
+        [swappedRoot]
+      );
+      expect(swappedFingerprintLedger.rows).toEqual([
+        { sweep_reservation_id: olderReservationId }
+      ]);
+
+      const unlinkedGroup = await pool.query<{
+        character_id: string;
+        group_id: string;
+      }>(
+        `SELECT character_id, group_id FROM character_group_members WHERE character_id = $1`,
+        [unlinkedCharacter]
+      );
+      expect(unlinkedGroup.rows).toEqual([
+        { character_id: unlinkedCharacter, group_id: unlinkedCharacter }
       ]);
     } finally {
       await stop();
@@ -684,11 +791,17 @@ async function insertCharacter(
   return result.rows[0]!.id;
 }
 
-async function insertCompletedRun(pool: Pool, rootId: string): Promise<string> {
+async function insertCompletedRun(
+  pool: Pool,
+  rootId: string,
+  timing: { startedAt?: Date; completedAt?: Date } = {}
+): Promise<string> {
+  const startedAt = timing.startedAt ?? new Date(Date.now() - 60 * 60 * 1000);
+  const completedAt = timing.completedAt ?? new Date();
   const result = await pool.query<{ id: string }>(
     `INSERT INTO discovery_runs (root_region, root_realm_slug, root_normalized_name, root_character_id, status, caller_class, started_at, completed_at)
-     SELECT region, realm_slug, normalized_name, id, 'complete', 'anonymous', now() - interval '1 hour', now() FROM characters WHERE id = $1 RETURNING id`,
-    [rootId]
+     SELECT region, realm_slug, normalized_name, id, 'complete', 'anonymous', $2, $3 FROM characters WHERE id = $1 RETURNING id`,
+    [rootId, startedAt, completedAt]
   );
   return result.rows[0]!.id;
 }
@@ -697,12 +810,14 @@ async function insertSnapshot(
   pool: Pool,
   runId: string,
   rootId: string,
-  members: [string, string][]
+  members: [string, string][],
+  timing: { refreshedAt?: Date } = {}
 ): Promise<void> {
+  const refreshedAt = timing.refreshedAt ?? new Date();
   const snapshot = await pool.query<{ id: string }>(
     `INSERT INTO snapshots (root_character_id, discovery_run_id, state, limitation_code, refreshed_at, character_count)
-     VALUES ($1, $2, 'complete', NULL, now(), $3) RETURNING id`,
-    [rootId, runId, members.length]
+     VALUES ($1, $2, 'complete', NULL, $4, $3) RETURNING id`,
+    [rootId, runId, members.length, refreshedAt]
   );
   await pool.query(`UPDATE discovery_runs SET snapshot_id = $2 WHERE id = $1`, [
     runId,
@@ -720,17 +835,18 @@ async function insertSnapshot(
 async function insertPublishedReservation(
   pool: Pool,
   runId: string
-): Promise<void> {
+): Promise<string> {
   const admission = await pool.query<{ id: string }>(
     `INSERT INTO fingerprint_sweep_admissions (discovery_run_id, region, realm_slug, normalized_name, request_cap, hourly_budget, cadence_cutoff, status)
      SELECT id, root_region, root_realm_slug, root_normalized_name, 300, 28800, now(), 'finished' FROM discovery_runs WHERE id = $1 RETURNING id`,
     [runId]
   );
-  await pool.query(
+  const reservation = await pool.query<{ id: string }>(
     `INSERT INTO fingerprint_sweep_reservations (admission_id, request_cap, admitted_at, expires_at, released_at, finished_at, published)
-     VALUES ($1, 300, now() - interval '1 hour', now() + interval '1 hour', now(), now(), true)`,
+     VALUES ($1, 300, now() - interval '1 hour', now() + interval '1 hour', now(), now(), true) RETURNING id`,
     [admission.rows[0]!.id]
   );
+  return reservation.rows[0]!.id;
 }
 
 async function checksum(pool: Pool, tables: string[]): Promise<string> {

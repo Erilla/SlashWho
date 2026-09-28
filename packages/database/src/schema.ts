@@ -11,6 +11,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -211,6 +212,10 @@ export const characterConnections = pgTable(
       "character_connections_order_check",
       sql`${table.characterLowId} < ${table.characterHighId}`
     ),
+    check(
+      "character_connections_kind_check",
+      sql`(${table.kind} = 'observed' AND ${table.source} IN ('claimed', 'declared_main', 'profile_guess', 'fingerprint') AND ${table.observedFromCharacterId} IN (${table.characterLowId}, ${table.characterHighId}) AND ${table.discoveryRunId} IS NOT NULL AND ${table.rejectionId} IS NULL AND ${table.rejectedFromCharacterId} IS NULL) OR (${table.kind} = 'rejected' AND ${table.source} IS NULL AND ${table.observedFromCharacterId} IS NULL AND ${table.discoveryRunId} IS NULL AND ${table.rejectionId} IS NOT NULL AND ${table.rejectedFromCharacterId} IS NOT NULL)`
+    ),
     uniqueIndex("character_connections_observation_idx")
       .on(
         table.characterLowId,
@@ -303,6 +308,18 @@ export const characterConnectionWriteLog = pgTable(
     index("character_connection_write_log_run_idx").on(table.runId),
     index("character_connection_write_log_reservation_idx").on(
       table.sweepReservationId
+    ),
+    check(
+      "character_connection_write_log_family_check",
+      sql`${table.family} IN ('raiderio', 'fingerprint')`
+    ),
+    check(
+      "character_connection_write_log_decision_check",
+      sql`${table.decision} IN ('added_only', 'replaced', 'blocked')`
+    ),
+    check(
+      "character_connection_write_log_reason_check",
+      sql`${table.reason} IN ('raiderio_complete', 'raiderio_limited', 'privacy_hidden', 'capped', 'matched', 'unread', 'skipped_guild', 'live_sweep_completion', 'blocked_by_newer', 'backfill', 'rebuild')`
     )
   ]
 );
@@ -311,7 +328,7 @@ export const characterConnectionWriteLog = pgTable(
 export const characterGroupsMaintenance = pgTable(
   "character_groups_maintenance",
   {
-    id: integer("id").primaryKey(),
+    id: smallint("id").primaryKey(),
     cursorGroupId: uuid("cursor_group_id"),
     cycleStartedAt: timestamp("cycle_started_at", { withTimezone: true }),
     lastCycleStartedAt: timestamp("last_cycle_started_at", {
@@ -320,7 +337,10 @@ export const characterGroupsMaintenance = pgTable(
     lastCycleCompletedAt: timestamp("last_cycle_completed_at", {
       withTimezone: true
     })
-  }
+  },
+  (table) => [
+    check("character_groups_maintenance_singleton_check", sql`${table.id} = 1`)
+  ]
 );
 
 /**
