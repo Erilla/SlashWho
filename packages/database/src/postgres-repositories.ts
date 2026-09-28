@@ -7,6 +7,7 @@ import { createSnapshotRepositories } from "./snapshots";
 import { createFingerprintSweepRepositories } from "./fingerprint-sweeps";
 import { createEvidenceRepositories } from "./evidence/repository";
 import { createSmallStoreRepositories } from "./small-stores";
+import { createCharacterConnectionRepositories } from "./character-connections";
 
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
@@ -16,6 +17,7 @@ export function createPostgresRepositories(pool: Pool): Repositories {
     ...createSnapshotRepositories(pool),
     ...createFingerprintSweepRepositories(pool),
     ...createEvidenceRepositories(pool),
-    ...createSmallStoreRepositories(pool)
+    ...createSmallStoreRepositories(pool),
+    ...createCharacterConnectionRepositories(pool)
   };
 }

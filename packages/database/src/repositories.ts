@@ -5,7 +5,13 @@ import type {
   PublicErrorCode,
   SnapshotState
 } from "@slashwho/contracts";
-import type { CharacterGuild, CharacterKey } from "@slashwho/domain";
+import type {
+  CharacterGuild,
+  CharacterKey,
+  ConnectionFamily,
+  LedgerReason,
+  ObservationSource
+} from "@slashwho/domain";
 
 export type CallerClass = "anonymous" | "bot";
 export type EvidenceRunStatus =
@@ -1932,11 +1938,49 @@ export interface OperatorAuthRepository {
   }>;
 }
 
+export interface FamilyObservationWrite {
+  readonly family: ConnectionFamily;
+  readonly decision: "added_only" | "replaced";
+  readonly reason: LedgerReason;
+  /** The run's published set for this family, before de-duplication. */
+  readonly observed: readonly Readonly<{
+    key: CharacterKey;
+    source: ObservationSource;
+  }>[];
+  /** The sweep reservation for a fingerprint family write; null otherwise. */
+  readonly sweepReservationId: string | null;
+}
+
+export interface ObservationWriteInput {
+  readonly runId: string;
+  readonly observerKey: CharacterKey;
+  readonly families: readonly FamilyObservationWrite[];
+}
+
+export interface ObservationWriteResult {
+  /** Characters whose counting links this write changed, observer included. */
+  readonly changedCharacterIds: readonly string[];
+  /** Observed keys with no `characters` row, which were skipped. */
+  readonly unknownCharacters: number;
+}
+
+export interface CharacterConnectionRepository {
+  writeObservations(
+    input: ObservationWriteInput
+  ): Promise<ObservationWriteResult>;
+  recomputeGroupsOf(characterIds: readonly string[]): Promise<void>;
+  recomputePass(input: {
+    budgetMs: number;
+  }): Promise<{ groupsRecomputed: number; cycleCompleted: boolean }>;
+  rebuild(): Promise<{ observers: number; links: number; groups: number }>;
+}
+
 export interface Repositories {
   accountAuth: AccountAuthRepository;
   accountMail: AccountMailRepository;
   accountTokens: AccountTokenRepository;
   accountCredentials?: AccountCredentialRepository;
+  characterConnections?: CharacterConnectionRepository;
   operatorAuth: OperatorAuthRepository;
   searchReservations: SearchReservationRepository;
   runs: {
