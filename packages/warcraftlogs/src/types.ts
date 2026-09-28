@@ -478,9 +478,11 @@ export interface WarcraftLogsGateway {
   ): Promise<WarcraftLogsIdentityResult>;
   getRateLimit(signal?: AbortSignal): Promise<WarcraftLogsRateLimitResult>;
   /**
-   * The allowance and `resolveCharacter`'s answer from one request. A refused
-   * document falls back to a lone allowance read and leaves `identity` null:
-   * that question was not answered, so the caller asks it itself.
+   * The allowance and `resolveCharacter`'s answer from one request. A private
+   * or unknown character still answers the identity, and costs one lone
+   * allowance read more; a failing upstream is that limitation for both. Only
+   * a body that cannot be read leaves `identity` null, for the caller to ask
+   * itself.
    */
   getRateLimitWithIdentity(
     key: CharacterKey,

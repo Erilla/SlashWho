@@ -266,23 +266,6 @@ more at the seven a capped run can reach. It agreed with `character(id)` on all
 120 identities sampled, renamed characters included, so the identity proof
 would hold; the points are what rule it out.
 
-### The opening read
-
-A run's opening allowance and its `ResolveCharacter` travel in one document
-since #712: apart they cost a point each, together one. An in-document
-`rateLimitData` reports the counter as it stood before that document's own
-charge, exactly as a lone `RateLimit` read does (three repeats, each reading
-exactly 1 above the preceding lone read and 1 below the following one), so
-`points_remaining_before` means what it meant and the handover gap below stays
-
-1. `points_spent_by_run` falls by the one point saved.
-
-A document Warcraft Logs refuses outright — a private character's GraphQL
-error fails the whole thing — falls back to a lone `RateLimit` read, and the
-run resolves the character on its own as before. A character Warcraft Logs
-does not know is not a refusal: it answers `character: null` beside the
-allowance.
-
 Only about a third of a character's reports hold a Mythic encounter fight (40
 of 117 across six raiders), and nothing else can become a kill or a wipe. So
 since #712 a history page selects `fights` without `masterData`, and the actors
@@ -295,6 +278,30 @@ The follow-up is part of reading the page. It is counted apart, in
 `history_scan_requests` still counts pages and a capped scan reaches as deep
 as it did. A page with no Mythic encounter sends none. Rows recorded before
 #712 read zero there, because their pages carried actors themselves.
+
+### The opening read
+
+A run's opening allowance and its `ResolveCharacter` travel in one document
+since #712: apart they cost a point each, together one. An in-document
+`rateLimitData` reports the counter as it stood before that document's own
+charge, exactly as a lone `RateLimit` read does. In three repeats each reading
+was exactly 1 above the preceding lone read and 1 below the following one. So
+`points_remaining_before` means what it meant, the handover gap above stays at
+one point, and `points_spent_by_run` falls by the point saved.
+
+A character Warcraft Logs does not know is answered with `character: null`
+beside the allowance, in the one document. A GraphQL error fails the whole
+document, and what happens next depends on what it said:
+
+| The document failed with         | Then                                               | Requests |
+| -------------------------------- | -------------------------------------------------- | -------- |
+| `private` or `not_found`         | that is the identity; a lone `RateLimit` follows   | 2        |
+| `rate_limited` or `unavailable`  | both are that limitation; nothing more is asked    | 1        |
+| `schema_drift` (unreadable body) | a lone `RateLimit`; the run resolves the character | 3        |
+
+The lone read after a private character is what keeps the admission gate from
+failing open for every private character. The two requests match what the
+opening cost before #712.
 
 ## What attendance recovery costs, and what it finds
 

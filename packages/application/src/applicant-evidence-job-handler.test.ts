@@ -5552,6 +5552,37 @@ describe("applicant evidence job handler", () => {
         );
       });
 
+      it("takes a private answer from the admission read as the identity's answer", async () => {
+        // Break caught: asking again for a character the admission read
+        // already found private spends a third point to hear the same thing.
+        const resolveCharacter = vi.fn(async () => identity);
+        const getFirstKillReports = emptyEvidence;
+        const handler = handlerFor({
+          evidence: store(),
+          warcraftLogs: {
+            getFirstKillReports,
+            ...openGate,
+            getRateLimitWithIdentity: vi.fn(async () => ({
+              rateLimit: opening,
+              identity: {
+                kind: "limitation" as const,
+                code: "private" as const
+              }
+            })),
+            resolveCharacter
+          },
+          pointsReserve: 0
+        });
+
+        await handler.execute(run.id);
+
+        expect(resolveCharacter).not.toHaveBeenCalled();
+        expect(getFirstKillReports).toHaveBeenCalledWith(
+          key,
+          expect.not.objectContaining({ characterId: expect.anything() })
+        );
+      });
+
       it("still refuses a run the combined read finds over budget", async () => {
         // Break caught: reading the allowance through the combined document
         // must not bypass the admission gate it feeds.

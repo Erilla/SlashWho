@@ -84,11 +84,20 @@ export function createWarcraftLogsClient(
       { name: key.name, realm: key.realm, region: key.region },
       signal
     );
-    // A GraphQL error about the character (a private one, say) fails the
-    // whole document. The allowance is still worth its own point, since
-    // without it the admission gate would fail open.
     if (result.kind !== "success") {
-      return { rateLimit: await getRateLimit(signal), identity: null };
+      // A GraphQL error about the character fails the whole document, but it
+      // answers the identity question: asking again says the same. The
+      // allowance is still worth its own point, since without it the
+      // admission gate would fail open for every such character.
+      if (result.code === "private" || result.code === "not_found") {
+        return { rateLimit: await getRateLimit(signal), identity: result };
+      }
+      // A body that could not be read answers neither question.
+      if (result.code === "schema_drift") {
+        return { rateLimit: await getRateLimit(signal), identity: null };
+      }
+      // A failing upstream would only fail again, and cost a point to.
+      return { rateLimit: result, identity: result };
     }
     return {
       rateLimit: rateLimitFacts(result.value),
