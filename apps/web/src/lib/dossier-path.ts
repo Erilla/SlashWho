@@ -32,3 +32,16 @@ export function warcraftLogsCharacterUrl(key: RealmScopedName): string {
 export function raiderIoCharacterUrl(key: RealmScopedName): string {
   return `https://raider.io/characters/${characterPathSegments(key)}`;
 }
+
+/**
+ * A guild's Raider.IO profile. A guild's path has a character's shape:
+ * region, realm, then its name.
+ */
+export function raiderIoGuildUrl(guild: RealmScopedName): string {
+  return `https://raider.io/guilds/${characterPathSegments(guild)}`;
+}
+
+/** A guild's Warcraft Logs profile. */
+export function warcraftLogsGuildUrl(guild: RealmScopedName): string {
+  return `https://www.warcraftlogs.com/guild/${characterPathSegments(guild)}`;
+}

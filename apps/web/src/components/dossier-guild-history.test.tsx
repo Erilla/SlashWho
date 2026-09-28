@@ -6,7 +6,8 @@ import {
   cleanup,
   fireEvent,
   render,
-  screen
+  screen,
+  within
 } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { ApplicantDossier, CharacterKey } from "@slashwho/contracts";
@@ -121,6 +122,107 @@ it("shows the details in a tooltip on hover and on focus", () => {
   expect(
     document.querySelector(".dossier-guild-timeline-tooltip")?.textContent
   ).toContain("3 raid nights: Ryun");
+});
+
+it("opens a bar's guild on Raider.IO or Warcraft Logs from its context menu", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  // fireEvent returns false when the handler cancels the event, which is
+  // what keeps the browser's own menu from opening over the timeline's.
+  expect(fireEvent.contextMenu(casualBar!)).toBe(false);
+  const menu = screen.getByRole("menu", { name: "Links for SeriouslyCasual" });
+  const raiderIo = within(menu).getByRole("menuitem", {
+    name: "View SeriouslyCasual on Raider.IO (opens in a new tab)"
+  });
+  const warcraftLogs = within(menu).getByRole("menuitem", {
+    name: "View SeriouslyCasual on Warcraft Logs (opens in a new tab)"
+  });
+  expect(raiderIo).toHaveAttribute(
+    "href",
+    "https://raider.io/guilds/eu/silvermoon/SeriouslyCasual"
+  );
+  expect(warcraftLogs).toHaveAttribute(
+    "href",
+    "https://www.warcraftlogs.com/guild/eu/silvermoon/SeriouslyCasual"
+  );
+  for (const link of [raiderIo, warcraftLogs]) {
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  }
+  // A menu and a tooltip would compete for the same few lines of detail.
+  expect(
+    document.querySelector(".dossier-guild-timeline-tooltip")
+  ).not.toBeInTheDocument();
+  fireEvent.click(raiderIo);
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+});
+
+it("works a bar's context menu from the keyboard", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const [casualBar] = screen.getAllByRole("img", { name: /raid night/ });
+  casualBar!.focus();
+  fireEvent.contextMenu(casualBar!);
+  const [raiderIo, warcraftLogs] = screen.getAllByRole("menuitem");
+  expect(raiderIo).toHaveFocus();
+  fireEvent.keyDown(raiderIo!, { key: "ArrowDown" });
+  expect(warcraftLogs).toHaveFocus();
+  fireEvent.keyDown(warcraftLogs!, { key: "ArrowDown" });
+  expect(raiderIo).toHaveFocus();
+  fireEvent.keyDown(raiderIo!, { key: "End" });
+  expect(warcraftLogs).toHaveFocus();
+  fireEvent.keyDown(warcraftLogs!, { key: "Escape" });
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  expect(casualBar).toHaveFocus();
+});
+
+it("closes a bar's context menu on a click elsewhere or a scroll", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const [casualBar, rancourBar] = screen.getAllByRole("img", {
+    name: /raid night/
+  });
+  fireEvent.contextMenu(casualBar!);
+  fireEvent.pointerDown(document.body);
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  fireEvent.contextMenu(rancourBar!);
+  expect(screen.getByRole("menu", { name: "Links for Rancour" })).toBeVisible();
+  fireEvent.scroll(
+    screen.getByRole("region", {
+      name: "Guild history timeline, scrolls horizontally"
+    })
+  );
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+});
+
+it("leaves the browser's own context menu everywhere but the bars", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const band = document.querySelector(".dossier-guild-timeline-band")!;
+  expect(fireEvent.contextMenu(band)).toBe(true);
+  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 });
 
 /** Two lanes of bars: SeriouslyCasual raids alongside Rancour. */
