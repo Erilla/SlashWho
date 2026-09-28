@@ -36,12 +36,14 @@ export {
   dossierCuttingEdgeSchema,
   dossierFirstKillSchema,
   dossierGuildSchema,
+  dossierKillRosterSchema,
   dossierLimitationAffectsSchema,
   dossierLimitationCodeSchema,
   dossierLimitationEncounterSchema,
   dossierLimitationSchema,
   dossierResearchSchema,
   dossierRaidSchema,
+  dossierRosterMemberSchema,
   dossierSourceLabelSchema
 } from "./dossier";
 export type {
@@ -62,6 +64,7 @@ export type {
   DossierCharacter,
   DossierEvidenceState,
   DossierCuttingEdge,
+  DossierKillRoster,
   DossierLimitation,
   DossierLimitationAffects,
   DossierLimitationEncounter,

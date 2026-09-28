@@ -52,7 +52,9 @@ export type {
   ApplicantDossierBoss,
   ApplicantDossierCuttingEdge,
   ApplicantDossierFirstKill,
+  ApplicantDossierKillRoster,
   ApplicantDossierRaid,
+  ApplicantDossierRosterMember,
   ApplicantDossierWipe,
   BuildApplicantDossierInput,
   DossierCharacter,
@@ -60,6 +62,10 @@ export type {
   DossierKillEvidence,
   DossierLimitation,
   DossierLimitationEncounter,
+  DossierLoggedEncounter,
+  DossierRaiderIoFirstKill,
+  DossierRosterMember,
+  DossierRosterRole,
   DossierTierBestParse,
   DossierWipeEvidence
 } from "./applicant-dossier";
