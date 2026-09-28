@@ -17,6 +17,11 @@ export interface RaiderIoCharacter {
    * system cannot represent, so anything derived from it is knowingly incomplete.
    */
   readonly omittedMembers?: boolean;
+  /**
+   * Raider.IO's own id for the character, which a logged encounter's roster
+   * names it by. Absent from profile lists, which do not carry it.
+   */
+  readonly raiderIoCharacterId?: number;
 }
 
 export interface RaiderIoProfile {
@@ -35,15 +40,22 @@ export type RaiderIoEvidenceLimitation =
   | "schema_drift";
 
 /**
- * A Mythic kill Raider.IO attributes to the character. Never dossier evidence:
- * it only tells the Warcraft Logs scan which guild's logs to search and on
- * which night, and a kill counts only once a hydrated log attributes it.
+ * A Mythic kill Raider.IO attributes to the character. On its own it is only a
+ * place to search: it tells the Warcraft Logs scan which guild's logs to read
+ * and on which night. Where Raider.IO also holds a parsed combat log of it
+ * (`loggedEncounterId`), that log is evidence (#732).
  */
 export type HistoricMythicKill = Readonly<{
   raidSlug: string;
   bossSlug: string;
   firstDefeated: string;
   guild: { name: string; realm: string; region: string } | null;
+  /**
+   * Raider.IO's logged encounter of this first kill, or null when it has
+   * none. It always names the first kill, never a reclear. Always set by the
+   * client; optional so a kill built without it still types.
+   */
+  loggedEncounterId?: number | null;
 }>;
 
 export type HistoricMythicKillResult =
@@ -96,6 +108,53 @@ export type MythicBossRankingsResult =
 /** Receives no request identity, payload, or credential information. */
 export type RaiderIoPhysicalRequestObserver = () => void;
 
+export type RaiderIoRosterRole = "tank" | "healer" | "dps";
+
+/** One raider on a logged encounter's roster. */
+export type LoggedEncounterMember = Readonly<{
+  raiderIoCharacterId: number;
+  name: string;
+  realm: string;
+  region: string;
+  className: string;
+  specName: string;
+  role: RaiderIoRosterRole;
+  /** Null when Raider.IO did not say; never zero. */
+  itemLevel: number | null;
+}>;
+
+/**
+ * Raider.IO's parsed combat log of one Mythic kill: only the fields #732
+ * keeps. Never the uploaders, never the response.
+ */
+export type LoggedEncounter = Readonly<{
+  kind: "encounter";
+  raidSlug: string;
+  bossSlug: string;
+  pulledAt: string;
+  defeatedAt: string;
+  durationMs: number;
+  itemLevel: Readonly<{ average: number; min: number; max: number }>;
+  /** Null for a kill with no guild: a pug. */
+  guild: Readonly<{ name: string; realm: string; region: string }> | null;
+  deathCount: number;
+  vantusCount: number;
+  roster:
+    | Readonly<{
+        state: "available";
+        members: readonly LoggedEncounterMember[];
+      }>
+    | Readonly<{ state: "unavailable"; reason: "private" }>;
+}>;
+
+export type LoggedEncounterResult =
+  | LoggedEncounter
+  | {
+      kind: "limitation";
+      code: RaiderIoEvidenceLimitation;
+      retryAfterMs?: number;
+    };
+
 export interface RaiderIoGateway {
   getCharacter(
     key: CharacterKey,
@@ -119,4 +178,11 @@ export interface RaiderIoGateway {
     signal?: AbortSignal,
     onPhysicalRequest?: RaiderIoPhysicalRequestObserver
   ): Promise<MythicBossRankingsResult>;
+  /** One logged encounter. The phase decides when one is read again (#732). */
+  getLoggedEncounter(
+    raidSlug: string,
+    loggedEncounterId: number,
+    signal?: AbortSignal,
+    onPhysicalRequest?: RaiderIoPhysicalRequestObserver
+  ): Promise<LoggedEncounterResult>;
 }

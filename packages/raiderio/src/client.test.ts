@@ -734,13 +734,15 @@ describe("Raider.IO gateway", () => {
           raidSlug: "nerubar-palace",
           bossSlug: "queen-ansurek",
           firstDefeated: "2025-02-04T17:59:00.000Z",
-          guild: { name: "Example Guild", realm: "silvermoon", region: "eu" }
+          guild: { name: "Example Guild", realm: "silvermoon", region: "eu" },
+          loggedEncounterId: null
         },
         {
           raidSlug: "nerubar-palace",
           bossSlug: "the-silken-court",
           firstDefeated: "2025-01-29T20:00:00.000Z",
-          guild: null
+          guild: null,
+          loggedEncounterId: null
         }
       ]
     });
@@ -1193,5 +1195,473 @@ describe("Raider.IO gateway", () => {
         bossSlug: "queen-ansurek"
       })
     ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+  });
+});
+
+type RecordedBody = { status: number; body: unknown };
+
+function readRecorded(file: string): RecordedBody {
+  return JSON.parse(
+    readFileSync(
+      fileURLToPath(
+        new URL(
+          `../../../tests/fixtures/recorded/raiderio/${file}.json`,
+          import.meta.url
+        )
+      ),
+      "utf8"
+    )
+  ) as RecordedBody;
+}
+
+function readHandBuilt(file: string): RecordedBody {
+  return JSON.parse(
+    readFileSync(resolve(fixtureDirectory, `${file}.json`), "utf8")
+  ) as RecordedBody;
+}
+
+/** A client whose only upstream is one logged encounter at its own path. */
+function loggedEncounterClient(
+  fixture: RecordedBody,
+  edit: (body: Record<string, unknown>) => void = () => undefined
+) {
+  const requested: string[] = [];
+  const body = structuredClone(fixture.body) as Record<string, unknown>;
+  edit(body);
+  const client = createRaiderIoClient({
+    fetch: async (input) => {
+      const url = new URL(
+        typeof input === "string" || input instanceof URL ? input : input.url
+      );
+      requested.push(`${url.pathname}${url.search}`);
+      return new Response(JSON.stringify(body), {
+        status: fixture.status,
+        headers: { "Content-Type": "application/json" }
+      });
+    },
+    baseUrl: "https://fixtures.invalid",
+    timeoutMs: 50,
+    accessKey: "server-key"
+  });
+  return { client, requested };
+}
+
+type KillDetails = {
+  kill: Record<string, unknown>;
+  raid: Record<string, unknown>;
+  log: Record<string, unknown>;
+  guildPrivacy: Record<string, unknown> | null;
+  roster?: { character: Record<string, unknown> }[];
+};
+const details = (body: Record<string, unknown>) =>
+  body.killDetails as KillDetails;
+
+describe("Raider.IO logged encounters", () => {
+  it("reads a recorded guild kill's parsed fields from its own path", async () => {
+    const { client, requested } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill")
+    );
+
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
+
+    // Not an /api/v1 path, so the access key is never attached.
+    expect(requested).toEqual(["/api/raid/logged-encounters/tier-mn-1/700001"]);
+    expect(result).toEqual({
+      kind: "encounter",
+      raidSlug: "tier-mn-1",
+      bossSlug: "midnight-falls",
+      pulledAt: "2020-01-02T00:00:00.000Z",
+      defeatedAt: "2020-01-03T00:00:00.000Z",
+      durationMs: 507_324,
+      itemLevel: { average: 290.312, min: 284.938, max: 293.062 },
+      guild: {
+        name: "Fixture Guild Alfa",
+        realm: "twisting-nether",
+        region: "eu"
+      },
+      deathCount: 2,
+      vantusCount: 16,
+      roster: {
+        state: "available",
+        members: [
+          {
+            raiderIoCharacterId: 1,
+            name: "Alfa",
+            realm: "draenor",
+            region: "eu",
+            className: "Demon Hunter",
+            specName: "Havoc",
+            role: "dps",
+            itemLevel: 290.5
+          },
+          {
+            raiderIoCharacterId: 2,
+            name: "Bravo",
+            realm: "twisting-nether",
+            region: "eu",
+            className: "Warrior",
+            specName: "Protection",
+            role: "tank",
+            itemLevel: 292.1
+          },
+          {
+            raiderIoCharacterId: 3,
+            name: "Charlie",
+            realm: "twisting-nether",
+            region: "eu",
+            className: "Priest",
+            specName: "Holy",
+            role: "healer",
+            itemLevel: 291.4
+          },
+          {
+            raiderIoCharacterId: 4,
+            name: "Delta",
+            realm: "twisting-nether",
+            region: "eu",
+            className: "Mage",
+            specName: "Frost",
+            role: "dps",
+            itemLevel: 289.9
+          },
+          {
+            raiderIoCharacterId: 5,
+            name: "Echo",
+            realm: "twisting-nether",
+            region: "eu",
+            className: "Paladin",
+            specName: "Holy",
+            role: "healer",
+            itemLevel: 288.7
+          }
+        ]
+      }
+    });
+  });
+
+  it("never surfaces the log's uploaders, whatever they are called", async () => {
+    // Break caught: `log.sources` names the uploader's Raider.IO account,
+    // which can be a BattleTag or a Discord handle. It must never be parsed.
+    const { client } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      (body) => {
+        details(body).log.sources = [
+          {
+            name: "Uploader#12345",
+            avatar: "https://example.invalid/avatar.png",
+            characterName: "Uploadername",
+            anonymized: false
+          }
+        ];
+      }
+    );
+
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
+
+    expect(result.kind).toBe("encounter");
+    expect(JSON.stringify(result)).not.toMatch(/Uploader|avatar|sources/);
+  });
+
+  it("keeps a guild-less kill with its roster", async () => {
+    const { client } = loggedEncounterClient(
+      readRecorded("logged-encounter-no-guild")
+    );
+
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_002);
+
+    expect(result).toMatchObject({
+      kind: "encounter",
+      bossSlug: "chimaerus-the-undreamt-god",
+      guild: null,
+      roster: { state: "available", members: expect.any(Array) }
+    });
+  });
+
+  it("keeps the kill when the guild has hidden its roster", async () => {
+    const { client } = loggedEncounterClient(
+      readHandBuilt("logged-encounter-private-roster")
+    );
+
+    await expect(
+      client.getLoggedEncounter("tier-mn-1", 700_001)
+    ).resolves.toMatchObject({
+      kind: "encounter",
+      defeatedAt: "2020-01-03T00:00:00.000Z",
+      guild: { name: "Fixture Guild Alfa" },
+      roster: { state: "unavailable", reason: "private" }
+    });
+  });
+
+  it.each([
+    [
+      "missing",
+      (body: Record<string, unknown>) => void delete details(body).roster
+    ],
+    [
+      "empty",
+      (body: Record<string, unknown>) => void (details(body).roster = [])
+    ]
+  ])(
+    "treats an %s roster as unavailable, never as nobody",
+    async (_name, edit) => {
+      const { client } = loggedEncounterClient(
+        readRecorded("logged-encounter-guild-kill"),
+        edit
+      );
+      await expect(
+        client.getLoggedEncounter("tier-mn-1", 700_001)
+      ).resolves.toMatchObject({
+        roster: { state: "unavailable", reason: "private" }
+      });
+    }
+  );
+
+  it("spells a raider's realm as a character key spells it", async () => {
+    // Break caught: a removal is keyed by the Blizzard realm slug. Kept with
+    // Raider.IO's accents, a removed raider on an accented realm would never
+    // match their suppression and would still be shown on other dossiers.
+    const { client } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      (body) => {
+        (
+          details(body).roster![0]!.character.realm as Record<string, unknown>
+        ).slug = "Aggra-Português";
+      }
+    );
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
+    if (result.kind !== "encounter" || result.roster.state !== "available")
+      throw new Error("expected_available_roster");
+    expect(result.roster.members[0]!.realm).toBe("aggra-portugues");
+  });
+
+  it("keeps a missing item level as null, never zero", async () => {
+    const { client } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      (body) => {
+        delete details(body).roster![0]!.character.itemLevelEquipped;
+      }
+    );
+    const result = await client.getLoggedEncounter("tier-mn-1", 700_001);
+    if (result.kind !== "encounter" || result.roster.state !== "available")
+      throw new Error("expected_available_roster");
+    expect(result.roster.members[0]!.itemLevel).toBeNull();
+  });
+
+  it.each([
+    [
+      "an unsuccessful pull",
+      (body: Record<string, unknown>) =>
+        void (details(body).kill.isSuccess = false)
+    ],
+    [
+      "a Heroic kill",
+      (body: Record<string, unknown>) =>
+        void (details(body).raid.difficulty = "heroic")
+    ],
+    [
+      "a malformed roster role",
+      (body: Record<string, unknown>) =>
+        void ((
+          details(body).roster![0]!.character.spec as Record<string, unknown>
+        ).role = "support")
+    ]
+  ])("reads %s as schema drift", async (_name, edit) => {
+    const { client } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      edit
+    );
+    await expect(
+      client.getLoggedEncounter("tier-mn-1", 700_001)
+    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+  });
+
+  it.each([
+    [404, {}, { kind: "limitation", code: "not_found" }],
+    [403, {}, { kind: "limitation", code: "private" }],
+    [
+      429,
+      { "retry-after": "30" },
+      { kind: "limitation", code: "rate_limited", retryAfterMs: 30_000 }
+    ],
+    [500, {}, { kind: "limitation", code: "unavailable" }]
+  ])("classifies a %i as a limitation", async (status, headers, expected) => {
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response(JSON.stringify({ statusCode: status }), {
+          status,
+          headers: { "Content-Type": "application/json", ...headers }
+        }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+    await expect(
+      client.getLoggedEncounter("tier-mn-1", 700_001)
+    ).resolves.toEqual(expected);
+  });
+
+  it("refuses an id or slug it could not safely put in a path, without a request", async () => {
+    let calls = 0;
+    const client = createRaiderIoClient({
+      fetch: async () => {
+        calls += 1;
+        return new Response("{}", { status: 200 });
+      },
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+    await expect(client.getLoggedEncounter("tier-mn-1", 0)).resolves.toEqual({
+      kind: "limitation",
+      code: "schema_drift"
+    });
+    await expect(
+      client.getLoggedEncounter("../tier", 700_001)
+    ).resolves.toEqual({ kind: "limitation", code: "schema_drift" });
+    expect(calls).toBe(0);
+  });
+
+  it("reports each encounter request it sends", async () => {
+    const { client } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill")
+    );
+    let physical = 0;
+    await client.getLoggedEncounter("tier-mn-1", 700_001, undefined, () => {
+      physical += 1;
+    });
+    expect(physical).toBe(1);
+  });
+});
+
+describe("Raider.IO kill list logged encounters", () => {
+  it("keeps a recorded kill's logged encounter id, and null where there is none", async () => {
+    const recording = readRecorded("raid-progress-logged-first-kill");
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response(JSON.stringify(recording.body), {
+          status: recording.status,
+          headers: { "Content-Type": "application/json" }
+        }),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    const result = await client.getHistoricMythicKills(sentinel, {
+      tierOrdinals: [35]
+    });
+
+    expect(result).toEqual({
+      kind: "evidence",
+      kills: [
+        {
+          raidSlug: "manaforge-omega",
+          bossSlug: "nexus-king-salhadaar",
+          firstDefeated: "2020-01-02T00:00:00.000Z",
+          guild: {
+            name: "Fixture Guild Bravo",
+            realm: "draenor",
+            region: "eu"
+          },
+          loggedEncounterId: null
+        },
+        {
+          raidSlug: "tier-mn-1",
+          bossSlug: "midnight-falls",
+          firstDefeated: "2020-01-03T00:00:00.000Z",
+          guild: {
+            name: "Fixture Guild Alfa",
+            realm: "twisting-nether",
+            region: "eu"
+          },
+          loggedEncounterId: 1
+        }
+      ]
+    });
+  });
+
+  it.each([[[34, 35]], [[35, 34]]])(
+    "keeps the id of the kill the earliest-kill merge keeps (tiers %j)",
+    async (tierOrdinals) => {
+      // Break caught: a merge that kept the earlier date but the later kill's
+      // id would read a reclear's log as the first kill's.
+      const kill = (firstDefeated: string, loggedEncounterId: number) => ({
+        characterRaidProgress: {
+          raidProgress: [
+            {
+              raid: "tier-mn-1",
+              encountersDefeated: {
+                mythic: [
+                  { slug: "midnight-falls", firstDefeated, loggedEncounterId }
+                ]
+              }
+            }
+          ]
+        }
+      });
+      const client = createRaiderIoClient({
+        fetch: async (input) => {
+          const url = new URL(
+            typeof input === "string" || input instanceof URL
+              ? input
+              : input.url
+          );
+          const body =
+            url.searchParams.get("tier") === "35"
+              ? kill("2026-07-20T17:25:57.000Z", 700_001)
+              : kill("2026-07-27T18:00:00.000Z", 700_003);
+          return new Response(JSON.stringify(body), { status: 200 });
+        },
+        baseUrl: "https://fixtures.invalid",
+        timeoutMs: 50
+      });
+
+      await expect(
+        client.getHistoricMythicKills(sentinel, { tierOrdinals })
+      ).resolves.toEqual({
+        kind: "evidence",
+        kills: [
+          expect.objectContaining({
+            firstDefeated: "2026-07-20T17:25:57.000Z",
+            loggedEncounterId: 700_001
+          })
+        ]
+      });
+    }
+  );
+});
+
+describe("Raider.IO character id", () => {
+  it("reads the character's own Raider.IO id, which a roster names it by", async () => {
+    const client = createRaiderIoClient({
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            characterDetails: {
+              character: {
+                id: 424_242,
+                name: "Sentinel",
+                level: 90,
+                class: { name: "Demon Hunter" },
+                realm: { slug: "silvermoon" },
+                region: { slug: "eu" }
+              }
+            }
+          }),
+          { status: 200 }
+        ),
+      baseUrl: "https://fixtures.invalid",
+      timeoutMs: 50
+    });
+
+    await expect(client.getCharacter(sentinel)).resolves.toMatchObject({
+      raiderIoCharacterId: 424_242
+    });
+  });
+
+  it("leaves the id absent rather than inventing one", async () => {
+    const character = await recordedClient("character-claimed").getCharacter({
+      region: "eu",
+      realm: "silvermoon",
+      name: "charlie"
+    });
+    expect(character).not.toHaveProperty("raiderIoCharacterId");
   });
 });

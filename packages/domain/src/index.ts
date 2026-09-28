@@ -9,6 +9,7 @@ export {
 } from "./character-key";
 export type { CharacterGuild, CharacterKey, Region } from "./character-key";
 export { formatCharacterDisplayName } from "./display-name";
+export { isRosterShown } from "./logged-encounter";
 export {
   currentContentEligibility,
   currentContentEligibilityByRaidId,

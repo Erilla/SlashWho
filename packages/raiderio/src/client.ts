@@ -1,4 +1,8 @@
-import { isValidCharacterKey, type CharacterKey } from "@slashwho/domain";
+import {
+  isRosterShown,
+  isValidCharacterKey,
+  type CharacterKey
+} from "@slashwho/domain";
 import {
   classifyResponse,
   createUpstreamError,
@@ -18,9 +22,12 @@ import type {
   HistoricMythicKill,
   HistoricMythicKillOptions,
   HistoricMythicKillResult,
+  LoggedEncounter,
+  LoggedEncounterResult,
   MythicBossRanking,
   MythicBossRankingsOptions,
   MythicBossRankingsResult,
+  RaiderIoEvidenceLimitation,
   RaiderIoPhysicalRequestObserver,
   RaiderIoGateway,
   RaiderIoProfile
@@ -103,6 +110,7 @@ const historicRaidProgressResponseSchema = z.object({
             z.object({
               slug: z.string().min(1),
               firstDefeated: z.string().datetime(),
+              loggedEncounterId: z.number().int().positive().nullable().optional(),
               guild: z
                 .object({
                   name: z.string().min(1),
@@ -158,6 +166,115 @@ const guildEncountersSchema = z.object({
   )
 });
 
+// Recorded 2026-09-28. Only these fields are read. `log.sources` names the
+// uploader's Raider.IO account, which can be a BattleTag or a Discord handle,
+// so the schema never names it and zod strips it with everything else.
+const loggedEncounterResponseSchema = z.object({
+  killDetails: z.object({
+    kill: z.object({
+      pulledAt: z.string().datetime(),
+      defeatedAt: z.string().datetime(),
+      durationMs: z.number().int().nonnegative(),
+      isSuccess: z.boolean(),
+      itemLevelEquippedAvg: z.number().nonnegative(),
+      itemLevelEquippedMax: z.number().nonnegative(),
+      itemLevelEquippedMin: z.number().nonnegative()
+    }),
+    log: z.object({
+      deaths: z.object({ count: z.number().int().nonnegative() }),
+      vantus: z.object({ count: z.number().int().nonnegative() })
+    }),
+    raid: z.object({ slug: z.string().min(1), difficulty: z.string().min(1) }),
+    boss: z.object({ slug: z.string().min(1) }),
+    guild: z
+      .object({
+        name: z.string().min(1),
+        realm: z.object({ slug: z.string().min(1) }),
+        region: z.object({ slug: z.string().min(1) })
+      })
+      .nullable()
+      .optional(),
+    guildPrivacy: z.object({ raidComps: z.boolean() }).nullable().optional(),
+    roster: z
+      .array(
+        z.object({
+          character: z.object({
+            id: z.number().int().positive(),
+            name: z.string().min(1),
+            class: z.object({ name: z.string().min(1) }),
+            spec: z.object({
+              name: z.string().min(1),
+              role: z.enum(["tank", "healer", "dps"])
+            }),
+            itemLevelEquipped: z.number().nonnegative().nullable().optional(),
+            realm: z.object({ slug: z.string().min(1) }),
+            region: z.object({ slug: z.string().min(1) })
+          })
+        })
+      )
+      .optional()
+  })
+});
+
+const lowerCase = (value: string) => value.toLocaleLowerCase("en-US");
+
+/**
+ * A roster member's realm as every character key spells it: lower case with
+ * the accents dropped, as `parseCharacterPath` folds a Raider.IO URL
+ * ("aggra-português" is "aggra-portugues"). A suppression is keyed the same
+ * way, so a removed raider is recognised on another character's roster.
+ */
+const memberRealm = (value: string) =>
+  lowerCase(value).normalize("NFD").replace(/\p{M}/gu, "");
+
+function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
+  const { killDetails } = loggedEncounterResponseSchema.parse(value);
+  // A first kill's log is a successful Mythic pull. Anything else is not the
+  // kill the character's list named, and is refused as drift.
+  if (!killDetails.kill.isSuccess || killDetails.raid.difficulty !== "mythic") {
+    throw new Error("logged_encounter_not_a_mythic_kill");
+  }
+  const roster = killDetails.roster ?? [];
+  const hidden = !isRosterShown(killDetails.guildPrivacy?.raidComps, roster);
+  return {
+    kind: "encounter",
+    raidSlug: killDetails.raid.slug,
+    bossSlug: killDetails.boss.slug,
+    pulledAt: killDetails.kill.pulledAt,
+    defeatedAt: killDetails.kill.defeatedAt,
+    durationMs: killDetails.kill.durationMs,
+    itemLevel: {
+      average: killDetails.kill.itemLevelEquippedAvg,
+      min: killDetails.kill.itemLevelEquippedMin,
+      max: killDetails.kill.itemLevelEquippedMax
+    },
+    guild: killDetails.guild
+      ? {
+          name: killDetails.guild.name,
+          realm: lowerCase(killDetails.guild.realm.slug),
+          region: lowerCase(killDetails.guild.region.slug)
+        }
+      : null,
+    deathCount: killDetails.log.deaths.count,
+    vantusCount: killDetails.log.vantus.count,
+    roster: hidden
+      ? { state: "unavailable", reason: "private" }
+      : {
+          state: "available",
+          members: roster.map(({ character }) => ({
+            raiderIoCharacterId: character.id,
+            name: character.name,
+            realm: memberRealm(character.realm.slug),
+            region: lowerCase(character.region.slug),
+            className: character.class.name,
+            specName: character.spec.name,
+            role: character.spec.role,
+            itemLevel: character.itemLevelEquipped ?? null
+          }))
+        }
+  };
+}
+
 export type CreateRaiderIoClientOptions = {
   fetch: typeof globalThis.fetch;
   baseUrl: string;
@@ -203,7 +320,8 @@ function normalizeHistoricRaidProgress(
               realm: encounter.guild.realm.slug,
               region: encounter.guild.region.slug.toLocaleLowerCase("en-US")
             }
-          : null
+          : null,
+        loggedEncounterId: encounter.loggedEncounterId ?? null
       });
     }
   }
@@ -211,34 +329,20 @@ function normalizeHistoricRaidProgress(
   return kills;
 }
 
-function historicKillLimitation(error: unknown): HistoricMythicKillResult {
+type RaiderIoLimitationResult = Readonly<{
+  kind: "limitation";
+  code: RaiderIoEvidenceLimitation;
+  retryAfterMs?: number;
+}>;
+
+/**
+ * An upstream failure as a limitation, for every evidence method: the kill
+ * list, the boss rankings and a logged encounter answer failures alike.
+ */
+function raiderIoLimitation(error: unknown): RaiderIoLimitationResult {
   if (!isUpstreamFailure(error)) {
     return { kind: "limitation", code: "unavailable" };
   }
-
-  switch (error.kind) {
-    case "not_found":
-      return { kind: "limitation", code: "not_found" };
-    case "forbidden":
-      return { kind: "limitation", code: "private" };
-    case "schema_drift":
-      return { kind: "limitation", code: "schema_drift" };
-    case "transient":
-      return {
-        kind: "limitation",
-        code: error.status === 429 ? "rate_limited" : "unavailable",
-        ...(error.retryAfterMs === undefined
-          ? {}
-          : { retryAfterMs: error.retryAfterMs })
-      };
-  }
-}
-
-function bossRankingLimitation(error: unknown): MythicBossRankingsResult {
-  if (!isUpstreamFailure(error)) {
-    return { kind: "limitation", code: "unavailable" };
-  }
-
   switch (error.kind) {
     case "not_found":
       return { kind: "limitation", code: "not_found" };
@@ -519,7 +623,7 @@ export function createRaiderIoClient(
       // Tiers after a failure were never started.
       if (!outcome) break;
       if (outcome.kind === "failed") {
-        return historicKillLimitation(outcome.error);
+        return raiderIoLimitation(outcome.error);
       }
 
       for (const kill of outcome.kills) {
@@ -600,7 +704,7 @@ export function createRaiderIoClient(
         return { kind: "rankings", rows };
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
-        return bossRankingLimitation(error);
+        return raiderIoLimitation(error);
       }
     }
 
@@ -623,7 +727,40 @@ export function createRaiderIoClient(
       return { kind: "rankings", rows };
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
-      return bossRankingLimitation(error);
+      return raiderIoLimitation(error);
+    }
+  }
+
+  async function getLoggedEncounter(
+    raidSlug: string,
+    loggedEncounterId: number,
+    signal?: AbortSignal,
+    onPhysicalRequest?: RaiderIoPhysicalRequestObserver
+  ): Promise<LoggedEncounterResult> {
+    // Both go into the path, so neither may be anything but what Raider.IO
+    // itself sends: a slug and a positive integer.
+    if (
+      !/^[a-z0-9-]+$/.test(raidSlug) ||
+      !Number.isSafeInteger(loggedEncounterId) ||
+      loggedEncounterId <= 0
+    ) {
+      return { kind: "limitation", code: "schema_drift" };
+    }
+    signal?.throwIfAborted();
+    const url = new URL(
+      `/api/raid/logged-encounters/${raidSlug}/${String(loggedEncounterId)}`,
+      baseUrl
+    );
+    try {
+      return await request(
+        url,
+        normalizeLoggedEncounter,
+        signal,
+        onPhysicalRequest
+      );
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return raiderIoLimitation(error);
     }
   }
 
@@ -632,6 +769,7 @@ export function createRaiderIoClient(
     getClaimedCharacters,
     resolveProfileGuess,
     getHistoricMythicKills,
-    getMythicBossRankings
+    getMythicBossRankings,
+    getLoggedEncounter
   };
 }
