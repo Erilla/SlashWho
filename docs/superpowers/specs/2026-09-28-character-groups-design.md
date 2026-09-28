@@ -86,6 +86,14 @@ risk. All were made on 2026-09-28.
     rather than once per opened character.
 - **No automatic discovery of new members.** A group grows as its members are
   opened, as dossiers do today.
+- **Viewing a stale group's page starts a rediscovery.**
+  - The page sends one `POST start` from the opened character, charged to the
+    viewer's search allowance as any start is.
+  - A fresh group's page never does.
+  - This extends today's `provisional` auto-start to every stale group page.
+    Today a stale own-snapshot page does not auto-start.
+  - A start that is refused, for example by the rate limit, leaves the
+    displayed dossier as it is, with no research error.
 - **Links stop merging after 90 days unobserved.**
 - **Three phases.** Write the new tables first and compare, switch reads
   second, add rejection and expiry third.
@@ -187,6 +195,13 @@ to an existing table in any phase.
   - Either applies to the group that contains the member it was made from. If
     a split puts the excluded character in another group, the exclusion has no
     effect there, and it applies again if they rejoin.
+  - **A self-exclusion is ignored.** Today the root's own row offers Exclude,
+    and `setDiscoveredExcluded` will write a row from O naming O. That is
+    harmless today, because `resolveSubjects` never shows the root excluded.
+    Under groups it would grey O on every sibling's page. So every read and the
+    replay ignore a row whose maker is the character it names. Phase 2 guards
+    the write and hides Exclude on the opened character's row. The replay
+    counts the self-exclusions on test.
 
 ### Publishing a discovery
 
@@ -211,6 +226,9 @@ to an existing table in any phase.
 
 - **Writers that need only the groups lock** take only that: a manual
   connection add or remove, a rejection, an undo and the maintenance pass.
+- **Phase 1's post-commit write** takes O's root lock, then the groups lock.
+  That serialises it with every other publication from O, as the publication
+  itself was serialised.
 - **What the ordering guarantees.** No writer takes the groups lock and then
   a root lock, and no writer holds a `discovery_runs` row lock while waiting
   for an advisory lock. This rules out deadlocks among advisory locks, and
@@ -226,9 +244,24 @@ to an existing table in any phase.
 4. Recompute O's group and the groups of every character whose counting links
    changed, rewriting `last_discovered_at`.
 
+**Step 3 is monotone,** so a delayed write can never undo a newer one:
+
+- it never lowers `observed_at`;
+- it never retracts a row observed after its own run started.
+
+A continuation cycle that commits late therefore cannot re-add rows with an
+older time over a newer run's, and its seal cannot retract what a newer run
+saw.
+
 - **Phase 1:** the snapshot commits as today. Steps 3 and 4 then run in a
-  separate, best-effort transaction, so a failure logs
-  `character_groups_write_failed` and never fails the publication.
+  separate, best-effort transaction.
+  - It runs after the handler's own follow-ups, including
+    `enqueueFingerprintAdmission`, so waiting for the groups lock never delays
+    them.
+  - It sits in a catch-all that ignores the job's abort signal, so an abort
+    cannot turn it into a `cancelled` job or skip anything after it.
+  - A failure logs `character_groups_write_failed` and never fails the
+    publication.
 - **Phase 2 onwards:** all four steps are one transaction. A failure rolls the
   whole publication back, snapshot included. A snapshot then never commits
   without its group update, and a reader sees either the state before or the
@@ -243,10 +276,10 @@ the lowest character id. Group ids never leave the database.
 Retraction is decided separately for each source family, from what the run
 actually did, not from its snapshot's overall state.
 
-| Family                                                  | O's earlier observations of this family that this run did not see are retracted when                                                                                                                                                                                                                                                           |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Raider.IO (`claimed`, `declared_main`, `profile_guess`) | The run did its own Raider.IO discovery and `raiderIoLimitation` is null. This is read from the handler, never from the snapshot, whose limitation becomes `fingerprint_sweep_capped` on a capped cycle. A `privacy_hidden` run retracts none. A continuation cycle never retracts a Raider.IO link: it did no Raider.IO discovery of its own. |
-| Fingerprint                                             | The sweep reached `matched` over a roster it actually read. For a continuation chain, this is at the seal, over the observations the chain's cycles made since cycle 1 started. An empty `matched` caused by a 404 on O's profile or roster retracts nothing.                                                                                  |
+| Family                                                  | O's earlier observations of this family that this run did not see are retracted when                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Raider.IO (`claimed`, `declared_main`, `profile_guess`) | The run did its own Raider.IO discovery and `raiderIoLimitation` is null. This is read from the handler, never from the snapshot, whose limitation becomes `fingerprint_sweep_capped` on a capped cycle. A `privacy_hidden` run retracts none. A continuation cycle never retracts a Raider.IO link: it did no Raider.IO discovery of its own.                                                                                                                                             |
+| Fingerprint                                             | The sweep reached `matched` having read every roster it set out to. For a continuation chain, this is at the seal, over the observations the chain's cycles made since cycle 1 started. It needs one domain change: `discoverFingerprintMatches` gains an outcome `unread` for a 404 on O's profile or roster, which today returns the same empty `matched` as a real empty match, and `unread` retracts nothing. A `matched` that skipped a 404'd historical guild also retracts nothing. |
 
 - **Nothing to retract in these cases:**
   - a sweep that was `not_due`;
@@ -256,9 +289,13 @@ actually did, not from its snapshot's overall state.
 - **The `not_due` case matters.** Such a run publishes the Raider.IO
   characters alone, and can be `complete`. That must never cut fingerprint
   links.
-- **Every observation a run makes is added**, whatever its outcome, and
-  renews `observed_at` for the pairs it saw again. A run completing against a
-  live sweep's snapshot still records its Raider.IO observations.
+- **What gets recorded.** Observations are recorded on the four publication
+  paths only. Each records everything its run saw, whatever its snapshot
+  state, and renews `observed_at` for the pairs it saw again. A run completing
+  against a live sweep's snapshot records its Raider.IO observations. A run
+  that publishes nothing records nothing, such as a failed sweep that is
+  retried, or a run left waiting for an admission. The run that eventually
+  publishes records them.
 
 ### Convergence
 
@@ -295,10 +332,22 @@ another migration took the number):
    It guards the query itself; the real check is the replay.
 
 **Worker.** Every publication path runs steps 3 and 4 in a best-effort
-transaction after its own commit. Nothing about the publication itself changes:
-`completeWithLiveSweepSnapshot` stays the single statement it is today, and
-continuations cannot be pushed into `continueWithoutProgress` by the new
-writes.
+transaction after its own commit and follow-ups. Nothing about the publication
+itself changes: `completeWithLiveSweepSnapshot` stays the single statement it
+is today, and continuations cannot be pushed into `continueWithoutProgress` by
+the new writes.
+
+**Healing lost writes.** The maintenance pass finds every run completed in the
+last 7 days that published a snapshot but has no `character_connections` row
+carrying its run id. A fixed look-back needs no stored watermark, and
+replaying twice is harmless. For each, it replays step 3 from that snapshot, under
+the same locks and the same monotone rule.
+
+- **Why it's safe.** A run whose observations were all retracted since, or
+  that observed nothing, is replayed harmlessly: step 3 is idempotent.
+- **What it can't restore.** The Raider.IO observations of a run that completed
+  against a live sweep's snapshot, which no snapshot holds. The observer's
+  next discovery re-observes them.
 
 **Manual edits in phase 1.** Adding or removing a manual connection is a web
 action, and phase 1 does not touch the web. So the worker's maintenance pass
@@ -310,6 +359,14 @@ under the groups lock. That catches removals as well as additions.
 - It runs as its own maintenance step, in its own `try`. A failure logs
   `character_groups_write_failed` and never skips `recoverPendingSearches` or
   any other step. Today `maintenanceCleanup` rethrows an earlier failure.
+- **It is bounded.**
+  - It recomputes groups in id order for at most 30 seconds, then saves its
+    position and resumes there next pass, so it cannot hold the groups lock
+    longer than that.
+  - It logs `character_groups_recompute` with its duration and the groups
+    covered.
+  - Maintenance runs hourly with a 300-second job expiry, so 30 seconds leaves
+    the rest of the pass its time.
 
 **Rebuild.** `scripts/rebuild-character-groups` rebuilds observed links and
 groups from snapshots and manual connections exactly as the migration does. It
@@ -340,6 +397,16 @@ route: `pageMembers`, labels and research state.
      interval.
 - **What it compares per page:** members, labels, excluded state, limitation
   codes and research state.
+  - Excluded state follows Warcraft Logs identity aliases, as today's read
+    does (#423, `groupBySharedWarcraftLogsId`): a row counts as excluded when
+    any of its alias keys is named.
+  - Self-exclusions are ignored, and counted separately.
+- **Reconciling observations.** For every root, its latest publication's
+  members must each have an observation from that root in the matching source
+  family. Every other observation from that root must be explained by a later
+  run that did not retract. An unexplained missing or extra observation fails
+  the replay: that is how it sees a lost addition or a lost retraction, which
+  comparing groups alone cannot.
 - **It fails on any of:**
   - a character removed;
   - a label weakened;
@@ -360,6 +427,9 @@ route: `pageMembers`, labels and research state.
 
 - The replay passes against test on three consecutive days of live
   publications, and reports zero drift after each maintenance pass.
+- No `character_groups_write_failed` is logged in those three days. If one is
+  logged, the response is to fix its cause, run the rebuild, and restart the
+  three days.
 - It also passes in the integration suite, on seeded fixtures with:
   - identical, containing and manual shapes;
   - a `not_due` refresh;
@@ -412,6 +482,11 @@ order does not matter.
 - **`groupOf(key)`** returns the key's stored group, or nothing for a
   character never discovered or a suppressed one. A suppressed key reads as
   not found, as today.
+- **Group decisions are made over page members.** Freshness, "a member has an
+  active run" and the due checks for new guild members are computed over
+  `pageMembers(O)`, not the stored group. A member reachable only through a
+  suppressed character therefore cannot make O's group fresh, have its run
+  joined, or hold off O's check.
 - **`pageMembers(O)`** is the walk defined under [Terms](#terms). It walks the
   current counting links within O's stored group, which phase 2 keeps
   consistent with the links in every writing transaction.
@@ -446,10 +521,19 @@ go through it, so none of them can disagree.
 | None                                                  | Unchanged: the negative cache, then Raider.IO, then a discovery from O.                                                                 |
 
 - **The `fresh` result for a member with no snapshot of its own.**
-  `search.create` returns a `character` result built from O's `characters` row
-  and its group. Today it re-reads only O's own snapshot and would answer
-  `character_not_found`. The landing-page search therefore opens the page, and
-  `recentSearches.record` runs.
+  - **Today** the fresh branch re-reads only O's own snapshot and answers
+    `character_not_found`.
+  - **The public contract is unchanged.** A `character` result carries a
+    `CharacterResource`, whose strict schema needs a snapshot id, state and
+    time.
+  - **What changes.** `search.create` gains an internal result kind,
+    `group_ready`, carrying O's key and nothing else. The web route maps it to
+    `{kind: "ready"}`, exactly as it maps `character`. `dossiers.start` records
+    the search for both kinds.
+
+  The landing-page search therefore opens the page, and `recentSearches.record`
+  runs.
+
 - **The URL returned is always O's**, even when the run joined belongs to
   another member. Today `search-service.ts` returns the run's own character
   URL.
@@ -467,8 +551,18 @@ go through it, so none of them can disagree.
   phase 3, the far ends of O's own expired links. The page and the ceiling
   therefore count the same characters.
 - **URL and root:** the URL stays O's, and the response's `root` is O.
-- **Labels.** O's row keeps today's `submitted` label. Every other member's
-  label describes how it relates to O:
+- **Labels.** O's row keeps the label today's code gives a snapshot's root:
+  its `input` source, shown as `raiderio_declared`. That is also what the
+  frozen demo `ryii-dossier.json` holds.
+  - **`submitted` stays reserved for a root-only view.** The page's
+    `isRootOnly` means "any row labelled `submitted`", and a root-only view
+    starts research. Giving O that label would make every group page start
+    research.
+  - Staleness is signalled separately, by `groupStale` (below). End-to-end
+    tests check that a fresh sibling page sends no `POST start`, and a stale
+    one sends exactly one.
+
+  Every other member's label describes how it relates to O:
   - A path's strength is the weakest provider link on it. Raider.IO is
     stronger than fingerprint.
   - Manual links are neutral: they neither strengthen nor weaken a path. A path
@@ -490,11 +584,16 @@ go through it, so none of them can disagree.
   consistent read. If it does, it keeps the label from the latest snapshot
   containing it, and `group_member_unreachable` is logged.
 
-- **Contract additions.** One field, optional, because the dossier schema is
-  `.strict()` and `/demo` parses the frozen `ryii-dossier.json`:
-  `hasManualConnection`, true when any member of the group has a manual row
-  targeting this character. The menu's Remove item uses it instead of the
-  label, so a manual target labelled by a provider path can still be removed.
+- **Contract additions.** Two fields, both optional, because the dossier schema
+  is `.strict()` and `/demo` parses the frozen `ryii-dossier.json`:
+  - `hasManualConnection` on a character, true when any member of the group
+    has a manual row targeting it. The menu's Remove item uses it instead of
+    the label, so a manual target labelled by a provider path can still be
+    removed.
+  - `groupStale` on the dossier. It is true when no page member's latest
+    completed snapshot is within `FRESHNESS_HOURS` and no page member has an
+    active discovery run. It is absent or false otherwise, so a page already
+    following a run never starts another.
 - **Research state.** The contract stays one `{state, message}`.
   - **Where it comes from:** the latest completed snapshots of the page's
     members, the characters actually shown, not of the whole group.
@@ -507,23 +606,37 @@ go through it, so none of them can disagree.
     example "Raider.IO shows no public account claim for Quellaria, so
     additional linked characters may exist". Other limitation codes stay
     internal.
-- **The read never reserves, and the page starts research as it does today.**
-  - The page calls `POST start` only for a root-only view: a character that is
-    in no group with anyone else and has never been discovered. That is
-    today's root-only case.
-  - `provisional` is no longer produced, and the page's "root differs" case
-    cannot occur. A stale dossier view does not start research on its own, as
-    a stale own-snapshot view does not today; search does.
-  - The contract keeps accepting `provisional`, so a new page against an old
-    server, or after a rollback, still parses.
+- **The read never reserves. The page starts research in two cases:**
+  - **A root-only view,** a character in no group with anyone else and never
+    discovered. This is today's case, keyed on the `submitted` label, and a
+    refused start shows today's research error.
+  - **`groupStale` is true.** The page sends one `POST start` per page load.
+    - It joins any member's run through `reserve`, so it never adds a second
+      run.
+    - If the start is refused (`rate_limited`, suppressed or failed), the
+      dossier stays displayed with no research error, because the page already
+      shows usable content. `research-failed` is only for the root-only case.
+    - `dossiers.start` records a recent search only when it reserves or joins
+      a run, so repeat views of a fresh or refused page write nothing.
+  - **`provisional`** is no longer produced, and the page's "root differs" case
+    cannot occur. The contract keeps accepting `provisional`, so a new page
+    against an old server, or after a rollback, still parses.
 - **The check for new guild members.** `scheduleConnectedCharacterSweep(O)`
-  goes through `reserve`, so it joins a member's active or waiting run instead
-  of adding one. It is due only when:
-  - no member of O's group has published a sweep within
-    `FINGERPRINT_SWEEP_CADENCE_HOURS`;
+  is due only when, over O's page members:
+  - no member has published a sweep within `FINGERPRINT_SWEEP_CADENCE_HOURS`;
   - no member has a resumable cursor, meaning a set `resume_after` with fewer
     than `MAX_CONTINUATION_NON_PROGRESS_CYCLES` (5) continuation failures;
-  - no member has an active or waiting discovery run.
+  - no member has an active discovery run (`queued`, `running` or
+    `retrying`).
+
+  When due, it reserves through `reserve`, so its check and its reservation
+  happen under the same groups lock.
+  - **Freshness doesn't hold it off.** It passes `ignoreFreshness`, because
+    the weekly check is not a search and must not wait up to
+    `FRESHNESS_HOURS` behind a fresh group.
+  - **Its rate-limit bucket.** It is charged to its own caller bucket,
+    `fingerprint-sweep-visit`, with a limit high enough never to refuse. That
+    matches today, where it bypasses rate limits entirely.
 
   An abandoned chain therefore does not block the group. Opening several
   siblings before the first sweep publishes queues one run, not one each.
@@ -533,14 +646,14 @@ go through it, so none of them can disagree.
 Every edit resolves rows across the group, and keeps the two exclusion stores
 apart:
 
-| Edit                           | Effect                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Is T excluded on O's page?     | Yes if any manual row targeting T from a member of O's group has `excluded` set, or any `dossier_character_exclusions` row from a member of O's group names T.                                                                                                                                                                                                                                                   |
-| Exclude T                      | If any member of the group has a manual row targeting T, set `excluded` on every such row. Otherwise insert one `dossier_character_exclusions` row from O, unless the group already has one naming T.                                                                                                                                                                                                            |
-| Include T                      | Clear `excluded` on every manual row in the group targeting T, and delete every `dossier_character_exclusions` row in the group naming T. It never deletes a manual row.                                                                                                                                                                                                                                         |
-| Remove the manual connection T | Delete every manual row from a member of the group targeting T, then recompute under the groups lock in the same transaction. The dialog says "Remove the manual connection to T". If a provider path still reaches T, it adds that T stays in the dossier through that link.                                                                                                                                    |
-| Add a manual connection to T   | As today, first call `search.create` for T. Only a `job` or `character` result links anything, so a rate-limited, suppressed or invalid target links nothing. Then, in a new transaction, write the row from O and recompute under the groups lock. T appears at once, as today. If T and a member of O's group are a rejected pair, the add returns `rejected`, and the page says to undo that rejection first. |
-| Exclude O                      | O is never shown excluded on its own page, even if a row made from another page names it. The searched character cannot be excluded, and O's page offers no exclude action for O.                                                                                                                                                                                                                                |
+| Edit                           | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Is T excluded on O's page?     | Yes if any manual row targeting T from a member of O's group has `excluded` set, or any `dossier_character_exclusions` row from a member of O's group names T.                                                                                                                                                                                                                                                                                                                                                                          |
+| Exclude T                      | If any member of the group has a manual row targeting T, set `excluded` on every such row. Otherwise insert one `dossier_character_exclusions` row from O, unless the group already has one naming T.                                                                                                                                                                                                                                                                                                                                   |
+| Include T                      | Clear `excluded` on every manual row in the group targeting T, and delete every `dossier_character_exclusions` row in the group naming T. It never deletes a manual row.                                                                                                                                                                                                                                                                                                                                                                |
+| Remove the manual connection T | Delete every manual row from a member of the group targeting T, then recompute under the groups lock in the same transaction. The dialog says "Remove the manual connection to T". If a provider path still reaches T, it adds that T stays in the dossier through that link.                                                                                                                                                                                                                                                           |
+| Add a manual connection to T   | First check rejections, group against group. If the group T would bring in and O's group contain any rejected pair, the add returns `rejected` before anything is queued or spent, and the page says to undo that rejection first. Otherwise, as today, call `search.create` for T. Only a `job`, `character` or `group_ready` result links anything, so a rate-limited, suppressed or invalid target links nothing. Then, in a new transaction, write the row from O and recompute under the groups lock. T appears at once, as today. |
+| Exclude O                      | O is never shown excluded on its own page, even if a row made from another page names it. A row whose maker is the character it names is ignored everywhere. Phase 2 hides Exclude on the opened character's row, which today offers it, and guards the write.                                                                                                                                                                                                                                                                          |
 
 - **What `search.create` for T does.** It discovers T if T's own group is stale
   or T is unknown, as today. If T is already in a fresh group, that group's
@@ -612,15 +725,20 @@ These requirements hold through phases 1 and 2. Each has a check that fails
 the build or blocks the phase. Phase 3 removes characters only deliberately:
 by a reviewer's rejection, and by expiry on every page but the observer's.
 
-| #   | Requirement                                                                                                                                                                                                                                                             | Check                                                                                                                                                                                               |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1  | Every character a page shows today is still shown. That covers root pages and today's borrowed and `provisional` pages.                                                                                                                                                 | The replay compares the old and new read code's output page by page and fails on a removal. It runs in the integration suite on fixtures and against test for three days.                           |
-| P2  | No migration or automatic process deletes or rewrites an existing row, and no column is added to an existing table. That covers snapshots, discovery runs, manual connections, exclusions, sweep state and all evidence. Reviewer actions delete rows as they do today. | Migrations only create and insert. A migration test compares row counts and checksums of those tables before and after. No worker path writes to them beyond what it writes today.                  |
-| P3  | Evidence is untouched and stays keyed per character.                                                                                                                                                                                                                    | Covered by P2. No phase queues or cancels an evidence run except through today's triggers.                                                                                                          |
-| P4  | Every limitation a page raises today is still raised, except where a shared exclusion explains it.                                                                                                                                                                      | The replay fails on an unexplained missing code. Integration tests take a `not_due` refresh, a capped sweep with its continuation and a privacy-hidden run through publication, then read the page. |
-| P5  | A member's label never weakens.                                                                                                                                                                                                                                         | The replay fails on a weakened label. At run time a read logs `group_label_weakened` if a label is weaker than the member's row in O's own latest snapshot, and a test covers it.                   |
-| P6  | Manual connections and both kinds of exclusion keep their rows and their effect, from every member's page.                                                                                                                                                              | The replay compares excluded state against the exclusion rows. End-to-end tests add, exclude, include and remove from a page other than the one the row was made on.                                |
-| P7  | Where anything changes, it only adds characters, or greys one that a shared exclusion names.                                                                                                                                                                            | The replay reports growth and shared exclusions. It fails on removals, unexplained exclusions and over-ceiling pages.                                                                               |
+| #   | Requirement                                                                                                                                                                                                                                                             | Check                                                                                                                                                                                                                                                                 |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1  | Every character a page shows today is still shown. That covers root pages and today's borrowed and `provisional` pages.                                                                                                                                                 | The replay compares the old and new read code's output page by page and fails on a removal. It runs in the integration suite on fixtures and against test for three days.                                                                                             |
+| P2  | No migration or automatic process deletes or rewrites an existing row, and no column is added to an existing table. That covers snapshots, discovery runs, manual connections, exclusions, sweep state and all evidence. Reviewer actions delete rows as they do today. | A migration test compares row counts and checksums of those tables before and after. The publication integration tests checksum the same tables after each publication path, with the group writer switched on and off, and fail if they differ.                      |
+| P3  | Evidence is untouched and stays keyed per character.                                                                                                                                                                                                                    | The publication and read integration tests count evidence runs queued with the group code on and off, and fail if they differ. The evidence tables are covered by P2's checksums.                                                                                     |
+| P4  | Every limitation a page raises today is still raised, except where a shared exclusion explains it.                                                                                                                                                                      | The replay fails on an unexplained missing code. Integration tests take a `not_due` refresh, a capped sweep with its continuation and a privacy-hidden run through publication, then read the page.                                                                   |
+| P5  | A member's label never weakens.                                                                                                                                                                                                                                         | The replay fails on a weakened label. At run time a read logs `group_label_weakened` if any member other than O has a label weaker than its row in O's own latest snapshot, and a test covers it. O's own row is excluded: it keeps today's root label by definition. |
+| P6  | Manual connections and both kinds of exclusion keep their rows and their effect, from every member's page.                                                                                                                                                              | The replay compares excluded state against the exclusion rows. End-to-end tests add, exclude, include and remove from a page other than the one the row was made on.                                                                                                  |
+| P7  | Where anything changes, it only adds characters, or greys one that a shared exclusion names.                                                                                                                                                                            | The replay reports growth and shared exclusions. It fails on removals, unexplained exclusions and over-ceiling pages.                                                                                                                                                 |
+
+**The old read code stays until phase 3.** The replay needs today's
+`resolveSubjects` to compare against. Phase 2 therefore keeps it, renamed
+`legacyResolveSubjects` and called only by the replay and its tests. Phase 3
+removes it.
 
 **What the replay cannot see.** It compares page output, so flows need tests
 of their own:
@@ -641,9 +759,13 @@ The integration and end-to-end tests below cover each of them.
     than one member through an observed link;
   - from phase 3, a merge rejoins a rejected character.
 
-  With fully transitive reach, this alert is the main safeguard. A merge made
-  through a manual connection is a reviewer's own assertion, and is only
-  logged, in every phase, whichever process makes it.
+  With fully transitive reach, this alert is the main safeguard.
+  - **A merge through a manual connection** is a reviewer's own assertion. It
+    is only logged, in every phase, whichever process makes it.
+  - **The exception is a rejoin.** A manual add can't rejoin a rejected
+    character, because the group-against-group check refuses it. If any merge
+    does rejoin one, the worker's next maintenance pass raises the alert. The
+    web has no webhook.
 
 - **A recompute failure.**
   - In phase 1 it is logged and changes nothing else.
@@ -680,7 +802,14 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
   - per-source recording before de-duplication.
 - **Integration:**
   - each of the four publication paths writes after its commit;
-  - a failing group write leaves the publication and continuation untouched;
+  - a failing group write leaves the publication and continuation untouched,
+    including an aborted job and a delayed `enqueueFingerprintAdmission`;
+  - a delayed continuation write after a newer run cannot lower `observed_at`
+    or retract that run's rows;
+  - the healing pass replays a lost write;
+  - the maintenance recompute stops at its 30-second bound and resumes;
+  - the replay's observation reconciliation fails on a lost addition and on a
+    lost retraction;
   - the maintenance recompute catches a removed manual connection, and a
     failure in it does not skip `recoverPendingSearches`;
   - the migration and rebuild on seeded shapes;
@@ -707,6 +836,12 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
   - consistent reads during a publication;
   - the atomic publication rolling back on a failed recompute.
 - **End to end:**
+  - a fresh sibling page sends no `POST start`, and a stale one sends exactly
+    one, which joins a running member's run if there is one; O's row carries
+    today's root label;
+  - a stale page whose start is rate-limited keeps showing its dossier with
+    no research error;
+  - a self-exclusion made on O's page does not grey O on a sibling's page;
   - a fresh group's member opens with the same list and queues nothing;
   - opening several siblings queues at most one sweep;
   - cross-page exclude and include for both stores;
