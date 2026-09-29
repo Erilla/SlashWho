@@ -89,32 +89,39 @@ per-root test says so, or when **all** of these hold. Any failure means B
 sweeps exactly as today; the gate only ever removes a sweep.
 
 1. **A sibling has a sealed, matched sweep.** Some member M of B's page members,
-   other than B, has a fingerprint-family row in #738's ledger whose reason is
-   `matched` and whose `written_at` is newer than the cadence cutoff, and no
-   later fingerprint-family row for M. Not `unread`, `capped` or `skipped_guild`:
-   those publish without having read the roster, and a cycle of a live chain is
-   `continuation`, not `matched`. (`last_published_at` is not used: it is set by
-   every publish, including those.)
+   other than B, whose **latest** fingerprint-family row in #738's ledger
+   (ordered by `run_started_at`, then `written_at`) has reason `matched`, is
+   newer than the cadence cutoff, and whose reservation's `limitation_code` is
+   null. Not `unread`, `capped` or `skipped_guild`: those publish without having
+   read every roster, and the ledger has no separate reason for a live chain's
+   cycles, which log `capped` or `skipped_guild`. A later row of any reason
+   supersedes an earlier `matched`. (`last_published_at` is not used: it is set
+   by every publish, including those.)
 2. **M is a sibling in the sense that counts.** M is reached from B through
    `observed` provider links that count, and is not excluded. Manual
    connections, reviewer-excluded characters, and from phase 3 the far ends of
    expired links do not qualify.
 3. **The sweep covered B's roster.** M's guild and B's guild are the same guild,
-   compared as the sweep compares them, by `canonicalGuildId`'s
-   region/realm/name key with the Blizzard-side spelling. M's guild is read
-   from the snapshot the sealing run published or amended (the ledger row's
-   `run_id`), not from M's latest snapshot, so a later refresh cannot make it
-   look like B's. B's guild is the one read for B by this run. Either being
+   compared by normalised region/realm/name, the key `canonicalGuildId` builds.
+   Both guilds are Raider.IO's: the sweep reads the guild from the Blizzard
+   profile, but that guild is never stored, so the snapshot columns are the only
+   record. M's guild is read from the snapshot the sealing run published or
+   amended (the ledger row's `run_id`), not from M's latest snapshot, so a later
+   refresh cannot make it look like B's. B's guild is the one Raider.IO read for
+   B in this run. Raider.IO can lag Blizzard, so this errs towards a skip on a
+   guild just changed; the 28-day bound in test 5 is what limits that. Either being
    unknown fails the test. Historical guilds are not compared; see
    [Decisions](#decisions-for-the-maintainer).
 4. **No chain is live.** No page member has a resumable cursor, live or
    abandoned (`resume_after` set). B's own cursor in particular sends B down
    today's path, so `getResumeState` and `completeWithLiveSweepSnapshot` are
    never reached for a group skip.
-5. **B's own sweep is recent and clean.** B has its own ledger row with reason
-   `matched` newer than `SIBLING_REUSE_MAX_OWN_SWEEP_AGE_HOURS`, and its
-   published `limitation_code` was null. A B that has never had its own matched
-   sweep always sweeps.
+5. **B's own latest sweep is recent and clean.** B's **latest**
+   fingerprint-family ledger row (same ordering as test 1) has reason `matched`,
+   is newer than `SIBLING_REUSE_MAX_OWN_SWEEP_AGE_HOURS`, and its reservation's
+   `limitation_code` is null. An earlier `matched` does not count if a later
+   sweep, capped with no cursor for example, superseded it. A B that has never
+   had its own matched sweep always sweeps.
 
 Test 4 answers "does a live chain hold B off?" with **no**: a live sibling chain
 does not count as coverage and B sweeps. There is no waiting mechanism and none
@@ -166,18 +173,43 @@ phase 2 page. If M's chain later caps, M's snapshot carries
 
 **`requestAdmission` and `admitWaiting` both.** A run that queued behind the
 hourly budget is later admitted by `admitWaiting`, which has its own per-root
-test, and by the head-of-queue filter in `admitFingerprintWaitingRun`. Gating
-only the first would let a queued B through once the budget frees. So this is
-one shared helper called from both, not "one method".
+test. Gating only the first would let a queued B through once the budget frees.
+So this is one shared helper called from both, not "one method".
 
-**Decided outside the lock, honoured inside.** #738's lock order takes the
-rebuild lock and the groups lock before the fingerprint-sweeps lock, and
-`pageMembers` is a link walk with suppression checks, not one lookup. So the
-gate is computed before the admission transaction, from a consistent read, and
-passed in as a flag (`siblingCovered`), the way #738 passes `sweepDue`. The
-transaction honours the flag and takes no group lock. A stale flag costs at
-worst one avoidable sweep or one skipped sweep, and the weekly check corrects
-either.
+**Decided outside the lock, honoured inside.** #738's lock order is the
+rebuild lock (0), the root and bucket locks (1), the fingerprint-sweeps lock
+(2), then the groups lock (3), and `pageMembers` is a link walk with suppression
+checks, not one lookup. A walk cannot run under the fingerprint-sweeps lock
+without breaking that order, so the gate is computed before the admission
+transaction, from a consistent read, and passed in as a flag
+(`siblingCovered`), the way #738 passes `sweepDue`. The transaction honours the
+flag and takes no group lock. A stale flag costs at worst one avoidable sweep or
+one skipped sweep, and the weekly check corrects either.
+
+**Who computes it for `admitWaiting`.** The admission worker, at the moment it
+considers the waiting row, from its own consistent read. A flag computed when B
+first queued would be stale by then, so `admitWaiting` never reuses the
+request-time flag.
+
+**A skip reached through `admitWaiting` must dispatch the run.** After a
+`waiting` result the run is set back to `queued` and keeps its job id, and
+`fingerprintAdmissionWork` (`apps/worker/src/runtime.ts`) dispatches only on
+`admitted`. Pending-dispatch recovery picks up only runs with a null job id. So
+a `not_due_group` from `admitWaiting`, like a `not_due` today, would leave B
+`queued` with no snapshot, and under #738 that dead run counts as active: it
+holds `groupStale` false, `reserve` joins it and the weekly check waits for it.
+The admission worker therefore dispatches on `not_due` and `not_due_group` as
+well as `admitted`, so the handler runs and publishes the Raider.IO snapshot.
+The same stranding exists on main today for a `not_due` from `admitWaiting`,
+which needs B to be swept by another run while it waits. It is rare now and
+common with this gate, so it is fixed in the same pull request, and it also
+deserves its own issue whether or not D is built.
+
+**The head of the queue stays per root.** The head-of-queue query in
+`admitFingerprintWaitingRun` is global SQL under the lock and cannot use a
+per-run flag. It is left alone: a covered B at the head is settled by its own
+admission job, and other runs wait for that. That head-of-line delay is
+accepted.
 
 ### What is stored
 
@@ -244,6 +276,12 @@ Test-first. Each variation is its own test so a failing gate names the case.
   link; M suppressed; M excluded or reached only by a manual link; B never
   swept; B's own cursor set; B's own sweep at the constant minus and plus one
   hour, both computed from the constant.
+- B whose **earlier** sweep matched and whose **latest** was capped with no
+  cursor **sweeps**. This fails if test 5 reads any `matched` row rather than
+  the latest.
+- A group skip reached through `admitWaiting` ends with the run `complete` and a
+  Raider.IO snapshot published, and the admission worker dispatches on it. It
+  fails if the worker still dispatches only on `admitted`.
 - A test that B with a capped own last sweep (partial) and M complete
   **sweeps**, so a partial page is never published as complete. This one fails
   if test 5 is removed.
@@ -260,67 +298,103 @@ Two questions decide whether D is worth building: how many sweep requests
 would the gate have removed, and does that clear the tenth in
 [Recommendation](#recommendation). Run this on Railway test **after phase 2
 has been live for four weeks**; before that it credits D with sweeps phase 2's
-group-wide weekly check already removes. **It has not been run.** It is
+group-wide weekly check already removes. It is
 read-only. Group membership is read as it is now, not as at the sweep, so treat
 the result as an estimate.
 
-It counts only what the gate would remove: sweeps whose sibling had a
-_matched_ ledger row earlier, at least a moment before this sweep's run began,
-within 168 h, and whose own previous matched sweep was within 28 days. Capped,
-unread and mid-chain sweeps do not count as coverage.
+It takes every sweep run as the population, because the gate would also remove
+sweeps that end `capped`, `unread` or `skipped_guild`, and their requests are
+real spend. A run's requests are summed over all of its reservations. A run is
+counted as covered when tests 1, 4 and 5 hold for it (latest-row semantics).
+Guild equality (test 3) and exclusions (test 2) are not in the query.
 
 ```sql
-WITH matched AS (
+WITH latest AS (
+  -- each character's fingerprint-family ledger rows, newest first
   SELECT l.observer_character_id AS character_id,
-         m.group_id,
-         l.written_at
+         l.reason,
+         l.written_at,
+         r.limitation_code,
+         row_number() OVER (
+           PARTITION BY l.observer_character_id
+           ORDER BY l.run_started_at DESC, l.written_at DESC
+         ) AS rn
   FROM character_connection_write_log l
-  JOIN character_group_members m ON m.character_id = l.observer_character_id
+  LEFT JOIN fingerprint_sweep_reservations r ON r.id = l.sweep_reservation_id
   WHERE l.family = 'fingerprint'
-    AND l.reason = 'matched'
 ),
-sweeps AS (
-  SELECT l.observer_character_id AS character_id,
+runs AS (
+  SELECT a.discovery_run_id AS run_id,
+         c.id AS character_id,
          m.group_id,
-         l.run_started_at,
-         r.used_count
-  FROM character_connection_write_log l
-  JOIN character_group_members m ON m.character_id = l.observer_character_id
-  JOIN fingerprint_sweep_reservations r ON r.id = l.sweep_reservation_id
-  WHERE l.family = 'fingerprint'
-    AND l.reason = 'matched'
-    AND l.written_at > now() - interval '28 days'
+         min(a.requested_at) AS started,
+         sum(r.used_count) AS requests
+  FROM fingerprint_sweep_admissions a
+  JOIN fingerprint_sweep_reservations r ON r.admission_id = a.id
+  JOIN characters c
+    ON c.region = a.region
+   AND c.realm_slug = a.realm_slug
+   AND c.normalized_name = a.normalized_name
+  JOIN character_group_members m ON m.character_id = c.id
+  WHERE r.used_count > 0
+    AND a.requested_at > now() - interval '28 days'
+  GROUP BY a.discovery_run_id, c.id, m.group_id
 )
 SELECT
-  count(*)          AS sealed_sweeps,
-  sum(s.used_count) AS requests,
-  count(*) FILTER (WHERE covered) AS covered_sweeps,
-  sum(s.used_count) FILTER (WHERE covered) AS covered_requests
+  count(*)        AS sweep_runs,
+  sum(x.requests) AS requests,
+  count(*) FILTER (WHERE covered)        AS covered_runs,
+  sum(x.requests) FILTER (WHERE covered) AS covered_requests
 FROM (
-  SELECT s.*,
+  SELECT ru.*,
          (
-           EXISTS (
-             SELECT 1 FROM matched p
-             WHERE p.group_id = s.group_id
-               AND p.character_id <> s.character_id
-               AND p.written_at < s.run_started_at
-               AND p.written_at >= s.run_started_at - interval '168 hours'
+           EXISTS (            -- test 1: a sibling's latest row is a clean matched
+             SELECT 1
+             FROM latest lm
+             JOIN character_group_members gm ON gm.character_id = lm.character_id
+             WHERE lm.rn = 1
+               AND gm.group_id = ru.group_id
+               AND lm.character_id <> ru.character_id
+               AND lm.reason = 'matched'
+               AND lm.limitation_code IS NULL
+               AND lm.written_at < ru.started
+               AND lm.written_at >= ru.started - interval '168 hours'
            )
-           AND EXISTS (
-             SELECT 1 FROM matched own
-             WHERE own.character_id = s.character_id
-               AND own.written_at < s.run_started_at
-               AND own.written_at >= s.run_started_at - interval '28 days'
+           AND EXISTS (        -- test 5: B's own latest row is clean and recent
+             SELECT 1 FROM latest own
+             WHERE own.character_id = ru.character_id
+               AND own.rn = 1
+               AND own.reason = 'matched'
+               AND own.limitation_code IS NULL
+               AND own.written_at >= ru.started - interval '28 days'
+           )
+           AND NOT EXISTS (    -- test 4: no member holds a cursor
+             SELECT 1
+             FROM character_group_members gm2
+             JOIN characters c2 ON c2.id = gm2.character_id
+             JOIN fingerprint_sweep_states st
+               ON st.region = c2.region
+              AND st.realm_slug = c2.realm_slug
+              AND st.normalized_name = c2.normalized_name
+             WHERE gm2.group_id = ru.group_id
+               AND st.resume_after IS NOT NULL
            )
          ) AS covered
-  FROM sweeps s
-) s;
+  FROM runs ru
+) x;
 ```
 
-Caveats: a chain's requests are attributed to its sealing cycle's reservation
-only, so `requests` understates chains; guild equality (test 3) and test 2's
-exclusions are not in the query, so `covered` overstates. After D ships,
-count `not_due_group` against sweep admissions in the table.
+**Read it as an upper bound, with errors in both directions.**
+
+- Rows a skipped sweep would have written do not exist, so a skip can end a
+  sibling's or B's own coverage. The query cannot see that, and overstates.
+- Test 4 is read from current cursors, not as at the run.
+- Guild equality and exclusions are missing, and group membership is as of now.
+  Both overstate.
+- **The ledger starts on 2026-09-29** (#745). If phase 2 ships less than about
+  four weeks after phase 1, the early part of the window has no `matched` rows
+  to find for B's own sweep, so the result under-counts.
+- It has been run only against the migrated schema with empty tables, which proves the syntax and columns and nothing about the numbers. It has not been run on test data.
 
 Budget: a full ryun-sized run spends about 12% of
 `BLIZZARD_HOURLY_REQUEST_BUDGET` (28,800), which charges discovery sweeps only.
@@ -329,7 +403,9 @@ The worker's 40 a second limit is the other ceiling.
 ## Decisions for the maintainer
 
 1. **Whether to build D at all**, or stop at E and close #719 after the
-   measurement. Recommended: E first, D only above about a tenth.
+   measurement. Recommended: E first, D only above about a tenth. The tenth is
+   a judgement, not a derived figure: it weighs the requests saved against the
+   coverage miss below, and the maintainer may set it higher or lower.
 2. **The non-transitive miss** ([above](#the-miss-d-accepts)), bounded at 28
    days of B's own sweep age. Accept, or drop D.
 3. **A live sibling chain does not hold B off** (test 4); B sweeps. The
@@ -345,11 +421,15 @@ The worker's 40 a second limit is the other ceiling.
    only (test 2).
 7. **Ship after phase 2, and before or after phase 3.** Proposed: after phase 2,
    with a local 28-day constant that phase 3 must keep at or under half of its
-   expiry. The alternative is waiting for phase 3.
+   expiry. The alternative is waiting for phase 3. If this is agreed, add the
+   "at or under half the expiry" check to #738's phase 3 text now, so it is not
+   lost.
 8. **Whether an explicit user refresh bypasses the gate.** Proposed: no. The
    alternative is to bypass it for landing-page searches and gate only the
    `groupStale` start.
-9. **Admission status.** A distinct `not_due_group`, over a log field.
+9. **Admission status.** A distinct `not_due_group`, over a log field. The
+   phase 1 replay's `not_due_refresh` classification would read a group skip as
+   "swept recently", so it needs a note or a case of its own.
 
 ## Out of scope
 
