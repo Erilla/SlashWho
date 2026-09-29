@@ -30,11 +30,23 @@ export function replayConfig(
   return parsed.data;
 }
 
+/**
+ * Every session on the replay's pool is read-only, the legacy half's reads
+ * included, so nothing the replay calls can write whatever it does.
+ */
+export function replayPoolConfig(connectionString: string): {
+  connectionString: string;
+  options: string;
+} {
+  return {
+    connectionString,
+    options: "-c default_transaction_read_only=on"
+  };
+}
+
 export async function main(): Promise<void> {
   const config = replayConfig();
-  const pool = new Pool({
-    connectionString: requiredEnvironment("DATABASE_URL")
-  });
+  const pool = new Pool(replayPoolConfig(requiredEnvironment("DATABASE_URL")));
   try {
     const repositories = createPostgresRepositories(pool);
     const audit = await loadCharacterGroupsAudit(pool);
