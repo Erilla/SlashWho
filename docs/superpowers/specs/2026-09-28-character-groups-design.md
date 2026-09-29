@@ -546,14 +546,20 @@ route: `pageMembers`, labels and research state.
        other, in any published snapshot. A removed manual row leaves no
        trace, and this is how its effect is recognised. A retraction also
        deletes its row, so the current links cannot tell the two apart: the
-       immutable snapshots of complete runs can.
+       immutable snapshots of complete runs can. A live-sweep completion
+       never publishes a snapshot of its own, so a pair only it observed sits
+       outside snapshot history, and a missed split between such a pair
+       reports as `drift_manual` rather than failing; closing that gap needs
+       pair ids on the ledger, which is deferred.
      - **Other drift that survives a full cursor cycle fails.**
      - **Pending drift is bounded.** A group's pending clock runs from its
        earliest ledger write that no completed cycle covers, and the manual
        arm's from the earliest uncovered manual change, so a group written
        every hour still goes stale. Past
        `max(2 h, 1 h + 2 × (last_cycle_completed_at − last_cycle_started_at))`,
-       or 2 h with no cycle measured, pending drift fails as
+       with that measured length clamped to 6 h so a cycle straddling a worker
+       outage cannot mask the next stall (at most 13 h), or 2 h with no cycle
+       measured, pending drift fails as
        `drift_stale_pending`. A pass completes at most two cycles, since it
        stops at the first completed cycle that began during it, so a covering
        cycle can take up to an hour to start and two cycle lengths to finish.

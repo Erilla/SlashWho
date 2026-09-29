@@ -146,7 +146,10 @@ Each path needs at least one publication in the window, and the replay's
   reason, `raiderio_complete`, `raiderio_limited` or `privacy_hidden`.
   `not_due_refresh` counts a Raider.IO row, other than a baseline or a
   live-sweep completion, from a run with no fingerprint row, whose observer
-  has an earlier fingerprint row.
+  has an earlier fingerprint row. It can therefore also count another
+  Raider.IO-only run of a root that was swept before, not only a `not_due`
+  refresh, so confirm the path from the `fingerprint_admission` records in
+  the admission logs.
 - **A privacy-hidden run.** Search a character with no public Raider.IO
   claim, such as one whose dossier today reads "Raider.IO shows no public
   account claim". Coverage: `privacy_hidden`.
@@ -157,7 +160,11 @@ Each path needs at least one publication in the window, and the replay's
   `coverage`. `drift_manual` is a stored group coarser than the links now
   justify, across characters no published snapshot ever showed one of them
   observing the other. A coarser group across a pair some snapshot did
-  show is a missed split, and fails as `drift`. Check that the next
+  show is a missed split, and fails as `drift`. A live-sweep completion
+  never publishes a snapshot of its own, so a pair only it observed sits
+  outside snapshot history, and a missed split between such a pair reports
+  as `drift_manual`; closing that gap needs pair ids on the ledger, which is
+  deferred. Check that the next
   maintenance cycle's `character_groups_recompute` record appears for both
   changes, and that the replay shows no failing drift.
 
@@ -186,7 +193,9 @@ the earliest uncovered write, not the newest, means a group written every
 hour still goes stale.
 
 The bound is `max(2 h, 1 h + 2 × (lastCycleCompletedAt − lastCycleStartedAt))`,
-or 2 h before any cycle has completed. A maintenance pass completes at most
+or 2 h before any cycle has completed. The measured cycle length is clamped
+to 6 h, so the bound is at most 13 h: a cycle that straddled a worker outage
+measures the outage too, and must not mask the next stall. A maintenance pass completes at most
 two cycles: it stops at the first completed cycle that began during it. So
 a trigger that lands just after a cycle starts can wait up to an hour for the
 next pass, then for the current cycle and a covering one. Once a pending
