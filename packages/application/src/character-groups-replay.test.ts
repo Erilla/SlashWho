@@ -568,6 +568,30 @@ describe("drift", () => {
     ]);
   });
 
+  it("clamps the measured cycle at six hours, so a 20 h cycle still bounds drift at 13 h", () => {
+    // Break caught: a cycle that straddled a worker outage measured 20 h,
+    // and the unclamped bound of 1 h + 2 × 20 h = 41 h hid the next stall.
+    const at = (writtenAt: Date) =>
+      groupDriftAudit({
+        writtenAt,
+        recomputedAt: minutesAgo(3_000),
+        maintenance: {
+          lastCycleStartedAt: minutesAgo(2_000),
+          lastCycleCompletedAt: minutesAgo(800)
+        }
+      });
+    expect(auditDrift(at(minutesAgo(779)))).toMatchObject({
+      failures: [],
+      reports: [expect.objectContaining({ check: "drift_pending" })]
+    });
+    expect(auditDrift(at(minutesAgo(781))).failures).toEqual([
+      {
+        check: "drift_stale_pending",
+        detail: "2 characters around eu/draenor/a, pending over 780 minutes"
+      }
+    ]);
+  });
+
   it("keeps a two-hour floor on the bound when the last cycle was short", () => {
     const at = (writtenAt: Date) =>
       groupDriftAudit({

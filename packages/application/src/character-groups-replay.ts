@@ -50,10 +50,20 @@ const PENDING_MS = 10 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
+ * The longest last-cycle length the bound believes. A cycle's length is
+ * measured from its start to its completion, so a cycle that straddled a
+ * worker outage measures the outage too; unclamped, that one reading would
+ * stretch the bound far enough to hide the next stall. A cycle measured
+ * longer than six hours is read as an outage rather than work, which caps
+ * the bound at 1 h + 2 × 6 h = 13 h.
+ */
+const MAX_MEASURED_CYCLE_MS = 6 * HOUR_MS;
+
+/**
  * How long drift may stay pending after what set it off, and how long the
  * maintenance may go without completing a cycle:
- * `max(2 h, 1 h + 2 × the last cycle's length)`, or 2 h with no cycle
- * measured.
+ * `max(2 h, 1 h + 2 × the last cycle's length)`, with that length clamped to
+ * `MAX_MEASURED_CYCLE_MS`, or 2 h with no cycle measured.
  *
  * A trigger that lands just after a cycle started is only covered by the
  * next cycle to start. A pass stops at the first completed cycle that began
@@ -67,8 +77,11 @@ function pendingDriftBoundMs(
   const { lastCycleStartedAt, lastCycleCompletedAt } = maintenance;
   if (lastCycleStartedAt === null || lastCycleCompletedAt === null)
     return 2 * HOUR_MS;
-  const cycleMs = lastCycleCompletedAt.getTime() - lastCycleStartedAt.getTime();
-  return Math.max(2 * HOUR_MS, HOUR_MS + 2 * Math.max(0, cycleMs));
+  const cycleMs = Math.min(
+    MAX_MEASURED_CYCLE_MS,
+    Math.max(0, lastCycleCompletedAt.getTime() - lastCycleStartedAt.getTime())
+  );
+  return Math.max(2 * HOUR_MS, HOUR_MS + 2 * cycleMs);
 }
 
 /** The sweep limitation a cycle that stopped at its cap publishes with. */
