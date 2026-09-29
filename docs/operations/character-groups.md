@@ -31,7 +31,11 @@ value into a file, an issue, or the operations log.
 1. Confirm the worker and web are both on the phase 1 commit
    (`railway deployment list -s worker -e test`), with no older worker still
    running.
-2. Run `corepack pnpm ops:rebuild-groups` once, when test is quiet. This step
+2. Run `corepack pnpm ops:rebuild-groups --confirm <host>` once, when test is
+   quiet, where `<host>` is the test database's host. Run without `--confirm`
+   first: the script names the host `DATABASE_URL` points at, never the URL or
+   its password, and refuses to run. Check that it is test's host, then run it
+   again with `--confirm` and that host. This step
    is load-bearing, not a convenience: the replay's ledger checks only cover
    the window starting at the newest `backfill`/`rebuild` ledger row. The
    migration's backfill runs at deploy, but an older worker can still finish
