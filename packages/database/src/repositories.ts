@@ -1969,9 +1969,7 @@ export interface CharacterConnectionRepository {
     input: ObservationWriteInput
   ): Promise<ObservationWriteResult>;
   recomputeGroupsOf(characterIds: readonly string[]): Promise<void>;
-  recomputePass(input: {
-    budgetMs: number;
-  }): Promise<{
+  recomputePass(input: { budgetMs: number }): Promise<{
     groupsRecomputed: number;
     /** Previously-ungrouped characters newly assigned a group this call. */
     ungroupedAssigned: number;

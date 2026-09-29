@@ -381,7 +381,11 @@ export function createCharacterConnectionRepositories(
                  WHERE id = 1`
               );
             });
-            return { groupsRecomputed, ungroupedAssigned, cycleCompleted: true };
+            return {
+              groupsRecomputed,
+              ungroupedAssigned,
+              cycleCompleted: true
+            };
           }
           // Draining created new groups that may sort past the cursor;
           // give the walk another pass before trying to finish again.
@@ -394,7 +398,9 @@ export function createCharacterConnectionRepositories(
       return withTransaction(pool, async (client) => {
         await lockRebuildExclusive(client);
         await lockGroups(client);
-        await client.query(`DELETE FROM character_connections WHERE kind = 'observed'`);
+        await client.query(
+          `DELETE FROM character_connections WHERE kind = 'observed'`
+        );
         await client.query(`DELETE FROM character_connection_writes`);
         await client.query(`DELETE FROM character_groups`);
         await client.query(REBUILD_SQL.pinLatest);

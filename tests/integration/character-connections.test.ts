@@ -487,7 +487,9 @@ describe("character connections: observation writes", () => {
       const rows = await pool.query(
         `SELECT source, discovery_run_id FROM character_connections`
       );
-      expect(rows.rows).toEqual([{ source: "claimed", discovery_run_id: runId }]);
+      expect(rows.rows).toEqual([
+        { source: "claimed", discovery_run_id: runId }
+      ]);
     });
   });
 

@@ -279,7 +279,11 @@ export function pathStrengths(
     manualOrRaiderioEdges,
     raiderioEdgeIds
   );
-  const fingerprintRun = hasProviderPathFrom(origin, allEdges, nonManualEdgeIds);
+  const fingerprintRun = hasProviderPathFrom(
+    origin,
+    allEdges,
+    nonManualEdgeIds
+  );
 
   const result = new Map<string, LinkStrength>();
   for (const node of fingerprintRun.keys()) {
@@ -393,10 +397,7 @@ function buildBlockCutTree(blocks: readonly ConnectionBlock[]): {
   const blockCountByVertex = new Map<string, number>();
   for (const block of blocks) {
     for (const vertex of block.vertices) {
-      blockCountByVertex.set(
-        vertex,
-        (blockCountByVertex.get(vertex) ?? 0) + 1
-      );
+      blockCountByVertex.set(vertex, (blockCountByVertex.get(vertex) ?? 0) + 1);
     }
   }
   const isCutVertex = (vertex: string): boolean =>
