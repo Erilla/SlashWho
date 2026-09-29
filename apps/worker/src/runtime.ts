@@ -18,7 +18,10 @@ import {
   type EvidenceRunNotifier,
   type FingerprintAlertNotifier
 } from "@slashwho/application";
-import { createBlizzardClient } from "@slashwho/blizzard";
+import {
+  createBlizzardClient,
+  createFingerprintParserPool
+} from "@slashwho/blizzard";
 import {
   collectCharacterEvidenceQueueName,
   createDiscoveryQueue,
@@ -294,6 +297,14 @@ export const BLIZZARD_WORKER_REQUEST_LIMITS = {
   maxPerSecond: 40
 } as const;
 
+/**
+ * Threads that parse the achievements bodies. A sweep tops out near 25 reads a
+ * second on one thread, about 60 ms of CPU for each 1.9 MB body under load
+ * (#718); the container has 8 CPUs, so four leave the main thread, the database
+ * and the other jobs their share.
+ */
+export const FINGERPRINT_PARSER_THREADS = 4;
+
 export function createFingerprintIntegration(
   config: WorkerConfig,
   logger?: DiscoveryLogger
@@ -305,7 +316,8 @@ export function createFingerprintIntegration(
       clientSecret: config.blizzardClientSecret,
       baseUrl: config.blizzardBaseUrl,
       onThrottle: throttleReporter(logger, "blizzard"),
-      requestLimits: BLIZZARD_WORKER_REQUEST_LIMITS
+      requestLimits: BLIZZARD_WORKER_REQUEST_LIMITS,
+      fingerprintParser: createFingerprintParserPool(FINGERPRINT_PARSER_THREADS)
     }),
     fingerprint: {
       requestCap: config.blizzardSweepRequestCap,
