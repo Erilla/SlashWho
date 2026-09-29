@@ -1,5 +1,6 @@
 import type { CharacterGuild, CharacterKey } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
+import { activeRunSql } from "./discovery-runs";
 import { lockFingerprintSweeps } from "./locks";
 import type {
   FingerprintAdmission,
@@ -786,7 +787,23 @@ export function createFingerprintSweepRepositories(
           );
           const admission = waiting.rows[0];
           if (!admission) {
-            return { kind: "settled" };
+            // A run this call already settled as not due is still owed its
+            // dispatch while it sits in the queue: a retry after a failed
+            // dispatch must say so again, since pending-dispatch recovery
+            // skips a run that already has a job id.
+            const latest = await client.query<{ status: string }>(
+              `SELECT admission.status
+               FROM fingerprint_sweep_admissions admission
+               JOIN discovery_runs run ON run.id = admission.discovery_run_id
+               WHERE admission.discovery_run_id = $1
+                 AND run.status IN ${activeRunSql}
+               ORDER BY admission.requested_at DESC, admission.queue_order DESC
+               LIMIT 1`,
+              [runId]
+            );
+            return latest.rows[0]?.status === "not_due"
+              ? { kind: "not_due" }
+              : { kind: "settled" };
           }
 
           const state = await client.query<{

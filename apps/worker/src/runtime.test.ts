@@ -2343,6 +2343,57 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
+  it("dispatches a waiting run that admission settles as not due", async () => {
+    // Break caught: a run deferred for budget went back to `queued` with its
+    // job id kept, so when another run swept the root while it waited and
+    // admission settled it as not due, nothing dispatched it. Pending-dispatch
+    // recovery skips a run that has a job id, so it stayed `queued` with no
+    // snapshot for good.
+    const fakes = runtimeFakes();
+    const waitingRunId = "00000000-0000-4000-8000-000000000014";
+    const key = { region: "eu" as const, realm: "silvermoon", name: "notdue" };
+    fakes.repositories.fingerprintSweeps.admitWaiting = async () => ({
+      kind: "not_due" as const
+    });
+    // The live chain is another run's: this run must go out as an ordinary
+    // job, whose not-due handling then completes it against that snapshot.
+    fakes.setResumeState({
+      resumeAfter: "eu/silvermoon/tail",
+      snapshotId: "00000000-0000-4000-8000-000000000099",
+      runId: "00000000-0000-4000-8000-000000000098",
+      limitationCode: null
+    });
+    fakes.repositories.runs = {
+      async find(runId: string) {
+        return runId === waitingRunId
+          ? {
+              id: waitingRunId,
+              rootKey: key,
+              rootCharacterId: null,
+              queueJobId: "00000000-0000-4000-8000-000000000097",
+              status: "queued" as const,
+              callerClass: "anonymous" as const,
+              attempt: 0,
+              nextRetryAt: null,
+              errorCode: null,
+              createdAt: new Date(),
+              startedAt: null,
+              completedAt: null,
+              snapshotId: null
+            }
+          : null;
+      }
+    } as Repositories["runs"];
+
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    await fakes.admissionHandler?.(waitingRunId);
+    expect(fakes.enqueued).toEqual([
+      { runId: waitingRunId, key, enqueuedAt: expect.any(String) }
+    ]);
+    await runtime.stop();
+  });
+
   it("keeps a budget-blocked fingerprint run out of discovery work", async () => {
     // Break caught: a waiting admission could be redispatched into a discovery worker before capacity exists.
     const fakes = runtimeFakes();
