@@ -25,10 +25,10 @@ This skill runs in Claude Code and in Codex. Steps say **Claude Code** or **Code
 
 ## Talking to the Manager
 
-The Manager watches every PR, including drafts, so a PR comment always reaches it.
+The Manager sees every new PR (drafts included) and every push. A comment on its own is only seen when the Manager next looks at the PR, so also tell the user.
 
 - **Claude Code:** run `ListAgents`, find the session named like "Manager", and `SendMessage` to it by its exact name. If none exists, tell the user.
-- **Codex:** you cannot message another session. Use GitHub: for a plan, push it on the branch and open a **draft** PR titled `docs: plan for #N`; for updates, comment on the PR with `gh pr comment N`. Tell the user where you posted it.
+- **Codex:** you cannot message another session. Use GitHub: for a plan, push it on the branch and open a **draft** PR titled `docs: plan for #N`; for updates, push a commit or comment on the PR with `gh pr comment N`. A comment alone may go unseen, so tell the user where you posted it and ask them to prompt the Manager.
 
 | When                                 | Say                                                                                                                           |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
