@@ -350,6 +350,7 @@ describe("character groups replay", () => {
       continuationCycleWrite({
         runId: first.runId,
         rootKey: root,
+        excludedTournamentIds: new Set(),
         sweep: {
           kind: "matched",
           characters: later,

@@ -180,6 +180,13 @@ function historicalGuildsFromDatabase(
     .map(([, guild]) => guild);
 }
 
+function stringArrayFromDatabase(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(value.filter((v): v is string => typeof v === "string"))
+  ].sort();
+}
+
 export async function finishFingerprintSweep(
   client: PoolClient,
   reservationId: string,
@@ -197,6 +204,7 @@ export async function finishFingerprintSweep(
       resumeAfter: string | null;
       resumeLimitationCode: string | null;
       historicalGuilds?: readonly CharacterGuild[] | undefined;
+      excludedTournamentCharacterIds?: readonly string[] | undefined;
       resumeSnapshotId: string | null;
       advanced: boolean;
     };
@@ -252,9 +260,9 @@ export async function finishFingerprintSweep(
     `INSERT INTO fingerprint_sweep_states
       (region, realm_slug, normalized_name, last_published_at,
        resume_after, resume_limitation_code, resume_historical_guilds,
-       resume_snapshot_id,
+       resume_snapshot_id, resume_excluded_tournament_characters,
        continuation_failures)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, 0)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $10::jsonb, 0)
      ON CONFLICT (region, realm_slug, normalized_name)
      DO UPDATE SET
        last_published_at = greatest(
@@ -265,6 +273,8 @@ export async function finishFingerprintSweep(
        resume_limitation_code = EXCLUDED.resume_limitation_code,
        resume_historical_guilds = EXCLUDED.resume_historical_guilds,
        resume_snapshot_id = EXCLUDED.resume_snapshot_id,
+       resume_excluded_tournament_characters =
+         EXCLUDED.resume_excluded_tournament_characters,
        continuation_failures = CASE
          WHEN $9 THEN 0
          ELSE fingerprint_sweep_states.continuation_failures
@@ -280,7 +290,10 @@ export async function finishFingerprintSweep(
         ? null
         : JSON.stringify(cursor.historicalGuilds ?? []),
       cursor.resumeSnapshotId,
-      cursor.advanced
+      cursor.advanced,
+      cursor.resumeAfter === null
+        ? null
+        : JSON.stringify(cursor.excludedTournamentCharacterIds ?? [])
     ]
   );
   if (cursor.resumeAfter !== null && input.continuationAdmission) {
@@ -591,11 +604,13 @@ export function createFingerprintSweepRepositories(
           resume_after: string | null;
           resume_limitation_code: string | null;
           resume_historical_guilds: unknown;
+          resume_excluded_tournament_characters: unknown;
           resume_snapshot_id: string | null;
           discovery_run_id: string | null;
         }>(
           `SELECT state.resume_after, state.resume_limitation_code,
                   state.resume_historical_guilds,
+                  state.resume_excluded_tournament_characters,
                   state.resume_snapshot_id, snapshot.discovery_run_id
            FROM fingerprint_sweep_states state
            LEFT JOIN snapshots snapshot
@@ -618,6 +633,9 @@ export function createFingerprintSweepRepositories(
           limitationCode: row.resume_limitation_code,
           historicalGuilds: historicalGuildsFromDatabase(
             row.resume_historical_guilds
+          ),
+          excludedTournamentCharacterIds: stringArrayFromDatabase(
+            row.resume_excluded_tournament_characters
           )
         };
       },
