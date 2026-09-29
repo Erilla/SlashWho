@@ -3290,6 +3290,59 @@ describe("observation writes after publication", () => {
     ).resolves.toMatchObject({ state: "complete" });
   });
 
+  it("keeps a known tournament member out of the fingerprint write when the sweep also matches it", async () => {
+    // Break caught: nothing tested that the handler hands the tournament
+    // filter to the write. Dropping it recorded a tournament profile the
+    // sweep matched as a fingerprint observation, which joined the group
+    // while the snapshot stayed clean.
+    const repositories = createMemoryRepositories();
+    const connections = recordingConnections();
+    repositories.characterConnections = connections.repository;
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "tournament-write-reservation",
+      requestCap: 300
+    });
+    const gateway = new MutableGateway();
+    gateway.getClaimedCharacters = async () => ({
+      characters: [
+        character(secondKey),
+        { ...character(fingerprintKey), isTournamentProfile: true }
+      ]
+    });
+    const matchedKey: CharacterKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "matched-alt"
+    };
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [character(fingerprintKey), character(matchedKey)];
+    blizzardGateway.fingerprints.set(keyId(rootKey), achievementFingerprint());
+    blizzardGateway.fingerprints.set(
+      keyId(fingerprintKey),
+      achievementFingerprint()
+    );
+    blizzardGateway.fingerprints.set(
+      keyId(matchedKey),
+      achievementFingerprint()
+    );
+
+    await handlerFor(repositories, gateway, { blizzardGateway }).execute(
+      run.id,
+      delivery()
+    );
+
+    expect(connections.writes).toHaveLength(1);
+    const fingerprintFamily = connections.writes[0]!.families.find(
+      (family) => family.family === "fingerprint"
+    );
+    // The other match is written, so the family is not empty by accident.
+    expect(fingerprintFamily?.observed.map((item) => item.key)).toEqual([
+      matchedKey
+    ]);
+  });
+
   it("carries an unread root to the write as added_only", async () => {
     const harness = handlerHarness();
     const connections = recordingConnections();
