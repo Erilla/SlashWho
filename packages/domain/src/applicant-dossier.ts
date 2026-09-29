@@ -522,6 +522,9 @@ function selectParseMetric(
     .sort(
       (a, b) =>
         b.metric.percentile - a.metric.percentile ||
+        // On an equal parse the current name wins, so a tier best whose URL
+        // carries the former name cannot displace it by sorting first.
+        Number(a.loggedAs !== undefined) - Number(b.loggedAs !== undefined) ||
         text(a.metric.reportUrl, b.metric.reportUrl)
     );
   if (available.length > 0) return available[0]!;

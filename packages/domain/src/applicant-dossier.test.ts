@@ -2383,6 +2383,30 @@ describe("parse rows logged under a former identity (#721)", () => {
     expect(boss.bestParses[0]).toMatchObject({ loggedAs: former });
   });
 
+  it("prefers the current name when a former name ties the parse", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [kill(root, { performance: parseOf(50) })],
+      tierBests: [
+        tierBest(root, {
+          loggedAs: former,
+          rankingsUrl:
+            "https://www.warcraftlogs.com/character/eu/neptulon/erilla",
+          performance: parseOf(90)
+        }),
+        tierBest(root, {
+          rankingsUrl:
+            "https://www.warcraftlogs.com/character/eu/silvermoon/ryii",
+          performance: parseOf(90)
+        })
+      ],
+      limitations: []
+    });
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.bestParses[0]).not.toHaveProperty("loggedAs");
+  });
+
   it("never drops the kill evidence it annotates", () => {
     const dossier = buildApplicantDossier({
       root,

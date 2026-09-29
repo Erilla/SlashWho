@@ -205,12 +205,18 @@ test("links and removes a historic alias with a two-field modal and tooltip", as
   await expect(page.getByRole("tooltip")).toHaveText(
     "Also known as: Erilla-Neptulon"
   );
+  // Escape closes it although the pointer is still over the icon.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tooltip")).toBeHidden();
   await page.reload();
   await expect(aliasIcon).toHaveCount(1);
   await aliasIcon.hover();
   await expect(page.getByRole("tooltip")).toHaveText(
     "Also known as: Erilla-Neptulon"
   );
+  // A second click closes it although the button keeps focus.
+  await aliasIcon.click();
+  await expect(page.getByRole("tooltip")).toBeHidden();
   await trigger.click();
   await page
     .getByRole("menuitem", { name: "Remove historic alias erilla-neptulon" })

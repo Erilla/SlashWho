@@ -3506,8 +3506,6 @@ td > .collection-progress {
   visibility: hidden;
 }
 
-.dossier-identity-hint:hover .dossier-identity-hint-tooltip,
-.dossier-identity-hint:focus-within .dossier-identity-hint-tooltip,
 .dossier-identity-hint-tooltip[data-open="true"] {
   visibility: visible;
 }

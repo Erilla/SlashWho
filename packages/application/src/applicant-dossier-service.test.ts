@@ -4107,6 +4107,21 @@ describe("applicant dossier Warcraft Logs identity", () => {
     expect(boss.bestParses).toHaveLength(1);
   });
 
+  it("keeps the current name's copy of a fight both names were read from (#721)", async () => {
+    // Break caught: reversing the merge order kept the alias's copy of a
+    // shared fight, so a parse the current name logged read as a former one.
+    const { dossiers, repositories } = fixture();
+    withRecordedIds(repositories, [
+      { key: root, characterId: 40989140 },
+      { key: alt, characterId: 40989140 }
+    ]);
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    expect(JSON.stringify(result.dossier.raids)).not.toContain("loggedAs");
+  });
+
   it("marks no parse as logged under another name for a lone identity", async () => {
     const { dossiers } = fixture();
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it } from "vitest";
 
@@ -147,15 +147,32 @@ it("opens the tooltip on a tap and closes it on Escape or a tap elsewhere", asyn
   const icon = screen.getByRole("button", { name: "Also known as" });
   expect(icon).toHaveAttribute("aria-expanded", "false");
 
-  await user.click(icon);
+  fireEvent.click(icon);
   expect(icon).toHaveAttribute("aria-expanded", "true");
 
   await user.keyboard("{Escape}");
   expect(icon).toHaveAttribute("aria-expanded", "false");
 
-  await user.click(icon);
-  await user.click(document.body);
+  fireEvent.click(icon);
+  await user.pointer({ keys: "[TouchA]", target: document.body });
   expect(icon).toHaveAttribute("aria-expanded", "false");
+});
+
+it("opens on a mouse hover and closes on Escape while still hovered", async () => {
+  const user = userEvent.setup();
+  render(
+    <DossierCharacterName
+      character={{ ...mage, historicAliases: [...formerAliases] }}
+      showGuild
+    />
+  );
+  const icon = screen.getByRole("button", { name: "Also known as" });
+  const tooltip = screen.getByRole("tooltip");
+  expect(tooltip).toHaveAttribute("data-open", "false");
+  await user.hover(icon);
+  expect(tooltip).toHaveAttribute("data-open", "true");
+  await user.keyboard("{Escape}");
+  expect(tooltip).toHaveAttribute("data-open", "false");
 });
 
 it("says which name a parse was logged under, only when one is given", () => {

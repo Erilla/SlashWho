@@ -131,7 +131,25 @@ function IdentityHint({
         aria-expanded={open}
         aria-label={label}
         className="dossier-identity-hint-trigger"
+        // Visibility follows this state alone, so Escape and a second tap
+        // close it even while the pointer or focus is still on the icon
+        // (WCAG 1.4.13). A touch tap is left to onClick, whose emulated
+        // mouse events would otherwise open and immediately re-close it.
+        onBlur={() => setOpen(false)}
         onClick={() => setOpen((value) => !value)}
+        onFocus={(event) => {
+          try {
+            if (event.currentTarget.matches(":focus-visible")) setOpen(true);
+          } catch {
+            // A selector the engine does not know: focus alone opens nothing.
+          }
+        }}
+        onPointerEnter={(event) => {
+          if (event.pointerType === "mouse") setOpen(true);
+        }}
+        onPointerLeave={(event) => {
+          if (event.pointerType === "mouse") setOpen(false);
+        }}
         type="button"
       >
         <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
