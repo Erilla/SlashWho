@@ -1075,6 +1075,13 @@ async function characterGroupsRecompute(context: WorkerContext): Promise<void> {
       ...result,
       durationMs: elapsedMs(clock, startedAt)
     });
+    if (result.mergedGroups > 0) {
+      logger?.info({
+        event: "character_groups_merged",
+        stage: "maintenance",
+        mergedGroups: result.mergedGroups
+      });
+    }
   } catch (error) {
     const errorCode = characterGroupsErrorCode(error);
     logger?.info({

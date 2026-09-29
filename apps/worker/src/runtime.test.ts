@@ -1864,7 +1864,8 @@ describe("worker runtime", () => {
       groupsRecomputed: 2,
       ungroupedAssigned: 1,
       cycleCompleted: false,
-      cyclesCompleted: 0
+      cyclesCompleted: 0,
+      mergedGroups: 0
     }));
     const { run, logged } = maintenanceHarness({
       characterConnections: { recomputePass },
@@ -1883,6 +1884,35 @@ describe("worker runtime", () => {
         cyclesCompleted: 0
       })
     );
+    // Nothing merged, so no alert.
+    expect(
+      logged.find((record) => record.event === "character_groups_merged")
+    ).toBeUndefined();
+  });
+
+  it("logs character_groups_merged, with counts only, when the maintenance pass merged groups", async () => {
+    // Break caught: nothing reported a maintenance merge of two
+    // multi-member groups, such as one a manual edit made.
+    const recomputePass = vi.fn(async () => ({
+      groupsRecomputed: 4,
+      ungroupedAssigned: 0,
+      cycleCompleted: true,
+      cyclesCompleted: 1,
+      mergedGroups: 3
+    }));
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass }
+    });
+    await expect(run()).resolves.toBeUndefined();
+    expect(
+      logged.filter((record) => record.event === "character_groups_merged")
+    ).toEqual([
+      {
+        event: "character_groups_merged",
+        stage: "maintenance",
+        mergedGroups: 3
+      }
+    ]);
   });
 
   it("logs character_groups_write_failed and still resolves when only the recompute fails", async () => {

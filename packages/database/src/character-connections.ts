@@ -291,13 +291,16 @@ export function createCharacterConnectionRepositories(
     },
     async recomputeGroupsOf(seedIds) {
       const done = new Set<string>();
+      let mergedGroups = 0;
       for (const seed of seedIds) {
         if (done.has(seed)) continue;
-        const members = await withGroupsTransaction(pool, (client) =>
+        const recomputed = await withGroupsTransaction(pool, (client) =>
           recomputeComponent(client, seed)
         );
-        for (const id of members) done.add(id);
+        mergedGroups += recomputed.mergedGroups;
+        for (const id of recomputed.members) done.add(id);
       }
+      return { mergedGroups };
     },
 
     async recomputePass({ budgetMs }) {
@@ -306,6 +309,7 @@ export function createCharacterConnectionRepositories(
       let groupsRecomputed = 0;
       let ungroupedAssigned = 0;
       let cyclesCompleted = 0;
+      let mergedGroups = 0;
       // The start, as stored, of the cycle already in progress when this
       // pass first looked: null when there was none, undefined until then.
       let inheritedCycleStartedAt: string | null | undefined;
@@ -318,7 +322,8 @@ export function createCharacterConnectionRepositories(
         groupsRecomputed,
         ungroupedAssigned,
         cycleCompleted: cyclesCompleted > 0,
-        cyclesCompleted
+        cyclesCompleted,
+        mergedGroups
       });
 
       /**
@@ -355,10 +360,14 @@ export function createCharacterConnectionRepositories(
         const assigned = await withGroupsTransaction(pool, async (client) => {
           const { joinedCycleStartedAt } = await joinCycle(client);
           const ungrouped = await firstUngrouped(client);
-          if (ungrouped !== null) await recomputeComponent(client, ungrouped);
-          return { joinedCycleStartedAt, found: ungrouped !== null };
+          const merged =
+            ungrouped === null
+              ? 0
+              : (await recomputeComponent(client, ungrouped)).mergedGroups;
+          return { joinedCycleStartedAt, found: ungrouped !== null, merged };
         });
         noteInherited(assigned.joinedCycleStartedAt);
+        mergedGroups += assigned.merged;
         return assigned.found;
       };
 
@@ -395,10 +404,11 @@ export function createCharacterConnectionRepositories(
             // this cycle, so the cycle still covers it.
             const ungrouped = await firstUngrouped(client);
             if (ungrouped !== null) {
-              await recomputeComponent(client, ungrouped);
+              const recomputed = await recomputeComponent(client, ungrouped);
               return {
                 kind: "ungrouped_assigned" as const,
-                joinedCycleStartedAt
+                joinedCycleStartedAt,
+                merged: recomputed.mergedGroups
               };
             }
             const completed = await client.query<{ started: string }>(
@@ -429,15 +439,20 @@ export function createCharacterConnectionRepositories(
               joinedCycleStartedAt
             };
           }
-          await recomputeComponent(client, group.seed);
+          const recomputed = await recomputeComponent(client, group.seed);
           await client.query(
             `UPDATE character_groups_maintenance SET cursor_group_id = $1 WHERE id = 1`,
             [group.id]
           );
-          return { kind: "group_recomputed" as const, joinedCycleStartedAt };
+          return {
+            kind: "group_recomputed" as const,
+            joinedCycleStartedAt,
+            merged: recomputed.mergedGroups
+          };
         });
 
         noteInherited(step.joinedCycleStartedAt);
+        if ("merged" in step) mergedGroups += step.merged;
         if (step.kind === "group_recomputed") groupsRecomputed += 1;
         if (step.kind === "ungrouped_assigned") ungroupedAssigned += 1;
         if (step.kind === "cycle_ended") {
@@ -513,12 +528,12 @@ async function firstUngrouped(client: PoolClient): Promise<string | null> {
  * from them, dropped exactly that link and stamped a slice of a still-live
  * component as though it were closed. Only once the node set stops growing
  * does `components` run, over every link collected among them. Returns
- * every character visited.
+ * every character visited, and how many merges it made (see `countMerges`).
  */
 async function recomputeComponent(
   client: PoolClient,
   seed: string
-): Promise<string[]> {
+): Promise<{ members: string[]; mergedGroups: number }> {
   const nodes = new Set<string>([seed]);
   const links: { a: string; b: string }[] = [];
   let frontier = [seed];
@@ -603,7 +618,37 @@ async function recomputeComponent(
       deletedGroupIds
     ]);
   }
-  return [...nodes];
+  return { members: [...nodes], mergedGroups: countMerges(parts, membership) };
+}
+
+/**
+ * How many recomputed parts join two or more existing groups that each had
+ * more than one member: the merges `character_groups_merged` reports. A
+ * single character joining a group, or two singletons pairing, is routine.
+ * `membership` holds every member of every group involved, because the
+ * recompute closes over group co-membership.
+ */
+function countMerges(
+  parts: readonly (readonly string[])[],
+  membership: ReadonlyMap<string, string>
+): number {
+  const sizes = new Map<string, number>();
+  for (const groupId of membership.values()) {
+    sizes.set(groupId, (sizes.get(groupId) ?? 0) + 1);
+  }
+  let merges = 0;
+  for (const members of parts) {
+    const joined = new Set(
+      members.flatMap((id) => {
+        const groupId = membership.get(id);
+        return groupId !== undefined && (sizes.get(groupId) ?? 0) > 1
+          ? [groupId]
+          : [];
+      })
+    );
+    if (joined.size >= 2) merges += 1;
+  }
+  return merges;
 }
 
 /**

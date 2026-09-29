@@ -1968,7 +1968,13 @@ export interface CharacterConnectionRepository {
   writeObservations(
     input: ObservationWriteInput
   ): Promise<ObservationWriteResult>;
-  recomputeGroupsOf(characterIds: readonly string[]): Promise<void>;
+  /**
+   * `mergedGroups` counts recomputed groups that joined two or more existing
+   * groups, each with more than one member.
+   */
+  recomputeGroupsOf(
+    characterIds: readonly string[]
+  ): Promise<{ mergedGroups: number }>;
   recomputePass(input: { budgetMs: number }): Promise<{
     groupsRecomputed: number;
     /** Previously-ungrouped characters newly assigned a group this call. */
@@ -1980,6 +1986,8 @@ export interface CharacterConnectionRepository {
      * progress when it began and then one that began during it.
      */
     cyclesCompleted: number;
+    /** Merges of multi-member groups, as `recomputeGroupsOf` counts them. */
+    mergedGroups: number;
   }>;
   rebuild(): Promise<{ observers: number; links: number; groups: number }>;
 }

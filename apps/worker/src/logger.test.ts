@@ -479,6 +479,11 @@ describe("worker logger", () => {
       stage: "recompute",
       errorName: "Error"
     });
+    logger.info({
+      event: "character_groups_merged",
+      stage: "maintenance",
+      mergedGroups: 2
+    });
 
     const parsed = lines.map(
       (line) => JSON.parse(line) as Record<string, unknown>
@@ -501,5 +506,11 @@ describe("worker logger", () => {
     });
     expect(parsed[0]).not.toHaveProperty("droppedFields");
     expect(parsed[1]).toMatchObject({ unknownCharacters: 1 });
+    expect(parsed[3]).toMatchObject({
+      event: "character_groups_merged",
+      stage: "maintenance",
+      mergedGroups: 2
+    });
+    expect(parsed[3]).not.toHaveProperty("droppedFields");
   });
 });

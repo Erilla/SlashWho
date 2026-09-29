@@ -3166,13 +3166,15 @@ function recordingConnections() {
       },
       async recomputeGroupsOf(ids: readonly string[]) {
         recomputed.push([...ids]);
+        return { mergedGroups: 0 };
       },
       async recomputePass() {
         return {
           groupsRecomputed: 0,
           ungroupedAssigned: 0,
           cycleCompleted: true,
-          cyclesCompleted: 1
+          cyclesCompleted: 1,
+          mergedGroups: 0
         };
       },
       async rebuild() {
@@ -3496,6 +3498,36 @@ describe("observation writes after publication", () => {
       }
     ]);
     expect(JSON.stringify(failures)).not.toContain("canceling");
+  });
+
+  it("logs character_groups_merged, with counts only, when the recompute merged groups", async () => {
+    // Break caught: nothing reported a merge of two multi-member groups, so
+    // phase 1 could not measure the alert's base rate before phase 2.
+    const logs = async (mergedGroups: number) => {
+      const repositories = createMemoryRepositories();
+      const logged: Record<string, unknown>[] = [];
+      repositories.characterConnections = {
+        ...recordingConnections().repository,
+        async recomputeGroupsOf() {
+          return { mergedGroups };
+        }
+      };
+      const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+      await handlerFor(repositories, new MutableGateway(), {
+        logger: { info: (value) => logged.push(value) }
+      }).execute(run.id, delivery());
+      return logged.filter(
+        (record) => record.event === "character_groups_merged"
+      );
+    };
+    expect(await logs(2)).toEqual([
+      {
+        event: "character_groups_merged",
+        stage: "publication",
+        mergedGroups: 2
+      }
+    ]);
+    expect(await logs(0)).toEqual([]);
   });
 
   it("writes a continuation cycle as fingerprint only, with its reservation", async () => {

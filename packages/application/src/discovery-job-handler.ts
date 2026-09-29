@@ -460,10 +460,26 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       }
     }
     if (signal.aborted) return;
+    let mergedGroups: number;
     try {
-      await connections.recomputeGroupsOf(result.changedCharacterIds);
+      ({ mergedGroups } = await connections.recomputeGroupsOf(
+        result.changedCharacterIds
+      ));
     } catch (error) {
       logObservationFailure("recompute", error);
+      return;
+    }
+    if (mergedGroups > 0) {
+      try {
+        // Counts only: which characters merged is for the replay to show.
+        options.logger?.info({
+          event: "character_groups_merged",
+          stage: "publication",
+          mergedGroups
+        });
+      } catch {
+        // Best effort only, as below.
+      }
     }
   }
 

@@ -985,6 +985,80 @@ describe("character connections: observation writes", () => {
       expect(Number(merged.rows[0]!.n)).toBe(2);
     });
 
+    it("counts a merge of two multi-member groups, and not a single character joining one", async () => {
+      // Break caught: nothing reported a merge, so phase 1 could not measure
+      // the base rate of the alert phase 2 relies on.
+      const raiderIoWrite = (
+        runId: string,
+        observer: CharacterKey,
+        other: CharacterKey
+      ) =>
+        connections().writeObservations({
+          runId,
+          observerKey: observer,
+          families: [
+            {
+              family: "raiderio",
+              decision: "added_only",
+              reason: "raiderio_limited",
+              sweepReservationId: null,
+              observed: [{ key: other, source: "claimed" }]
+            }
+          ]
+        });
+      const rootRun = await publishedRun();
+      const eveRun = await publishedRunFor(eKey, [
+        observation(eKey, "Eve"),
+        observation(thirdKey, "Third", "claimed")
+      ]);
+      const everyone = (
+        await pool.query<{ id: string }>(`SELECT id FROM characters`)
+      ).rows.map((row) => row.id);
+      await connections().recomputeGroupsOf(everyone);
+
+      // alt joins root: one side is a single character, so no merge.
+      const joined = await raiderIoWrite(rootRun, rootKey, altKey);
+      expect(
+        await connections().recomputeGroupsOf(joined.changedCharacterIds)
+      ).toEqual({ mergedGroups: 0 });
+      const paired = await raiderIoWrite(eveRun, eKey, thirdKey);
+      expect(
+        await connections().recomputeGroupsOf(paired.changedCharacterIds)
+      ).toEqual({ mergedGroups: 0 });
+
+      // {root, alt} and {eve, third} join through root's link to third.
+      const bridged = await raiderIoWrite(rootRun, rootKey, thirdKey);
+      expect(
+        await connections().recomputeGroupsOf(bridged.changedCharacterIds)
+      ).toEqual({ mergedGroups: 1 });
+      expect(await groupOf(eKey)).toBe(await groupOf(altKey));
+    });
+
+    it("counts a merge the maintenance pass makes", async () => {
+      const rootRun = await publishedRun();
+      await publishedRunFor(eKey, [observation(eKey, "Eve")]);
+      await connections().recomputePass({ budgetMs: 30_000 });
+      const rootId = await characterId(rootKey);
+      const altId = await characterId(altKey);
+      const thirdId = await characterId(thirdKey);
+      const eId = await characterId(eKey);
+      // Committed links whose own recomputes never ran, left to the pass.
+      const link = (a: string, b: string) =>
+        pool.query(
+          `INSERT INTO character_connections
+             (character_low_id, character_high_id, kind, source, observed_from_character_id, discovery_run_id, observed_at)
+           VALUES (LEAST($1::uuid, $2::uuid), GREATEST($1::uuid, $2::uuid), 'observed', 'claimed', $1, $3, now())`,
+          [a, b, rootRun]
+        );
+      await link(rootId, altId);
+      await link(eId, thirdId);
+      const paired = await connections().recomputePass({ budgetMs: 30_000 });
+      expect(paired.mergedGroups).toBe(0);
+      await link(rootId, thirdId);
+      const bridged = await connections().recomputePass({ budgetMs: 30_000 });
+      expect(bridged.mergedGroups).toBe(1);
+    });
+
     it("counts a manual connection as a link, excluded or not", async () => {
       await publishedRun([observation(rootKey, "Ryii")]);
       await publishedRunFor(altKey, [observation(altKey, "Alt")]);
