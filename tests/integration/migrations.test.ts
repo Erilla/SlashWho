@@ -306,23 +306,56 @@ describe("database migrations", () => {
         { refreshedAt: new Date(Date.now() - 10 * 60 * 1000) }
       );
 
-      const before = await checksum(pool, [
-        "snapshots",
-        "snapshot_characters",
-        "discovery_runs",
-        "characters"
-      ]);
+      // A manual connection, excluded, and a discovered exclusion, so P2's
+      // checksum covers rows the backfill reads.
+      const manualTarget = await insertCharacter(
+        pool,
+        "eu",
+        "draenor",
+        "handpicked"
+      );
+      await pool.query(
+        `INSERT INTO manual_dossier_connections
+           (root_character_id, connected_region, connected_realm_slug, connected_normalized_name, excluded_at)
+         SELECT $1, region, realm_slug, normalized_name, now() FROM characters WHERE id = $2`,
+        [root, manualTarget]
+      );
+      await pool.query(
+        `INSERT INTO dossier_character_exclusions
+           (root_character_id, region, realm_slug, normalized_name)
+         SELECT $1, region, realm_slug, normalized_name FROM characters WHERE id = $2`,
+        [root, alt]
+      );
 
-      await runMigrations(pool);
-
-      expect(
-        await checksum(pool, [
+      // P2: every table that existed before 0068, whole rows, clock columns
+      // included, because the migration must not change any of them.
+      const existing = await publicTables(pool);
+      expect(existing).toEqual(
+        expect.arrayContaining([
           "snapshots",
           "snapshot_characters",
           "discovery_runs",
-          "characters"
+          "characters",
+          "manual_dossier_connections",
+          "dossier_character_exclusions",
+          "fingerprint_sweep_states",
+          "fingerprint_sweep_reservations",
+          "fingerprint_sweep_admissions",
+          "fingerprint_sweep_request_events",
+          "character_evidence_runs"
         ])
-      ).toBe(before);
+      );
+      expect(existing).not.toContain("character_connections");
+      const before = await checksum(pool, existing);
+
+      await runMigrations(pool);
+
+      expect(await checksum(pool, existing)).toBe(before);
+      const manualGroups = await pool.query<{ n: string }>(
+        `SELECT count(DISTINCT group_id)::text AS n FROM character_group_members WHERE character_id = ANY($1)`,
+        [[root, manualTarget]]
+      );
+      expect(manualGroups.rows[0]!.n).toBe("1");
       const groups = await pool.query<{ n: string }>(
         `SELECT count(DISTINCT group_id)::text AS n FROM character_group_members WHERE character_id = ANY($1)`,
         [[root, alt, fp]]
@@ -853,9 +886,19 @@ async function checksum(pool: Pool, tables: string[]): Promise<string> {
   const parts: string[] = [];
   for (const table of tables) {
     const result = await pool.query<{ digest: string }>(
-      `SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t::text), '')) AS digest FROM ${table} t`
+      `SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t::text), '')) AS digest FROM "${table}" t`
     );
-    parts.push(result.rows[0]!.digest);
+    parts.push(`${table}=${result.rows[0]!.digest}`);
   }
   return parts.join(":");
+}
+
+/** Every base table in the public schema, by name. */
+async function publicTables(pool: Pool): Promise<string[]> {
+  const result = await pool.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      ORDER BY table_name`
+  );
+  return result.rows.map((row) => row.table_name);
 }

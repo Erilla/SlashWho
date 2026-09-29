@@ -552,8 +552,10 @@ describe("character connections: observation writes", () => {
 
   it("touches no existing table (P2)", async () => {
     const runId = await publishedRun();
+    // Rows in the tables the recompute reads, so their digests cover data.
+    await repositories.manualConnections.add(rootKey, thirdKey);
     const before = await existingChecksum(pool);
-    await connections().writeObservations({
+    const written = await connections().writeObservations({
       runId,
       observerKey: rootKey,
       families: [
@@ -566,6 +568,8 @@ describe("character connections: observation writes", () => {
         }
       ]
     });
+    await connections().recomputeGroupsOf(written.changedCharacterIds);
+    await connections().recomputePass({ budgetMs: 30_000 });
     expect(await existingChecksum(pool)).toBe(before);
   });
 
@@ -1451,26 +1455,49 @@ describe("character connections: observation writes", () => {
   });
 });
 
-/** Every existing table the writer must never write, ignoring clock columns. */
+/**
+ * P2: a whole-row digest of every table that existed before the character
+ * groups migration, clock columns included, since the writer must not
+ * change any row of them.
+ */
 async function existingChecksum(pool: Pool): Promise<string> {
-  const tables = [
-    "snapshots",
-    "snapshot_characters",
-    "discovery_runs",
-    "characters",
-    "manual_dossier_connections",
-    "dossier_character_exclusions",
-    "fingerprint_sweep_states",
-    "fingerprint_sweep_reservations",
-    "fingerprint_sweep_admissions",
-    "character_evidence_runs"
-  ];
+  const tables = await pool.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        AND table_name <> ALL($1::text[])
+      ORDER BY table_name`,
+    [CHARACTER_GROUPS_TABLES]
+  );
+  expect(tables.rows.map((row) => row.table_name)).toEqual(
+    expect.arrayContaining([
+      "snapshots",
+      "snapshot_characters",
+      "discovery_runs",
+      "characters",
+      "manual_dossier_connections",
+      "dossier_character_exclusions",
+      "fingerprint_sweep_states",
+      "fingerprint_sweep_reservations",
+      "fingerprint_sweep_admissions",
+      "character_evidence_runs"
+    ])
+  );
   const parts: string[] = [];
-  for (const table of tables) {
-    const result = await pool.query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM ${table}`
+  for (const { table_name: table } of tables.rows) {
+    const result = await pool.query<{ digest: string }>(
+      `SELECT md5(coalesce(string_agg(t::text, ',' ORDER BY t::text), '')) AS digest FROM "${table}" t`
     );
-    parts.push(`${table}=${result.rows[0]!.n}`);
+    parts.push(`${table}=${result.rows[0]!.digest}`);
   }
   return parts.join(",");
 }
+
+/** The tables migration 0068 created, which the writer does write. */
+const CHARACTER_GROUPS_TABLES = [
+  "character_connections",
+  "character_groups",
+  "character_group_members",
+  "character_connection_writes",
+  "character_connection_write_log",
+  "character_groups_maintenance"
+];
