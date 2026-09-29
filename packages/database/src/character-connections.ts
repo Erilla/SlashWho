@@ -223,6 +223,10 @@ export function createCharacterConnectionRepositories(
             }
           }
 
+          // The `GREATEST` and the matching `CASE` never take effect: the
+          // block check above, under the same root lock, already skipped any
+          // write older than the marker. They stay as a guard, so the marker
+          // can never move backwards even if that check changes.
           await client.query(
             `INSERT INTO character_connection_writes
                (observer_character_id, family, run_id, run_started_at)
