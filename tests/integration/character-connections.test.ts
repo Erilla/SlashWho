@@ -295,6 +295,131 @@ describe("character connections: observation writes", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "a live-sweep completion",
+      decision: "added_only" as const,
+      reason: "live_sweep_completion" as const
+    },
+    {
+      label: "a not_due refresh",
+      decision: "replaced" as const,
+      reason: "raiderio_complete" as const
+    }
+  ])(
+    "blocks per family: $label mid-chain leaves the chain's later cycle and seal to write",
+    async ({ decision, reason }) => {
+      // Break caught: were the marker read the newest of any family, a later
+      // run's Raider.IO write landing mid-chain would block every later cycle
+      // and the seal as `blocked_by_newer`, and the chain's fingerprint links
+      // would never be recorded.
+      const chain = await publishedRun();
+      await pool.query(
+        `UPDATE discovery_runs SET started_at = now() - interval '2 hours' WHERE id = $1`,
+        [chain]
+      );
+      await connections().writeObservations({
+        runId: chain,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "replaced",
+            reason: "raiderio_complete",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          },
+          {
+            family: "fingerprint",
+            decision: "added_only",
+            reason: "capped",
+            sweepReservationId: null,
+            observed: [{ key: thirdKey, source: "fingerprint" }]
+          }
+        ]
+      });
+
+      const later = await publishedRun();
+      await connections().writeObservations({
+        runId: later,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision,
+            reason,
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          }
+        ]
+      });
+
+      await connections().writeObservations({
+        runId: chain,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "fingerprint",
+            decision: "added_only",
+            reason: "capped",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "fingerprint" }]
+          }
+        ]
+      });
+      await connections().writeObservations({
+        runId: chain,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "fingerprint",
+            decision: "replaced",
+            reason: "matched",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "fingerprint" }]
+          }
+        ]
+      });
+
+      const altId = await characterId(altKey);
+      const thirdId = await characterId(thirdKey);
+      const fingerprintLinks = await pool.query<{ other: string }>(
+        `SELECT CASE WHEN character_low_id = observed_from_character_id
+                     THEN character_high_id ELSE character_low_id END AS other
+           FROM character_connections
+          WHERE kind = 'observed' AND source = 'fingerprint'
+            AND discovery_run_id = $1
+          ORDER BY other`,
+        [chain]
+      );
+      expect(fingerprintLinks.rows.map((row) => row.other)).toEqual(
+        [altId, thirdId].sort()
+      );
+      const ledger = await pool.query(
+        `SELECT family, decision, reason FROM character_connection_write_log
+          WHERE run_id = $1 ORDER BY id`,
+        [chain]
+      );
+      expect(ledger.rows).toEqual([
+        {
+          family: "raiderio",
+          decision: "replaced",
+          reason: "raiderio_complete"
+        },
+        { family: "fingerprint", decision: "added_only", reason: "capped" },
+        { family: "fingerprint", decision: "added_only", reason: "capped" },
+        { family: "fingerprint", decision: "replaced", reason: "matched" }
+      ]);
+      expect(
+        (
+          await pool.query(
+            `SELECT 1 FROM character_connection_write_log WHERE decision = 'blocked'`
+          )
+        ).rowCount
+      ).toBe(0);
+    }
+  );
+
   it("keeps a chain's seal from retracting after an earlier cycle skipped a guild", async () => {
     // Break caught: a 404'd historical guild in a capped cycle was forgotten
     // at the seal, whose `replaced` retracted links the chain never re-read.
