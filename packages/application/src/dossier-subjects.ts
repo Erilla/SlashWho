@@ -39,6 +39,7 @@ export function compareByLevelThenKey(
   );
 }
 
+/** Level only orders the list; it is not part of a dossier subject. */
 export type RankedSubject = DossierSubject & Readonly<{ level: number }>;
 
 export type ResolvedSubjects = Readonly<{
@@ -115,8 +116,6 @@ export async function legacyResolveSubjects(
   // its Raider.IO alts and fingerprints its Blizzard guild roster, so merge
   // that snapshot in as well. The root's own snapshot stays untouched: a
   // dossier is a view of the moment rather than a stored record.
-  // Level only orders the list; it is not part of a dossier subject.
-  type RankedSubject = DossierSubject & Readonly<{ level: number }>;
   const manual: RankedSubject[] = [];
   const excluded: RankedSubject[] = [];
   const manualExcludedIds = new Set<string>();
