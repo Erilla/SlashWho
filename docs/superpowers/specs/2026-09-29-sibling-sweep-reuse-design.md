@@ -305,25 +305,12 @@ the result as an estimate.
 It takes every sweep run as the population, because the gate would also remove
 sweeps that end `capped`, `unread` or `skipped_guild`, and their requests are
 real spend. A run's requests are summed over all of its reservations. A run is
-counted as covered when tests 1, 4 and 5 hold for it (latest-row semantics).
-Guild equality (test 3) and exclusions (test 2) are not in the query.
+counted as covered when tests 1 and 5 held **as at the moment the run began**:
+each looks up the relevant character's latest ledger row written before the run
+started, not the latest row now. Tests 2, 3 and 4 are not in the query.
 
 ```sql
-WITH latest AS (
-  -- each character's fingerprint-family ledger rows, newest first
-  SELECT l.observer_character_id AS character_id,
-         l.reason,
-         l.written_at,
-         r.limitation_code,
-         row_number() OVER (
-           PARTITION BY l.observer_character_id
-           ORDER BY l.run_started_at DESC, l.written_at DESC
-         ) AS rn
-  FROM character_connection_write_log l
-  LEFT JOIN fingerprint_sweep_reservations r ON r.id = l.sweep_reservation_id
-  WHERE l.family = 'fingerprint'
-),
-runs AS (
+WITH runs AS (
   SELECT a.discovery_run_id AS run_id,
          c.id AS character_id,
          m.group_id,
@@ -348,53 +335,68 @@ SELECT
 FROM (
   SELECT ru.*,
          (
-           EXISTS (            -- test 1: a sibling's latest row is a clean matched
+           -- test 5: B's own latest row before this run is clean and recent
+           EXISTS (
              SELECT 1
-             FROM latest lm
-             JOIN character_group_members gm ON gm.character_id = lm.character_id
-             WHERE lm.rn = 1
-               AND gm.group_id = ru.group_id
-               AND lm.character_id <> ru.character_id
-               AND lm.reason = 'matched'
-               AND lm.limitation_code IS NULL
-               AND lm.written_at < ru.started
-               AND lm.written_at >= ru.started - interval '168 hours'
-           )
-           AND EXISTS (        -- test 5: B's own latest row is clean and recent
-             SELECT 1 FROM latest own
-             WHERE own.character_id = ru.character_id
-               AND own.rn = 1
-               AND own.reason = 'matched'
+             FROM LATERAL (
+               SELECT l.reason, l.written_at, r.limitation_code
+               FROM character_connection_write_log l
+               LEFT JOIN fingerprint_sweep_reservations r
+                 ON r.id = l.sweep_reservation_id
+               WHERE l.family = 'fingerprint'
+                 AND l.observer_character_id = ru.character_id
+                 AND l.written_at < ru.started
+               ORDER BY l.run_started_at DESC, l.written_at DESC
+               LIMIT 1
+             ) own
+             WHERE own.reason = 'matched'
                AND own.limitation_code IS NULL
                AND own.written_at >= ru.started - interval '28 days'
            )
-           AND NOT EXISTS (    -- test 4: no member holds a cursor
+           -- test 1: some sibling's latest row before this run is a clean,
+           -- recent matched
+           AND EXISTS (
              SELECT 1
-             FROM character_group_members gm2
-             JOIN characters c2 ON c2.id = gm2.character_id
-             JOIN fingerprint_sweep_states st
-               ON st.region = c2.region
-              AND st.realm_slug = c2.realm_slug
-              AND st.normalized_name = c2.normalized_name
-             WHERE gm2.group_id = ru.group_id
-               AND st.resume_after IS NOT NULL
+             FROM character_group_members gm
+             CROSS JOIN LATERAL (
+               SELECT l.reason, l.written_at, r.limitation_code
+               FROM character_connection_write_log l
+               LEFT JOIN fingerprint_sweep_reservations r
+                 ON r.id = l.sweep_reservation_id
+               WHERE l.family = 'fingerprint'
+                 AND l.observer_character_id = gm.character_id
+                 AND l.written_at < ru.started
+               ORDER BY l.run_started_at DESC, l.written_at DESC
+               LIMIT 1
+             ) sib
+             WHERE gm.group_id = ru.group_id
+               AND gm.character_id <> ru.character_id
+               AND sib.reason = 'matched'
+               AND sib.limitation_code IS NULL
+               AND sib.written_at >= ru.started - interval '168 hours'
            )
          ) AS covered
   FROM runs ru
 ) x;
 ```
 
-**Read it as an upper bound, with errors in both directions.**
+**Read it as an estimate, with errors in both directions.**
 
-- Rows a skipped sweep would have written do not exist, so a skip can end a
-  sibling's or B's own coverage. The query cannot see that, and overstates.
-- Test 4 is read from current cursors, not as at the run.
-- Guild equality and exclusions are missing, and group membership is as of now.
-  Both overstate.
-- **The ledger starts on 2026-09-29** (#745). If phase 2 ships less than about
-  four weeks after phase 1, the early part of the window has no `matched` rows
-  to find for B's own sweep, so the result under-counts.
-- It has been run only against the migrated schema with empty tables, which proves the syntax and columns and nothing about the numbers. It has not been run on test data.
+- **Overstates:**
+  - Test 4 (no member holds a cursor) is left out. It cannot be answered
+    historically: `resume_after` is not kept per date, and an abandoned cursor
+    is never cleared, so reading today's cursors would mark a whole group
+    uncovered because of one old abandoned member.
+  - Guild equality (test 3) and exclusions (test 2) are missing, and group
+    membership is as of now.
+  - Rows a skipped sweep would have written do not exist, so a skip can end a
+    sibling's or B's own coverage. The query cannot see that.
+- **Understates:** the ledger starts on 2026-09-29 (#745). If phase 2 ships less
+  than about four weeks after phase 1, the early part of the window has no
+  `matched` rows to find for B's own sweep.
+- It has been run only against the migrated schema with empty tables, which
+  proves the syntax and columns and nothing about the numbers. It has not been
+  run on test data.
 
 Budget: a full ryun-sized run spends about 12% of
 `BLIZZARD_HOURLY_REQUEST_BUDGET` (28,800), which charges discovery sweeps only.
