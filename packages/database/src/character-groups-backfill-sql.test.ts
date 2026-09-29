@@ -6,7 +6,7 @@ it("rebuilds with exactly the migration's backfill statements", () => {
   // Break caught: the rebuild and the migration drifted, so a rebuild left
   // groups the replay then called drift.
   const migration = readFileSync(
-    new URL("../drizzle/0068_character_groups.sql", import.meta.url),
+    new URL("../drizzle/0069_character_groups.sql", import.meta.url),
     "utf8"
   );
   expect(migration).toContain(REBUILD_SQL.pinLatest.trim());

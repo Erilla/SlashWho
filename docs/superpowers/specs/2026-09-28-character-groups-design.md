@@ -406,8 +406,8 @@ discovered, as dossiers do today. Nothing discovers a member automatically.
 The worker starts maintaining the new tables in best-effort transactions. No
 page, route, response or publication outcome changes.
 
-**Migration `0068`** (after #743's `0067_raiderio_tier_reads`, journal `idx` 67, a `when`
-strictly greater than `1792011600018`; recheck `origin/main` before merging and
+**Migration `0069`** (after #748's `0068_raiderio_vantus_null`, journal `idx` 68, a `when`
+strictly greater than `1792011600019`, so `1792011600020`; recheck `origin/main` before merging and
 renumber the SQL file, the journal index, `when` and the migrations test's slice
 if another migration took the number):
 

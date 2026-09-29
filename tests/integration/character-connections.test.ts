@@ -1492,7 +1492,7 @@ async function existingChecksum(pool: Pool): Promise<string> {
   return parts.join(",");
 }
 
-/** The tables migration 0068 created, which the writer does write. */
+/** The tables migration 0069 created, which the writer does write. */
 const CHARACTER_GROUPS_TABLES = [
   "character_connections",
   "character_groups",

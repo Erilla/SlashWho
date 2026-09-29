@@ -237,9 +237,10 @@ failure, and the next replay compares it.
 Revert the code. The tables go stale, and nothing reads them. After a
 roll-forward, rebuild and restart the three days.
 
-Reverting the code does not revert the migration. 0068, with `when`
-1792011600019, stays applied, and Drizzle skips any migration whose `when` is
+Reverting the code does not revert the migration. 0069, with `when`
+1792011600020, stays applied, and Drizzle skips any migration whose `when` is
 not strictly greater than the newest applied one. So a later migration added
-on the reverted tree must take a `when` strictly greater than 1792011600019.
+on the reverted tree must take a `when` strictly greater than 1792011600020.
 Following the usual +1 convention from the reverted tree's newest migration
-would give it 1792011600019 exactly, and Drizzle would skip it silently.
+(0068_raiderio_vantus_null, `when` 1792011600019) would give it 1792011600020
+exactly, and Drizzle would skip it silently.

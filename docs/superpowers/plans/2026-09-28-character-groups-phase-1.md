@@ -6,7 +6,7 @@
 
 **Architecture:**
 
-- **Migration `0068`** creates six new tables and backfills them from today's snapshots and manual connections.
+- **Migration `0069`** creates six new tables and backfills them from today's snapshots and manual connections.
 - **After each publication commits**, the discovery handler hands a pure, precomputed `ObservationWriteInput` to a best-effort writer. The writer runs in the handler's outer `finally`, after the timing log.
 - **The writer** (`characterConnections` repository) stores observations, the forward-only marker and the ledger in one short transaction. It then recomputes each affected group in its own short transaction.
 - **An hourly maintenance step** recomputes every group inside a 30-second budget, using a stored cursor. This picks up manual edits made on the web and any recomputes that were lost.
@@ -49,7 +49,7 @@
   - it never retracts a row observed after its own run started;
   - it writes nothing for a family whose newest marker came from a run started after this one. In that case it logs a `blocked` ledger row with reason `blocked_by_newer`.
 - **Every post-commit transaction sets `lock_timeout` to 5 seconds.** A timeout logs `character_groups_write_failed`.
-- **Migration numbering.** The migration is `0068`, with journal `idx` 67 and `when` `1792011600019`. #743 took `0067_raiderio_tier_reads` (`idx` 66, `when` `1792011600018`). Recheck `origin/main` before merging. If `fix/raiderio-logged-kills-back-catalogue` lands first, renumber the SQL file, the journal `idx`, `when` (strictly greater), and the `slice(-N)` in `tests/integration/migrations.test.ts`.
+- **Migration numbering.** The migration is `0069`, with journal `idx` 68 and `when` `1792011600020`. #743 took `0067_raiderio_tier_reads` (`idx` 66, `when` `1792011600018`) and #748 took `0068_raiderio_vantus_null` (`idx` 67, `when` `1792011600019`). Recheck `origin/main` before merging. If another migration lands first, renumber the SQL file, the journal `idx`, `when` (strictly greater), and the `slice(-N)` in `tests/integration/migrations.test.ts`.
 - **Workflow.** Commits are conventional, and each ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Work happens in this worktree (`docs/738-character-groups`) on a new branch `feat/738-character-groups-phase-1`, cut from `origin/main` per `docs/agents/implementation-workflow.md`, with the spec commit cherry-picked in (Task 0).
 
 ## Settled here: the Manager's four final Low items
@@ -97,7 +97,7 @@ The five failure modes most likely to bite, each pinned by a test in its owning 
   - group-id survival;
   - path labels.
 - `packages/domain/src/character-connections.test.ts`
-- `packages/database/drizzle/0068_character_groups.sql`: the six tables, the backfill and the sanity check.
+- `packages/database/drizzle/0069_character_groups.sql`: the six tables, the backfill and the sanity check.
 - `packages/database/src/character-connections.ts`: the `characterConnections` repository:
   - `writeObservations`;
   - `recomputeGroupsOf`;
@@ -123,7 +123,7 @@ The five failure modes most likely to bite, each pinned by a test in its owning 
 - `packages/domain/src/fingerprint-discovery.test.ts`: two exact-equality 404 tests.
 - `packages/domain/src/index.ts`: export the new module.
 - `packages/database/src/schema.ts`: `pgTable`s for the six tables.
-- `packages/database/drizzle/meta/_journal.json`: entry `idx` 67.
+- `packages/database/drizzle/meta/_journal.json`: entry `idx` 68.
 - `packages/database/src/repositories.ts`: the `CharacterConnectionRepository` interface and an optional `characterConnections?` key on `Repositories`.
 - `packages/database/src/postgres-repositories.ts`: spread the new repository.
 - `packages/database/src/index.ts`: export types and `loadCharacterGroupsAudit`.
@@ -734,11 +734,11 @@ git commit -m "feat(domain): character connection rules for groups (#738)" -m "S
 
 ---
 
-### Task 3: Migration 0068 and schema
+### Task 3: Migration 0069 and schema
 
 **Files:**
 
-- Create: `packages/database/drizzle/0068_character_groups.sql`
+- Create: `packages/database/drizzle/0069_character_groups.sql`
 - Modify: `packages/database/drizzle/meta/_journal.json`
 - Modify: `packages/database/src/schema.ts`, placing the new tables after `snapshotCharacters`
 - Modify: `tests/integration/migrations.test.ts`, lines 40-86 (the table list) and 175-225 (the journal slice)
@@ -768,7 +768,7 @@ In `tests/integration/migrations.test.ts`:
 
   If the collation orders underscores differently from plain byte order, the failing run's diff shows the true order: copy it.
 
-- **The journal slice.** In the test at lines 175-225, change `journal.entries.slice(-36)` to `slice(-37)`, and append `{ idx: 67, tag: "0068_character_groups" }` to the expected array.
+- **The journal slice.** In the test at lines 175-225, change `journal.entries.slice(-37)` to `slice(-38)`, and append `{ idx: 68, tag: "0069_character_groups" }` to the expected array.
 
 Then add a new test in the same file, after the journal test:
 
@@ -778,7 +778,7 @@ it("backfills character groups from today's snapshots without touching them", as
   // snapshot member apart from its root, would fail P1 and P2 on deploy.
   const { pool, stop } = await startPostgres();
   try {
-    await runMigrationsThrough(pool, "0067_raiderio_tier_reads");
+    await runMigrationsThrough(pool, "0068_raiderio_vantus_null");
     const root = await insertCharacter(pool, "eu", "draenor", "quellaria");
     const alt = await insertCharacter(pool, "eu", "draenor", "eundariel");
     const fp = await insertCharacter(pool, "eu", "draenor", "drecthyr");
@@ -905,7 +905,7 @@ Expected: FAIL. The table list and journal slice differ, and the new test finds 
 
 - [ ] **Step 3: Write the migration**
 
-`packages/database/drizzle/0068_character_groups.sql`. Statements are separated by `--> statement-breakpoint`, column lines are tab-indented, and each table gets a comment block. For the column-by-column rationale, see the spec's Tables section.
+`packages/database/drizzle/0069_character_groups.sql`. Statements are separated by `--> statement-breakpoint`, column lines are tab-indented, and each table gets a comment block. For the column-by-column rationale, see the spec's Tables section.
 
 ```sql
 -- Character groups, phase 1 (#738). Discovery's observed links, a ledger of
@@ -1154,10 +1154,10 @@ Append to `packages/database/drizzle/meta/_journal.json`:
 
 ```json
 {
-  "idx": 67,
+  "idx": 68,
   "version": "7",
-  "when": 1792011600019,
-  "tag": "0068_character_groups",
+  "when": 1792011600020,
+  "tag": "0069_character_groups",
   "breakpoints": true
 }
 ```
@@ -1167,7 +1167,7 @@ Append to `packages/database/drizzle/meta/_journal.json`:
 After `snapshotCharacters`, add these tables, with a JSDoc on each pointing at the migration comment:
 
 ```ts
-/** Discovery's observed links and reviewers' rejections (#738). See 0068. */
+/** Discovery's observed links and reviewers' rejections (#738). See 0069. */
 export const characterConnections = pgTable(
   "character_connections",
   {
@@ -1209,7 +1209,7 @@ export const characterConnections = pgTable(
   ]
 );
 
-/** The groups counting links form (#738). See 0068. */
+/** The groups counting links form (#738). See 0069. */
 export const characterGroups = pgTable("character_groups", {
   id: uuid("id").defaultRandom().primaryKey(),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -1256,7 +1256,7 @@ export const characterConnectionWrites = pgTable(
   ]
 );
 
-/** One append-only row per publication per family (#738). See 0068. */
+/** One append-only row per publication per family (#738). See 0069. */
 export const characterConnectionWriteLog = pgTable(
   "character_connection_write_log",
   {
@@ -1329,7 +1329,7 @@ Expected: both PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add packages/database/drizzle/0068_character_groups.sql packages/database/drizzle/meta/_journal.json packages/database/src/schema.ts tests/integration/migrations.test.ts tests/integration/repository-fixtures.ts
+git add packages/database/drizzle/0069_character_groups.sql packages/database/drizzle/meta/_journal.json packages/database/src/schema.ts tests/integration/migrations.test.ts tests/integration/repository-fixtures.ts
 git commit -m "feat(database): character groups tables and backfill (#738)" -m "Six new tables: observations, groups and their members, the per-family write marker, the append-only write ledger, and the maintenance cursor. The backfill reads today's snapshots and manual connections and writes nothing else." -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
@@ -2374,7 +2374,7 @@ it("rebuilds with exactly the migration's backfill statements", () => {
   // Break caught: the rebuild and the migration drifted, so a rebuild left
   // groups the replay then called drift.
   const migration = readFileSync(
-    new URL("../drizzle/0068_character_groups.sql", import.meta.url),
+    new URL("../drizzle/0069_character_groups.sql", import.meta.url),
     "utf8"
   );
   expect(migration).toContain(REBUILD_SQL.raiderio.trim());
@@ -4536,7 +4536,7 @@ git merge origin/main
 ls packages/database/drizzle | tail -3
 ```
 
-If a `0068_*` migration arrived from main, renumber this one to the next free number: the file name, the journal `idx`, a `when` strictly greater than the previous entry, the `slice(-N)` and appended entry in `tests/integration/migrations.test.ts`, the migration path in `character-groups-backfill-sql.test.ts`, and this plan's references. Then run the whole gate again.
+If a `0069_*` migration arrived from main, renumber this one to the next free number: the file name, the journal `idx`, a `when` strictly greater than the previous entry, the `slice(-N)` and appended entry in `tests/integration/migrations.test.ts`, the migration path in `character-groups-backfill-sql.test.ts`, and this plan's references. Then run the whole gate again.
 
 - [ ] **Step 4: Open the pull request**
 
@@ -4545,7 +4545,7 @@ git push -u origin feat/738-character-groups-phase-1
 gh pr create --base main --title "feat: character groups phase 1, write connections and groups, read nothing (#738)" --body "$(cat <<'EOF'
 Phase 1 of #738 (spec: docs/superpowers/specs/2026-09-28-character-groups-design.md). The worker records each discovery's observed links, a per-family ledger, and the groups they form, best effort after every committed publication. Nothing reads them. A read-only replay (`corepack pnpm ops:replay-groups`) compares phase 2's group dossiers with today's, page by page, and audits the writes.
 
-No page, response, publication or evidence behaviour changes. Migration 0068 creates six tables and inserts only.
+No page, response, publication or evidence behaviour changes. Migration 0069 creates six tables and inserts only.
 
 After deploy: run `corepack pnpm ops:rebuild-groups` once, then follow docs/operations/character-groups.md for the three-day exit criteria.
 

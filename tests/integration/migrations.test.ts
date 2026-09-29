@@ -230,7 +230,7 @@ describe("database migrations", () => {
       { idx: 65, tag: "0066_raiderio_logged_kills" },
       { idx: 66, tag: "0067_raiderio_tier_reads" },
       { idx: 67, tag: "0068_raiderio_vantus_null" },
-      { idx: 68, tag: "0068_character_groups" }
+      { idx: 68, tag: "0069_character_groups" }
     ]);
   });
 
@@ -239,7 +239,7 @@ describe("database migrations", () => {
     // snapshot member apart from its root, would fail P1 and P2 on deploy.
     const { pool, stop } = await startPostgres();
     try {
-      await runMigrationsThrough(pool, "0067_raiderio_tier_reads");
+      await runMigrationsThrough(pool, "0068_raiderio_vantus_null");
       const root = await insertCharacter(pool, "eu", "draenor", "quellaria");
       const alt = await insertCharacter(pool, "eu", "draenor", "eundariel");
       const fp = await insertCharacter(pool, "eu", "draenor", "drecthyr");
@@ -328,7 +328,7 @@ describe("database migrations", () => {
         [root, alt]
       );
 
-      // P2: every table that existed before 0068, whole rows, clock columns
+      // P2: every table that existed before 0069, whole rows, clock columns
       // included, because the migration must not change any of them.
       const existing = await publicTables(pool);
       expect(existing).toEqual(

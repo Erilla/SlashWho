@@ -1,6 +1,6 @@
 /**
  * The rebuild's SQL, copied verbatim from the migration's backfill
- * (`drizzle/0068_character_groups.sql`), so the two never drift (#738).
+ * (`drizzle/0069_character_groups.sql`), so the two never drift (#738).
  *
  * The rebuild runs while the live worker may still be publishing, so it must
  * see the same pinned snapshot the migration's backfill sees: `pinLatest`

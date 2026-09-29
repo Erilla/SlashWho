@@ -188,7 +188,7 @@ export const snapshotCharacters = pgTable(
   ]
 );
 
-/** Discovery's observed links and reviewers' rejections (#738). See 0068. */
+/** Discovery's observed links and reviewers' rejections (#738). See 0069. */
 export const characterConnections = pgTable(
   "character_connections",
   {
@@ -234,7 +234,7 @@ export const characterConnections = pgTable(
   ]
 );
 
-/** The groups counting links form (#738). See 0068. */
+/** The groups counting links form (#738). See 0069. */
 export const characterGroups = pgTable("character_groups", {
   id: uuid("id").defaultRandom().primaryKey(),
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -245,7 +245,7 @@ export const characterGroups = pgTable("character_groups", {
     .notNull()
 });
 
-/** A group's members (#738). See 0068. */
+/** A group's members (#738). See 0069. */
 export const characterGroupMembers = pgTable(
   "character_group_members",
   {
@@ -282,7 +282,7 @@ export const characterConnectionWrites = pgTable(
   ]
 );
 
-/** One append-only row per publication per family (#738). See 0068. */
+/** One append-only row per publication per family (#738). See 0069. */
 export const characterConnectionWriteLog = pgTable(
   "character_connection_write_log",
   {
