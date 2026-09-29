@@ -14,13 +14,41 @@ passing bad data forward.
 
 `ops:rebuild-groups` and `ops:replay-groups` are repository commands that run
 on the maintainer's machine, so, exactly as
-[`docs/operations/removals.md:9-21`](removals.md) describes for `ops:removals`,
-they need a `DATABASE_URL` that resolves from outside Railway's network:
+[Connecting the maintainer shell](removals.md#connecting-the-maintainer-shell)
+describes for `ops:removals`, they need a `DATABASE_URL` that resolves from outside Railway's network:
 
 ```bash
 railway link
-export DATABASE_URL="$(railway variables list --service Postgres --environment test --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p')"
+pg_vars="$(railway variables list --service Postgres --environment test --kv)"
+pg_var() { printf '%s\n' "$pg_vars" | sed -n "s/^$1=//p"; }
+DATABASE_URL="$(pg_var DATABASE_PUBLIC_URL)"
+if [ -z "$DATABASE_URL" ]; then
+  DATABASE_URL="$(PGU="$(pg_var PGUSER)" PGP="$(pg_var PGPASSWORD)" PGD="$(pg_var PGDATABASE)" \
+    PH="$(pg_var RAILWAY_TCP_PROXY_DOMAIN)" PP="$(pg_var RAILWAY_TCP_PROXY_PORT)" node -e '
+      const e = process.env;
+      if (e.PGU && e.PGP && e.PGD && e.PH && e.PP)
+        process.stdout.write(`postgresql://${encodeURIComponent(e.PGU)}:${encodeURIComponent(e.PGP)}@${e.PH}:${e.PP}/${encodeURIComponent(e.PGD)}`);
+    ')"
+fi
+export DATABASE_URL
+unset pg_vars
 test -n "$DATABASE_URL" || echo "enable the Postgres TCP proxy for this environment first"
+node -e 'const u = new URL(process.env.DATABASE_URL); console.log(`${u.host}${u.pathname}`)'
+```
+
+Not every environment's Postgres service defines `DATABASE_PUBLIC_URL`
+(`test` does not), so the block falls back to building the same URL from
+`PGUSER`, `PGPASSWORD`, `PGDATABASE` and the TCP proxy's
+`RAILWAY_TCP_PROXY_DOMAIN` and `RAILWAY_TCP_PROXY_PORT`, URL-encoding the
+user, password and database. It never echoes the URL or the password: its
+last line prints only `host:port/database`.
+
+Railway's proxy hosts are shared across environments and differ only by
+port, so check both the host and the port against the intended environment
+before running anything:
+
+```bash
+railway variables list --service Postgres --environment test --kv | grep -E '^(RAILWAY_ENVIRONMENT_NAME|RAILWAY_TCP_PROXY_DOMAIN|RAILWAY_TCP_PROXY_PORT|PGDATABASE)='
 ```
 
 Run `unset DATABASE_URL` when the operation is finished, and never paste the
@@ -63,8 +91,8 @@ beside the first replay, so a later cycle length can be read against it.
    the `host:port/database` that `DATABASE_URL` points at, never the URL or
    its password, and refuses to run. Railway's proxy hosts are shared across
    environments and differ only by port, so check the port as well as the
-   host against test's `DATABASE_PUBLIC_URL`, then run it again with
-   `--confirm` and that exact target. This step
+   host against the `test` values that the connection check above prints,
+   then run it again with `--confirm` and that exact target. This step
    is load-bearing, not a convenience: the replay's ledger checks only cover
    the window starting at the newest `backfill`/`rebuild` ledger row. The
    migration's backfill runs at deploy, but an older worker can still finish

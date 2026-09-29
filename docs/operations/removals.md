@@ -14,8 +14,29 @@ Instead, enable the PostgreSQL service's TCP proxy once per environment and read
 
 ```bash
 railway link
-export DATABASE_URL="$(railway variables list --service Postgres --environment test --kv | sed -n 's/^DATABASE_PUBLIC_URL=//p')"
+pg_vars="$(railway variables list --service Postgres --environment test --kv)"
+pg_var() { printf '%s\n' "$pg_vars" | sed -n "s/^$1=//p"; }
+DATABASE_URL="$(pg_var DATABASE_PUBLIC_URL)"
+if [ -z "$DATABASE_URL" ]; then
+  DATABASE_URL="$(PGU="$(pg_var PGUSER)" PGP="$(pg_var PGPASSWORD)" PGD="$(pg_var PGDATABASE)" \
+    PH="$(pg_var RAILWAY_TCP_PROXY_DOMAIN)" PP="$(pg_var RAILWAY_TCP_PROXY_PORT)" node -e '
+      const e = process.env;
+      if (e.PGU && e.PGP && e.PGD && e.PH && e.PP)
+        process.stdout.write(`postgresql://${encodeURIComponent(e.PGU)}:${encodeURIComponent(e.PGP)}@${e.PH}:${e.PP}/${encodeURIComponent(e.PGD)}`);
+    ')"
+fi
+export DATABASE_URL
+unset pg_vars
 test -n "$DATABASE_URL" || echo "enable the Postgres TCP proxy for this environment first"
+node -e 'const u = new URL(process.env.DATABASE_URL); console.log(`${u.host}${u.pathname}`)'
+```
+
+Not every environment's Postgres service defines `DATABASE_PUBLIC_URL` (`test` does not), so the block falls back to building the same URL from `PGUSER`, `PGPASSWORD`, `PGDATABASE` and the TCP proxy's `RAILWAY_TCP_PROXY_DOMAIN` and `RAILWAY_TCP_PROXY_PORT`, URL-encoding the user, password and database. It never echoes the URL or the password: its last line prints only `host:port/database`.
+
+Railway's proxy hosts are shared across environments and differ only by port, so check both the host and the port against the intended environment before running anything:
+
+```bash
+railway variables list --service Postgres --environment test --kv | grep -E '^(RAILWAY_ENVIRONMENT_NAME|RAILWAY_TCP_PROXY_DOMAIN|RAILWAY_TCP_PROXY_PORT|PGDATABASE)='
 ```
 
 Run `unset DATABASE_URL` when the operation is finished, and never paste the value into a file, an issue, or the operations log.
