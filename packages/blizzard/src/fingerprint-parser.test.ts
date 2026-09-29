@@ -1,3 +1,10 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createBlizzardClient } from "./index";
@@ -140,5 +147,61 @@ describe("fingerprint parser pool", () => {
     await expect(drifted.getAchievementFingerprint(key)).rejects.toMatchObject({
       kind: "schema_drift"
     });
+  });
+});
+
+describe("fingerprint parser pool thread death", () => {
+  it("redoes a parse whose thread dies, and reports the death", async () => {
+    // Break caught: a dead thread resolving null reads as schema drift, and a
+    // handler that never resolves hangs the sweep.
+    const deaths: number[] = [];
+    const workers: Worker[] = [];
+    const pool = createFingerprintParserPool(1, {
+      onThreadDeath: ({ pendingParses }) => deaths.push(pendingParses),
+      createWorker: (source) => {
+        const worker = new Worker(source, { eval: true });
+        workers.push(worker);
+        return worker;
+      }
+    });
+    const large = {
+      achievements: Array.from({ length: 200_000 }, (_, id) => ({
+        id,
+        completed_timestamp: id + 1
+      }))
+    };
+    const expected = fingerprintFromBytes(encode(large));
+    const pending = pool.parse(encode(large));
+    await workers[0]!.terminate();
+    await expect(pending).resolves.toEqual(expected);
+    expect(deaths).toEqual([1]);
+    await pool.close();
+  });
+});
+
+describe("fingerprint parser pool shutdown", () => {
+  it("lets a process exit without close()", () => {
+    // Break caught: a message listener added after unref() re-refs the thread
+    // on Node 22, so a worker that swept once never finishes shutting down.
+    const script = `
+      import { createFingerprintParserPool } from ${JSON.stringify(new URL("./fingerprint-parser.ts", import.meta.url).href)};
+      const pool = createFingerprintParserPool(2);
+      const body = new TextEncoder().encode('{"achievements":[]}').buffer;
+      console.log((await pool.parse(body)).size);
+    `;
+    const scriptPath = join(mkdtempSync(join(tmpdir(), "parser-")), "exit.mjs");
+    writeFileSync(scriptPath, script);
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", scriptPath],
+      {
+        cwd: fileURLToPath(new URL("..", import.meta.url)),
+        encoding: "utf8",
+        timeout: 20_000
+      }
+    );
+    expect(result.error ?? result.stderr).toBeFalsy();
+    expect(result.stdout.trim()).toBe("0");
+    expect(result.status).toBe(0);
   });
 });

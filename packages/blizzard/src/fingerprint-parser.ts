@@ -87,6 +87,9 @@ parentPort.on("message", ({ id, body }) => {
 });
 `;
 
+const defaultWorker = (source: string): Worker =>
+  new Worker(source, { eval: true });
+
 type Pending = {
   body: ArrayBuffer;
   resolve: (value: AchievementFingerprint | null) => void;
@@ -103,26 +106,36 @@ type PoolThread = {
  * hands a body over and builds the small map from what comes back.
  *
  * A thread that dies leaves its parses to be redone on the calling thread, so
- * a broken pool costs speed and never a verdict. The threads are `unref`ed, so
- * they never hold the process open.
+ * a broken pool costs speed and never a verdict. The threads are `unref`ed, and the
+ * owner should still `close()` the pool at shutdown rather than rely on that.
  */
 export function createFingerprintParserPool(
-  size: number
+  size: number,
+  options: {
+    /**
+     * Called when a thread dies while the pool is open, with how many parses
+     * it was holding. Those parses are redone on the calling thread, so
+     * without this a pool that cannot run would look like a working one.
+     */
+    onThreadDeath?: (death: { pendingParses: number }) => void;
+    /** Starts a thread; replaced only by tests that need to kill one. */
+    createWorker?: (source: string) => Worker;
+  } = {}
 ): FingerprintParserPool {
   const threads: PoolThread[] = [];
   let nextId = 0;
   let closed = false;
 
   function spawn(): PoolThread {
-    const worker = new Worker(WORKER_SOURCE, { eval: true });
+    const worker = (options.createWorker ?? defaultWorker)(WORKER_SOURCE);
     const thread: PoolThread = { worker, pending: new Map(), dead: false };
-    worker.unref();
     worker.on(
       "message",
       (message: { id: number; pairs: Float64Array | null }) => {
         const pending = thread.pending.get(message.id);
         if (!pending) return;
         thread.pending.delete(message.id);
+        if (thread.pending.size === 0) worker.unref();
         const { pairs } = message;
         if (pairs === null) {
           pending.resolve(null);
@@ -136,7 +149,10 @@ export function createFingerprintParserPool(
       }
     );
     const fail = () => {
+      if (thread.dead) return;
       thread.dead = true;
+      if (!closed)
+        options.onThreadDeath?.({ pendingParses: thread.pending.size });
       for (const pending of thread.pending.values()) {
         pending.resolve(fingerprintFromBytes(pending.body));
       }
@@ -144,6 +160,10 @@ export function createFingerprintParserPool(
     };
     worker.on("error", fail);
     worker.on("exit", fail);
+    // Last, on purpose: on Node 22 adding a "message" listener refs the thread
+    // again, so an earlier unref would be silently undone. `parse` refs it
+    // for as long as it has a parse pending.
+    worker.unref();
     return thread;
   }
 
@@ -178,6 +198,9 @@ export function createFingerprintParserPool(
         // needs its own copy to redo the work; the copy is only kept until
         // the reply arrives. A 1.9 MB copy is a memcpy, not a parse.
         const retained = body.slice(0);
+        // Held open only while it owes a reply: a thread nobody is waiting on
+        // must not keep the process alive, and one somebody is waiting on must.
+        if (thread.pending.size === 0) thread.worker.ref();
         thread.pending.set(id, { body: retained, resolve });
         try {
           thread.worker.postMessage({ id, body }, [body]);
