@@ -541,16 +541,37 @@ route: `pageMembers`, labels and research state.
        `written_at` is later than its `recomputed_at` and less than 10 minutes
        old.
      - **Drift entirely from manual links is reported, not failed.** That is
-       drift where the stored group is coarser than the recomputed one only
-       across pairs that share no observed link. A removed manual row leaves
-       no trace, and this is how its effect is recognised.
+       drift where the stored group is coarser than the recomputed ones, and
+       no member of one recomputed part was ever observed by a member of the
+       other, in any published snapshot. A removed manual row leaves no
+       trace, and this is how its effect is recognised. A retraction also
+       deletes its row, so the current links cannot tell the two apart: the
+       immutable snapshots of complete runs can.
      - **Other drift that survives a full cursor cycle fails.**
+     - **Pending drift is bounded.** A group's pending clock runs from its
+       earliest ledger write that no completed cycle covers, and the manual
+       arm's from the earliest uncovered manual change, so a group written
+       every hour still goes stale. Past
+       `max(2 h, 1 h + 2 × (last_cycle_completed_at − last_cycle_started_at))`,
+       or 2 h with no cycle measured, pending drift fails as
+       `drift_stale_pending`. A pass completes at most two cycles, since it
+       stops at the first completed cycle that began during it, so a covering
+       cycle can take up to an hour to start and two cycle lengths to finish.
+     - **A stalled maintenance fails.** With no completed cycle, drift is
+       never judged. So the replay fails `maintenance_stale` when no cycle has
+       completed within the same bound, measured from the later of the window
+       start and the last completed cycle. Its output carries `windowStart`,
+       `publicationsChecked`, `lastCycleStartedAt` and
+       `lastCycleCompletedAt`, so a window a rebuild has just emptied shows.
 - **What it compares per page:** members, labels, excluded state, limitation
   codes and research state.
   - Excluded state follows Warcraft Logs identity aliases, as today's read
     does (#423, `groupBySharedWarcraftLogsId`): a row counts as excluded when
     any of its alias keys is named.
   - Self-exclusions are ignored, and counted separately.
+  - Research state is not compared on a borrowed or `provisional` page.
+    Today's read exposes only the borrowed snapshot's state there, not the
+    page's assembled state, so every such page would show a change.
 - **Reconciling writes against the ledger.** Every check reads from what is
   stored, never from an inference about what a run decided. Publications
   younger than 10 minutes are skipped, because their write may still be
@@ -1072,9 +1093,18 @@ The integration and end-to-end tests below cover each of them.
 
 ## Error handling
 
-- **Merge alert.** The worker logs `character_groups_merged`, with both sizes
-  and the source of the bridging link, and sends it to
-  `MAINTAINER_ALERT_WEBHOOK_URL` when set, in two cases:
+- **Merge alert, phase 1.** Phase 1 measures the alert's base rate before
+  anything relies on it. When a recompute joins two or more groups that each
+  had more than one member, the worker logs `character_groups_merged` with
+  `mergedGroups`, the number of recomputed groups that did, and `stage`:
+  `publication` from the handler's recompute, or `maintenance` from the
+  pass, which also carries `mergedGroups` on `character_groups_recompute`.
+  It is a count and nothing else. It logs only, with no webhook, and it
+  counts merges made through manual links as well as observed ones.
+- **Merge alert, from phase 2.** These parts are deferred to phase 2: telling
+  an observed-link merge from a manual one, both groups' sizes, the source of
+  the bridging link, and sending the alert to `MAINTAINER_ALERT_WEBHOOK_URL`
+  when set. The alert then fires in two cases:
   - a publication or maintenance recompute merges two groups each with more
     than one member through an observed link;
   - from phase 3, a merge rejoins a rejected character.
