@@ -57,11 +57,14 @@ beside the first replay, so a later cycle length can be read against it.
 1. Confirm the worker and web are both on the phase 1 commit
    (`railway deployment list -s worker -e test`), with no older worker still
    running.
-2. Run `corepack pnpm ops:rebuild-groups --confirm <host>` once, when test is
-   quiet, where `<host>` is the test database's host. Run without `--confirm`
-   first: the script names the host `DATABASE_URL` points at, never the URL or
-   its password, and refuses to run. Check that it is test's host, then run it
-   again with `--confirm` and that host. This step
+2. Run `corepack pnpm ops:rebuild-groups --confirm <host:port/database>`
+   once, when test is quiet, where the target is the test database's host,
+   port and database name. Run without `--confirm` first: the script names
+   the `host:port/database` that `DATABASE_URL` points at, never the URL or
+   its password, and refuses to run. Railway's proxy hosts are shared across
+   environments and differ only by port, so check the port as well as the
+   host against test's `DATABASE_PUBLIC_URL`, then run it again with
+   `--confirm` and that exact target. This step
    is load-bearing, not a convenience: the replay's ledger checks only cover
    the window starting at the newest `backfill`/`rebuild` ledger row. The
    migration's backfill runs at deploy, but an older worker can still finish
@@ -109,6 +112,13 @@ more. A continuation or seal amends its snapshot in place, keeping its id, so
 one that commits between the replay's audit read and its page reads can show
 a false `removed` that `page_moved` does not catch. A `removed` that survives
 the second run is real.
+
+Treat a lone `drift` the same way. `observedEver` counts every snapshot a
+root has ever had, so removing a manual link between a pair that was once
+observed can fail as `drift` until the next cycle recomputes the group. Wait
+until a maintenance cycle that started after the last manual removal has
+completed (`lastCycleStartedAt` is later than the removal), then run the
+replay again. A `drift` that survives that run is real.
 
 ## Triggering each risky path
 
