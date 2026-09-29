@@ -217,6 +217,16 @@ export type GroupGraph = Readonly<{
     targetId: string;
     excluded: boolean;
   }>[];
+  /**
+   * Manual targets with no `characters` row yet, so not in `characters` or
+   * `manual`. Today's read lists each as a pending manual character, so the
+   * group read must too. Suppressed targets are left out.
+   */
+  undiscoveredManualTargets: readonly Readonly<{
+    makerId: string;
+    targetKey: CharacterKey;
+    excluded: boolean;
+  }>[];
   discoveredExclusions: readonly Readonly<{
     makerId: string;
     targetId: string;

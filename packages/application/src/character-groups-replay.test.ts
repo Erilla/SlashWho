@@ -292,6 +292,14 @@ describe("ledger checks", () => {
     });
   });
 
+  it("counts manual connections made in the window as manual_added", () => {
+    const audit = baseAudit({
+      ledger: [backfill("o", "raiderio", minutesAgo(600))],
+      manualCreatedAt: [minutesAgo(700), minutesAgo(30), minutesAgo(10)]
+    });
+    expect(auditLedger(audit).coverage).toMatchObject({ manual_added: 2 });
+  });
+
   it("never prints a suppressed observer's key", () => {
     const audit = baseAudit({
       graph: graphOf({ names: ["hidden"], suppressed: new Set(["hidden"]) }),
@@ -405,6 +413,107 @@ describe("drift", () => {
       reports: [expect.objectContaining({ check: "drift_pending" })]
     });
     expect(auditDrift(merge(minutesAgo(45))).failures).toEqual([
+      expect.objectContaining({ check: "drift" })
+    ]);
+  });
+
+  it("reports a group's pending drift for under two hours after its write, and fails it after, with no cycle ever completed", () => {
+    const at = (writtenAt: Date) =>
+      groupDriftAudit({
+        writtenAt,
+        recomputedAt: minutesAgo(180),
+        maintenance: { lastCycleStartedAt: null, lastCycleCompletedAt: null }
+      });
+    expect(auditDrift(at(minutesAgo(119)))).toMatchObject({
+      failures: [],
+      reports: [expect.objectContaining({ check: "drift_pending" })]
+    });
+    expect(auditDrift(at(minutesAgo(121)))).toMatchObject({
+      failures: [expect.objectContaining({ check: "drift_stale_pending" })],
+      reports: []
+    });
+  });
+
+  it("bounds an ungrouped character's pending drift at two hours after its creation, under a stale cycle", () => {
+    const at = (createdAt: Date) =>
+      baseAudit({
+        graph: graphOf({ names: ["x"], groupOf: new Map() }),
+        ungroupedSince: new Map([["x", createdAt]]),
+        maintenance: {
+          lastCycleStartedAt: minutesAgo(180),
+          lastCycleCompletedAt: minutesAgo(179)
+        }
+      });
+    expect(auditDrift(at(minutesAgo(119)))).toMatchObject({
+      failures: [],
+      reports: [expect.objectContaining({ check: "drift_pending" })]
+    });
+    expect(auditDrift(at(minutesAgo(121))).failures).toEqual([
+      expect.objectContaining({ check: "drift_stale_pending" })
+    ]);
+  });
+
+  it("bounds pending drift from a manual change at two hours after the change", () => {
+    const at = (manualChangedAt: Date) =>
+      baseAudit({
+        graph: graphOf({
+          names: ["o", "t"],
+          links: [{ a: "o", b: "t", strength: "manual" }],
+          groupOf: new Map([
+            ["o", "g1"],
+            ["t", "g2"]
+          ])
+        }),
+        groups: new Map([
+          ["g1", { recomputedAt: minutesAgo(300), members: ["o"] }],
+          ["g2", { recomputedAt: minutesAgo(300), members: ["t"] }]
+        ]),
+        manualChangedAt
+      });
+    expect(auditDrift(at(minutesAgo(119)))).toMatchObject({
+      failures: [],
+      reports: [expect.objectContaining({ check: "drift_pending" })]
+    });
+    expect(auditDrift(at(minutesAgo(121))).failures).toEqual([
+      expect.objectContaining({ check: "drift_stale_pending" })
+    ]);
+  });
+
+  it("treats a write up to 5 s before its group's recompute as pending, and one 5 s before or earlier as settled", () => {
+    // `written_at` and `recomputed_at` are each their transaction's start, so
+    // a recompute that started just after a write began may not have seen it.
+    const recomputedAt = minutesAgo(60);
+    const at = (msBefore: number) =>
+      groupDriftAudit({
+        writtenAt: new Date(recomputedAt.getTime() - msBefore),
+        recomputedAt,
+        maintenance: { lastCycleStartedAt: null, lastCycleCompletedAt: null }
+      });
+    expect(auditDrift(at(4_999))).toMatchObject({
+      failures: [],
+      reports: [expect.objectContaining({ check: "drift_pending" })]
+    });
+    expect(auditDrift(at(5_000)).failures).toEqual([
+      expect.objectContaining({ check: "drift" })
+    ]);
+  });
+
+  it("only counts a cycle that started at least 5 s after the write as covering it", () => {
+    const writtenAt = minutesAgo(60);
+    const at = (msAfter: number) =>
+      groupDriftAudit({
+        writtenAt,
+        recomputedAt: minutesAgo(90),
+        maintenance: {
+          lastCycleStartedAt: new Date(writtenAt.getTime() + msAfter),
+          lastCycleCompletedAt: minutesAgo(30)
+        }
+      });
+    expect(auditDrift(at(4_999))).toMatchObject({
+      failures: [],
+      reports: [expect.objectContaining({ check: "drift_pending" })]
+    });
+    expect(auditDrift(at(5_000)).failures).toEqual([
       expect.objectContaining({ check: "drift" })
     ]);
   });
@@ -685,21 +794,63 @@ describe("page comparison", () => {
     ).toContainEqual({ check: "over_ceiling", detail: "eu/draenor/o" });
   });
 
-  it("reports a manual target with no character row yet, rather than failing it as removed", () => {
-    const graph = graphOf({ names: ["o"] });
+  it("fails an undiscovered manual target today's page shows and the group page drops", () => {
+    // Break caught: a manual target with no character row was reported as
+    // pending rather than failed, so the group read could drop it for good.
     const legacy = legacyPages([
       page("o", [row("o", "input"), row("undiscovered", "manually_added")])
     ]);
+    const kept = comparePages(
+      baseAudit({
+        graph: graphOf({
+          names: ["o"],
+          undiscoveredManualTargets: [
+            { makerId: "o", targetKey: key("undiscovered"), excluded: false }
+          ]
+        }),
+        roots: [key("o")]
+      }),
+      legacy,
+      CONFIG
+    );
+    expect(kept.failures).toEqual([]);
+    expect(kept.reports).toEqual([]);
+    expect(kept.counts).toMatchObject({ pages: 1, unchanged: 1 });
+    const dropped = comparePages(
+      baseAudit({ graph: graphOf({ names: ["o"] }), roots: [key("o")] }),
+      legacy,
+      CONFIG
+    );
+    expect(dropped.failures).toEqual([
+      {
+        check: "removed",
+        detail: "eu/draenor/undiscovered from eu/draenor/o"
+      }
+    ]);
+  });
+
+  it("explains an undiscovered manual target's exclusion by its manual row", () => {
+    const legacy = legacyPages([
+      page("o", [
+        row("o", "input"),
+        row("undiscovered", "manually_added", { excluded: true })
+      ])
+    ]);
     const result = comparePages(
-      baseAudit({ graph, roots: [key("o")] }),
+      baseAudit({
+        graph: graphOf({
+          names: ["o"],
+          undiscoveredManualTargets: [
+            { makerId: "o", targetKey: key("undiscovered"), excluded: true }
+          ]
+        }),
+        roots: [key("o")]
+      }),
       legacy,
       CONFIG
     );
     expect(result.failures).toEqual([]);
-    expect(result.reports).toContainEqual({
-      check: "manual_target_pending",
-      detail: "eu/draenor/undiscovered on eu/draenor/o"
-    });
+    expect(result.reports).toEqual([]);
   });
 
   it("skips a page whose characters published under 10 minutes ago", () => {
@@ -801,6 +952,7 @@ function graphOf(
     groupOf: overrides.groupOf ?? new Map(names.map((name) => [name, "g"])),
     links: overrides.links ?? [],
     manual: overrides.manual ?? [],
+    undiscoveredManualTargets: overrides.undiscoveredManualTargets ?? [],
     discoveredExclusions: overrides.discoveredExclusions ?? [],
     suppressed: overrides.suppressed ?? new Set(),
     warcraftLogsIds,
@@ -841,6 +993,7 @@ function baseAudit(
     publications: [],
     latestRawMembership: new Map(),
     manualChangedAt: null,
+    manualCreatedAt: [],
     roots: [],
     ungroupedSince: new Map(),
     ...overrides
@@ -923,6 +1076,40 @@ function pendingDriftAudit(options: {
           lastCycleStartedAt: minutesAgo(90),
           lastCycleCompletedAt: minutesAgo(89)
         }
+  });
+}
+
+/**
+ * Stored `{o}` and `{a}`, a link o–a, and one write by o: the drift is
+ * pending or not by the write's time against the recompute and the cycle.
+ */
+function groupDriftAudit(options: {
+  writtenAt: Date;
+  recomputedAt: Date;
+  maintenance: CharacterGroupsAudit["maintenance"];
+}): CharacterGroupsAudit {
+  return baseAudit({
+    graph: graphOf({
+      names: ["o", "a"],
+      links: [{ a: "o", b: "a", strength: "raiderio" }],
+      groupOf: new Map([
+        ["o", "g1"],
+        ["a", "g2"]
+      ])
+    }),
+    groups: new Map([
+      ["g1", { recomputedAt: options.recomputedAt, members: ["o"] }],
+      ["g2", { recomputedAt: options.recomputedAt, members: ["a"] }]
+    ]),
+    ledger: [
+      ledgerRow({
+        runId: "r1",
+        family: "raiderio",
+        runStartedAt: options.writtenAt,
+        writtenAt: options.writtenAt
+      })
+    ],
+    maintenance: options.maintenance
   });
 }
 

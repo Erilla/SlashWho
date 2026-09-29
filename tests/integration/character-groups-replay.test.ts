@@ -258,21 +258,42 @@ describe("character groups replay", () => {
     expect(report.counts).toMatchObject({ pages: 5, grew: 1, unchanged: 4 });
   });
 
-  it("3. never removes a manually connected character or its discoveries", async () => {
+  it("3. never removes a manually connected character, its discoveries, or an undiscovered manual target", async () => {
+    // Break caught: a manual target with no character row yet was dropped
+    // by the group read and only reported, so P1 never held for it.
     await publishRaiderIo("oscar", [member("alpha", "claimed")]);
     await publishRaiderIo("tango", [member("mike", "claimed")]);
     await repositories.manualConnections.add(key("oscar"), key("tango"));
+    await repositories.manualConnections.add(key("oscar"), key("uniform"));
     await completeCycle();
 
-    const { legacy, report } = await replay();
+    const { audit, legacy, report } = await replay();
     const today = legacy.get(canonicalCharacterId(key("oscar")))!;
     expect(today.selected.map((subject) => subject.key.name).sort()).toEqual([
       "alpha",
       "mike",
       "oscar",
-      "tango"
+      "tango",
+      "uniform"
     ]);
+    expect(audit.graph.undiscoveredManualTargets).toEqual([
+      {
+        makerId: await characterId("oscar"),
+        targetKey: key("uniform"),
+        excluded: false
+      }
+    ]);
+    // The group read shapes the target field for field as today's read does.
+    const uniform = (subjects: readonly { key: CharacterKey }[]) =>
+      subjects.find((subject) => subject.key.name === "uniform");
+    const next = resolveGroupSubjects(key("oscar"), audit.graph, CONFIG)!;
+    expect(uniform(next.selected)).toMatchObject({
+      source: "manually_added",
+      level: 0
+    });
+    expect(uniform(today.selected)).toMatchObject(uniform(next.selected)!);
     expect(report.failures).toEqual([]);
+    expect(report.coverage).toMatchObject({ manual_added: 2 });
   });
 
   it("4. keeps fingerprint links through a not_due refresh, which writes Raider.IO only", async () => {
@@ -461,11 +482,13 @@ describe("character groups replay", () => {
     await publishRaiderIo("hotel", [member("bravo", "claimed")]);
     await publishRaiderIo("tango", []);
     await repositories.manualConnections.add(key("oscar"), key("tango"));
+    // An undiscovered manual target, which has no character row to hide by.
+    await repositories.manualConnections.add(key("oscar"), key("victor"));
     await completeCycle();
-    for (const name of ["sierra", "hotel", "tango"]) {
+    for (const name of ["sierra", "hotel", "tango", "victor"]) {
       await repositories.suppressions.suppress(key(name), "test", null);
     }
-    const hidden = ["sierra", "hotel", "tango"];
+    const hidden = ["sierra", "hotel", "tango", "victor"];
 
     const first = await replay();
     expect(first.report.failures).toEqual([]);
@@ -474,6 +497,7 @@ describe("character groups replay", () => {
       "bravo",
       "oscar"
     ]);
+    expect(first.audit.graph.undiscoveredManualTargets).toEqual([]);
     for (const detail of details(first.report)) {
       for (const name of hidden) expect(detail).not.toContain(name);
     }

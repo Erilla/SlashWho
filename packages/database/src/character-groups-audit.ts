@@ -68,6 +68,8 @@ export type CharacterGroupsAudit = Readonly<{
   latestRawMembership: ReadonlyMap<string, readonly string[]>;
   /** The newest `manual_dossier_connections.created_at` or `excluded_at`. */
   manualChangedAt: Date | null;
+  /** Every `manual_dossier_connections.created_at`, for coverage. */
+  manualCreatedAt: readonly Date[];
   /** Every character in any latest snapshot, suppressed ones left out. */
   roots: readonly CharacterKey[];
   /**
@@ -220,9 +222,42 @@ async function load(
        AND target.realm_slug = manual.connected_realm_slug
        AND target.normalized_name = manual.connected_normalized_name`
   );
+  // A manual target with no character row yet, which today's read lists as
+  // a pending manual character. Suppressed targets are left out by key, as
+  // `manualConnections.list` leaves them out.
+  const undiscoveredRows = await client.query<{
+    maker: string;
+    region: CharacterKey["region"];
+    realm_slug: string;
+    normalized_name: string;
+    excluded: boolean;
+  }>(
+    `SELECT manual.root_character_id AS maker,
+            manual.connected_region AS region,
+            manual.connected_realm_slug AS realm_slug,
+            manual.connected_normalized_name AS normalized_name,
+            manual.excluded_at IS NOT NULL AS excluded
+     FROM manual_dossier_connections manual
+     WHERE NOT EXISTS (
+         SELECT 1 FROM characters target
+         WHERE target.region = manual.connected_region
+           AND target.realm_slug = manual.connected_realm_slug
+           AND target.normalized_name = manual.connected_normalized_name
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM suppressed_characters suppression
+         WHERE suppression.region = manual.connected_region
+           AND suppression.realm_slug = manual.connected_realm_slug
+           AND suppression.normalized_name = manual.connected_normalized_name
+           AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
+       )`
+  );
   const manualChanged = await client.query<{ changed_at: Date | null }>(
     `SELECT max(GREATEST(created_at, COALESCE(excluded_at, created_at))) AS changed_at
      FROM manual_dossier_connections`
+  );
+  const manualCreatedRows = await client.query<{ created_at: Date }>(
+    `SELECT created_at FROM manual_dossier_connections`
   );
 
   const exclusionRows = await client.query<{ maker: string; target: string }>(
@@ -378,6 +413,15 @@ async function load(
       targetId: row.target,
       excluded: row.excluded
     })),
+    undiscoveredManualTargets: undiscoveredRows.rows.map((row) => ({
+      makerId: row.maker,
+      targetKey: {
+        region: row.region,
+        realm: row.realm_slug,
+        name: row.normalized_name
+      },
+      excluded: row.excluded
+    })),
     discoveredExclusions: exclusionRows.rows.map((row) => ({
       makerId: row.maker,
       targetId: row.target
@@ -439,6 +483,7 @@ async function load(
     ],
     latestRawMembership,
     manualChangedAt: manualChanged.rows[0]?.changed_at ?? null,
+    manualCreatedAt: manualCreatedRows.rows.map((row) => row.created_at),
     roots: [...rootIds]
       .map((id) => characters.get(id)?.key)
       .filter((key): key is CharacterKey => key !== undefined)

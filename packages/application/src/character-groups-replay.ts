@@ -41,6 +41,22 @@ type Resolve = (
 /** A publication younger than this may still have its write pending. */
 const PENDING_MS = 10 * 60 * 1000;
 
+/**
+ * Drift may stay pending this long after what set it off: two hourly
+ * maintenance intervals, so a cycle has had a full hour to start after the
+ * trigger and another to complete. Past it, the backstop has missed.
+ */
+const PENDING_DRIFT_BOUND_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * `written_at`, `recomputed_at`, `cycle_started_at` and `created_at` are each
+ * their transaction's start, `now()`, not its commit. The writer waits up to
+ * its 5 s `lock_timeout` for a lock, so a write that started that close
+ * before a recompute or a cycle start can still commit after it, unseen:
+ * such a write is not taken as covered by it.
+ */
+const CLOCK_TOLERANCE_MS = 5 * 1000;
+
 /** The ledger rows that re-seed every observer: nothing before them is owed. */
 const BASELINE_REASONS: ReadonlySet<string> = new Set(["backfill", "rebuild"]);
 
@@ -211,7 +227,8 @@ export function auditLedger(audit: CharacterGroupsAudit): {
  * One count per ledger reason in the window, plus the sweep publications by
  * cycle: a run's first fingerprint row with a reservation is its first
  * cycle, every later one a continuation, and a continuation that matched
- * (or found the root unread) is the seal.
+ * (or found the root unread) is the seal. `manual_added` counts the manual
+ * connections made in the window.
  */
 function ledgerCoverage(
   audit: CharacterGroupsAudit,
@@ -247,6 +264,10 @@ function ledgerCoverage(
     add("sweep_continuation");
     if (row.reason === "matched" || row.reason === "unread") add("sweep_seal");
   }
+  // A manual add writes no ledger row, so it is counted from its own table.
+  for (const createdAt of audit.manualCreatedAt) {
+    if (createdAt.getTime() > start) add("manual_added");
+  }
   return coverage;
 }
 
@@ -258,7 +279,10 @@ function ledgerCoverage(
  *   maintenance cycle that started after that write has completed), while
  *   any ungrouped character in it is newer than the last such cycle, or
  *   while a manual link joins it across stored groups and a manual change
- *   is newer than the last such cycle;
+ *   is newer than the last such cycle. A write within 5 s before a
+ *   recompute or a cycle start is not covered by it;
+ * - failed as stale pending once what set a pending arm off is more than 2
+ *   hours old, a missing or stale maintenance cycle included;
  * - reported, when the stored group is coarser than the recomputed ones only
  *   across pairs with no observed link, which is how a removed manual row,
  *   which leaves no trace, shows;
@@ -305,7 +329,7 @@ export function auditDrift(audit: CharacterGroupsAudit): {
     return (
       lastCycleStartedAt !== null &&
       lastCycleCompletedAt !== null &&
-      lastCycleStartedAt.getTime() > at &&
+      at <= lastCycleStartedAt.getTime() - CLOCK_TOLERANCE_MS &&
       lastCycleCompletedAt.getTime() >= lastCycleStartedAt.getTime()
     );
   };
@@ -316,17 +340,22 @@ export function auditDrift(audit: CharacterGroupsAudit): {
       Math.max(newestWrite.get(row.observerId) ?? 0, row.writtenAt.getTime())
     );
   }
-  const pendingGroup = (groupId: string) => {
+  /** The write a stored group is pending on, or null when it is settled. */
+  const groupPendingSince = (groupId: string): number | null => {
     const group = audit.groups.get(groupId);
-    if (!group) return true;
+    // A member row with no group row cannot happen under one consistent
+    // read. Were it to, it has been pending for ever, and fails as stale.
+    if (!group) return 0;
     const written = Math.max(
       0,
       ...group.members.map((id) => newestWrite.get(id) ?? 0)
     );
-    return (
-      written > group.recomputedAt.getTime() && !cycleCoveredAfter(written)
-    );
+    return written > group.recomputedAt.getTime() - CLOCK_TOLERANCE_MS &&
+      !cycleCoveredAfter(written)
+      ? written
+      : null;
   };
+  const staleBefore = audit.now.getTime() - PENDING_DRIFT_BOUND_MS;
   const storedGroupOf = (id: string) => groupOf.get(id) ?? `ungrouped\0${id}`;
 
   for (const indices of clusters.values()) {
@@ -345,22 +374,34 @@ export function auditDrift(audit: CharacterGroupsAudit): {
         idSet.has(link.b) &&
         storedGroupOf(link.a) !== storedGroupOf(link.b)
     );
-    const pending =
-      groupIds.some(pendingGroup) ||
-      ungrouped.some(
-        (id) =>
-          !cycleCoveredAfter(
-            audit.ungroupedSince.get(id)?.getTime() ?? Number.POSITIVE_INFINITY
-          )
-      ) ||
-      (manualAcross &&
-        audit.manualChangedAt !== null &&
-        !cycleCoveredAfter(audit.manualChangedAt.getTime()));
-    if (pending) {
-      reports.push({
-        check: "drift_pending",
-        detail: `${ids.length} characters around ${around}`
-      });
+    // What set each pending arm off: a group's newest write, an ungrouped
+    // character's creation, or the manual change.
+    const triggers = [
+      ...groupIds.flatMap((id) => groupPendingSince(id) ?? []),
+      ...ungrouped.flatMap((id) => {
+        // Every ungrouped character has its creation loaded; a missing one
+        // counts as created long ago, so it can never wait unbounded.
+        const created = audit.ungroupedSince.get(id)?.getTime() ?? 0;
+        return cycleCoveredAfter(created) ? [] : [created];
+      }),
+      ...(manualAcross &&
+      audit.manualChangedAt !== null &&
+      !cycleCoveredAfter(audit.manualChangedAt.getTime())
+        ? [audit.manualChangedAt.getTime()]
+        : [])
+    ];
+    if (triggers.length > 0) {
+      if (triggers.some((at) => at < staleBefore)) {
+        failures.push({
+          check: "drift_stale_pending",
+          detail: `${ids.length} characters around ${around}, pending over 2 hours`
+        });
+      } else {
+        reports.push({
+          check: "drift_pending",
+          detail: `${ids.length} characters around ${around}`
+        });
+      }
       continue;
     }
 
@@ -434,8 +475,8 @@ function withRecomputedGroups(graph: GroupGraph): GroupGraph {
  *   the group explains, an exclusion today's page applies and the group
  *   page drops, a missing limitation code no shared exclusion explains, and
  *   a page over the ceiling.
- * - Reports growth, research state changes, shared exclusions, the
- *   limitations they remove, and manual targets not discovered yet.
+ * - Reports growth, research state changes, shared exclusions and the
+ *   limitations they remove.
  * - Skips a page any of whose characters published under 10 minutes ago.
  *
  * `resolve` is the phase 2 resolution; tests replace it.
@@ -470,8 +511,7 @@ export function comparePages(
     lost: 0,
     researchStateChanged: 0,
     sharedExclusions: 0,
-    selfExclusions: exclusionRows.filter(isSelfExclusion).length,
-    pendingManualTargets: 0
+    selfExclusions: exclusionRows.filter(isSelfExclusion).length
   };
   const bump = (name: string, by = 1) => {
     counts[name] = (counts[name] ?? 0) + by;
@@ -524,21 +564,12 @@ export function comparePages(
         (candidate) => canonicalCharacterId(candidate) === originCanonical
       );
 
-    // Members: every key today shows, the group page must show too.
+    // Members: every key today shows, the group page must show too, an
+    // undiscovered manual target included.
     const todayKeys = new Set<string>();
     for (const row of todayRows) {
       for (const candidate of keysOf(row.subject)) {
         const canonical = canonicalCharacterId(candidate);
-        if (!nextByKey.has(canonical) && graph.idOf(candidate) === undefined) {
-          // Only a manual target can lack a character row: it joins the
-          // group through the publication that creates the row.
-          bump("pendingManualTargets");
-          reports.push({
-            check: "manual_target_pending",
-            detail: `${describeKey(candidate)} on ${page}`
-          });
-          continue;
-        }
         todayKeys.add(canonical);
         if (!nextByKey.has(canonical)) {
           failures.push({
@@ -604,12 +635,20 @@ export function comparePages(
       const ids = new Set(
         keysOf(row.subject).flatMap((candidate) => graph.idOf(candidate) ?? [])
       );
-      const explained = exclusionRows.some(
-        (exclusion) =>
-          ids.has(exclusion.targetId) &&
-          graph.groupOf.get(exclusion.makerId) === originGroup &&
-          !isSelfExclusion(exclusion)
-      );
+      const canonicals = new Set(keysOf(row.subject).map(canonicalCharacterId));
+      const explained =
+        exclusionRows.some(
+          (exclusion) =>
+            ids.has(exclusion.targetId) &&
+            graph.groupOf.get(exclusion.makerId) === originGroup &&
+            !isSelfExclusion(exclusion)
+        ) ||
+        graph.undiscoveredManualTargets.some(
+          (target) =>
+            target.excluded &&
+            canonicals.has(canonicalCharacterId(target.targetKey)) &&
+            graph.groupOf.get(target.makerId) === originGroup
+        );
       if (!explained) {
         failures.push({
           check: "exclusion_unexplained",

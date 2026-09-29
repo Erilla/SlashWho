@@ -1,6 +1,7 @@
 import {
   canonicalCharacterId,
   pathStrengths,
+  toRaiderIoUrl,
   type CharacterKey,
   type GroupGraph,
   type LinkStrength
@@ -106,13 +107,37 @@ export function resolveGroupSubjects(
       excludedIds.add(row.targetId);
   }
   excludedIds.delete(originId);
+  // A page member's manual target with no character row yet, shaped as
+  // today's read shapes a pending manual character: its key's name, no class
+  // or guild, level 0 so it sorts last, and greyed when any maker on the
+  // page excluded it.
+  const undiscovered = new Map<string, RankedSubject>();
+  const undiscoveredExcluded = new Set<string>();
+  for (const row of graph.undiscoveredManualTargets) {
+    if (!members.has(row.makerId) || graph.idOf(row.targetKey) !== undefined)
+      continue;
+    const canonical = canonicalCharacterId(row.targetKey);
+    if (row.excluded) undiscoveredExcluded.add(canonical);
+    if (undiscovered.has(canonical)) continue;
+    undiscovered.set(canonical, {
+      key: row.targetKey,
+      displayName: row.targetKey.name,
+      className: null,
+      guild: null,
+      raiderIoUrl: toRaiderIoUrl(row.targetKey),
+      level: 0,
+      source: "manually_added"
+    });
+  }
   const originCanonical = canonicalCharacterId(originKey);
-  const ordered = [...members].map(subject).sort((left, right) => {
-    const rootOrder =
-      Number(canonicalCharacterId(right.key) === originCanonical) -
-      Number(canonicalCharacterId(left.key) === originCanonical);
-    return rootOrder || compareByLevelThenKey(left, right);
-  });
+  const ordered = [...[...members].map(subject), ...undiscovered.values()].sort(
+    (left, right) => {
+      const rootOrder =
+        Number(canonicalCharacterId(right.key) === originCanonical) -
+        Number(canonicalCharacterId(left.key) === originCanonical);
+      return rootOrder || compareByLevelThenKey(left, right);
+    }
+  );
   const recorded = [...members].flatMap((id) => {
     const wcl = graph.warcraftLogsIds.get(id);
     return wcl === undefined
@@ -125,10 +150,13 @@ export function resolveGroupSubjects(
       id
     ])
   );
-  const excludedSubject = (candidate: RankedSubject) =>
-    excludedIds.has(
-      idByCanonical.get(canonicalCharacterId(candidate.key)) ?? ""
+  const excludedSubject = (candidate: RankedSubject) => {
+    const canonical = canonicalCharacterId(candidate.key);
+    return (
+      excludedIds.has(idByCanonical.get(canonical) ?? "") ||
+      undiscoveredExcluded.has(canonical)
     );
+  };
   const identities = groupBySharedWarcraftLogsId(
     ordered,
     recorded,

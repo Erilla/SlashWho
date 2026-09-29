@@ -37,6 +37,7 @@ function graph(
       overrides.groupOf ?? new Map(overrides.names.map((name) => [name, "g"])),
     links: overrides.links,
     manual: overrides.manual ?? [],
+    undiscoveredManualTargets: overrides.undiscoveredManualTargets ?? [],
     discoveredExclusions: overrides.discoveredExclusions ?? [],
     suppressed: overrides.suppressed ?? new Set(),
     warcraftLogsIds: overrides.warcraftLogsIds ?? new Map(),
@@ -289,6 +290,51 @@ describe("resolveGroupSubjects", () => {
       subjects.excluded[0]?.warcraftLogsAliases?.map((alias) => alias.name)
     ).toEqual(["a"]);
     expect(subjects.selected.map((subject) => subject.key.name)).toEqual(["o"]);
+  });
+
+  it("admits a page member's undiscovered manual target as today's pending manual character, once, greyed when any maker excluded it", () => {
+    // Today's read lists a manual target with no character row as a pending
+    // manual character (P1). The group read only knew character ids, so it
+    // dropped the target from every page.
+    const g = graph({
+      names: ["o", "a", "x"],
+      links: [{ a: "o", b: "a", strength: "raiderio" }],
+      groupOf: new Map([
+        ["o", "g"],
+        ["a", "g"],
+        ["x", "h"]
+      ]),
+      undiscoveredManualTargets: [
+        { makerId: "a", targetKey: key("pending"), excluded: false },
+        { makerId: "o", targetKey: key("pending"), excluded: false },
+        { makerId: "o", targetKey: key("greyed"), excluded: true },
+        { makerId: "o", targetKey: key("dual"), excluded: false },
+        { makerId: "a", targetKey: key("dual"), excluded: true },
+        { makerId: "x", targetKey: key("elsewhere"), excluded: false }
+      ]
+    });
+    const subjects = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!;
+    const pendingSubject = (name: string) => ({
+      key: key(name),
+      displayName: name,
+      className: null,
+      guild: null,
+      raiderIoUrl: `https://raider.io/characters/eu/draenor/${name}`,
+      level: 0,
+      source: "manually_added"
+    });
+    expect(subjects.selected.map((subject) => subject.key.name)).toEqual([
+      "o",
+      "a",
+      "pending"
+    ]);
+    expect(subjects.selected[2]).toEqual(pendingSubject("pending"));
+    expect(subjects.excluded).toEqual([
+      pendingSubject("dual"),
+      pendingSubject("greyed")
+    ]);
   });
 
   it("keeps O selected as primary when it shares a Warcraft Logs id with an excluded alias", () => {
