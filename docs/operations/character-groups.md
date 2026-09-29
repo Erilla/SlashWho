@@ -33,19 +33,23 @@ value into a file, an issue, or the operations log.
    running.
 2. Run `corepack pnpm ops:rebuild-groups` once, when test is quiet. This step
    is load-bearing, not a convenience: the replay's ledger checks only cover
-   the window starting at the newest `backfill`/`rebuild` ledger row. Any
-   publication written by a worker running before the migration's backfill —
-   including one still finishing a cycle right after the deploy — sits before
-   that row and is invisible to checks (a) and (b) until a rebuild runs. Skip
-   this step and the first days of replays will silently under-check, not
-   fail loudly. The three-day window starts from this rebuild's `written_at`.
+   the window starting at the newest `backfill`/`rebuild` ledger row. The
+   migration's backfill runs at deploy, but an older worker can still finish
+   a run or a sweep cycle after it. That publication writes no ledger row and
+   no observations, so the replay reports it as a lost write under check (a),
+   and its new members fail check (b). The rebuild re-derives every observer
+   from its latest snapshot and moves the window start past those
+   publications. Skip this step and the first replays fail on writes the
+   phase 1 worker never saw. The three-day window starts from this rebuild's
+   `written_at`.
 3. Run `corepack pnpm ops:replay-groups`, and keep its JSON.
 
 ## Daily
 
 Run the replay, and search the worker logs for
-`character_groups_write_failed`. Read them with the per-deployment, paged
-`railway logs` form from the evidence-metrics notes:
+`character_groups_write_failed`. `railway logs` returns at most 5,000 lines
+per call, so read each worker deployment's logs by id and page through the
+day with `--since` and `--until`:
 
 ```bash
 railway logs <deployment-id> -s worker -e test --json -n 5000 --since <ISO> --until <ISO>
