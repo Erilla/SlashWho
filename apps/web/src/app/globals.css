@@ -2049,6 +2049,12 @@ td > .collection-progress {
   padding-right: 0.35rem;
 }
 
+/* An open roster is the thing being read, so the list stops clipping it. */
+.dossier-evidence-list:has(details[open] .dossier-roster) {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .dossier-evidence-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
