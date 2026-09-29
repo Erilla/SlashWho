@@ -618,6 +618,7 @@ describe("PostgreSQL repositories: discovery runs and snapshots", () => {
         {
           resumeAfter: JSON.stringify(["eu", "draenor", "valadares"]),
           limitationCode: "privacy_hidden",
+          excludedTournamentCharacterIds: ["eu/draenor/tournamentalt"],
           advanced: true
         }
       );
@@ -631,7 +632,9 @@ describe("PostgreSQL repositories: discovery runs and snapshots", () => {
       // continue this chain.
       runId: run.id,
       limitationCode: "privacy_hidden",
-      historicalGuilds: []
+      historicalGuilds: [],
+      // Continuations do no discovery, so the exclusion must survive here.
+      excludedTournamentCharacterIds: ["eu/draenor/tournamentalt"]
     });
   });
 

@@ -163,6 +163,7 @@ function createMemoryRepositories(): Repositories {
       runId: string;
       limitationCode: string | null;
       historicalGuilds: readonly CharacterGuild[];
+      excludedTournamentCharacterIds: readonly string[];
     }
   >();
   // Mirrors `fingerprint_sweep_states.continuation_failures`: incremented by a
@@ -669,7 +670,9 @@ function createMemoryRepositories(): Repositories {
       snapshotId,
       runId,
       limitationCode: cursor.limitationCode,
-      historicalGuilds: cursor.historicalGuilds ?? []
+      historicalGuilds: cursor.historicalGuilds ?? [],
+      excludedTournamentCharacterIds:
+        cursor.excludedTournamentCharacterIds ?? []
     });
   }
 
@@ -749,6 +752,8 @@ function handlerHarness(
     matching?: readonly CharacterKey[];
     /** The limitation `discoverCharacter` observes; null for a clean run. */
     raiderIoLimitation?: "privacy_hidden" | null;
+    /** A claimed profile Raider.IO flags as a tournament realm character. */
+    tournamentProfile?: CharacterKey;
     maxJobLifetimeMs?: number;
     now?: () => Date;
   } = {}
@@ -772,8 +777,20 @@ function handlerHarness(
       }
       return base.getCharacter(key, signal);
     },
-    getClaimedCharacters: (ownerId, signal) =>
-      base.getClaimedCharacters(ownerId, signal),
+    getClaimedCharacters: async (ownerId, signal) => {
+      const profile = await base.getClaimedCharacters(ownerId, signal);
+      return options.tournamentProfile
+        ? {
+            characters: [
+              ...profile.characters,
+              {
+                ...character(options.tournamentProfile),
+                isTournamentProfile: true
+              }
+            ]
+          }
+        : profile;
+    },
     resolveProfileGuess: (value, signal) =>
       base.resolveProfileGuess(value, signal)
   };
@@ -829,6 +846,7 @@ function handlerHarness(
   };
 
   const enqueuedFingerprintAdmissions: string[] = [];
+  const enqueuedEvidence: CharacterKey[] = [];
   // Runs after the id is recorded, so a test can make the follow-up throw.
   let enqueueFollowUp: ((id: string) => Promise<void>) | null = null;
   const created: CreateSnapshotInput[] = [];
@@ -881,6 +899,9 @@ function handlerHarness(
         logged.push(event);
       }
     },
+    enqueueFullEvidence: async (key: CharacterKey) => {
+      enqueuedEvidence.push(key);
+    },
     enqueueFingerprintAdmission: async (id: string) => {
       enqueuedFingerprintAdmissions.push(id);
       await enqueueFollowUp?.(id);
@@ -916,6 +937,7 @@ function handlerHarness(
         ?.outcome;
     },
     enqueuedFingerprintAdmissions,
+    enqueuedEvidence,
     requeuedContinuations,
     snapshots: { created, amended },
     handler: {
@@ -1319,6 +1341,7 @@ describe("discovery job handler", () => {
         resumeAfter: null,
         limitationCode: null,
         historicalGuilds: [],
+        excludedTournamentCharacterIds: [],
         advanced: true
       },
       expect.any(Object)
@@ -1376,6 +1399,7 @@ describe("discovery job handler", () => {
         resumeAfter: null,
         limitationCode: null,
         historicalGuilds: [],
+        excludedTournamentCharacterIds: [],
         advanced: false
       },
       expect.any(Object)
@@ -1611,6 +1635,43 @@ describe("discovery job handler", () => {
       secondKey
     ]);
     expect(snapshot).not.toHaveProperty("excludedTournamentCharacterIds");
+  });
+
+  it("queues no evidence for a tournament profile the first sweep cycle matches", async () => {
+    // Break caught: admission enqueued full evidence for every sweep match,
+    // including a tournament profile the snapshot had just excluded.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "tournament-evidence-reservation",
+      requestCap: 300
+    });
+    const gateway = new MutableGateway();
+    gateway.getClaimedCharacters = async () => ({
+      characters: [
+        character(secondKey),
+        { ...character(fingerprintKey), isTournamentProfile: true }
+      ]
+    });
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [character(fingerprintKey)];
+    blizzardGateway.fingerprints.set(keyId(rootKey), achievementFingerprint());
+    blizzardGateway.fingerprints.set(
+      keyId(fingerprintKey),
+      achievementFingerprint()
+    );
+    const enqueueFullEvidence = vi.fn(async () => {});
+
+    await handlerFor(repositories, gateway, {
+      blizzardGateway,
+      enqueueFullEvidence
+    }).execute(run.id, delivery());
+
+    expect(enqueueFullEvidence).not.toHaveBeenCalledWith(
+      fingerprintKey,
+      rootKey
+    );
   });
 
   it("spends no Raider.IO request per swept candidate", async () => {
@@ -2744,6 +2805,56 @@ describe("discovery job handler", () => {
     await expect(
       harness.repositories.fingerprintSweeps.getResumeState(harness.rootKey)
     ).resolves.toBeNull();
+  });
+
+  it("keeps a tournament profile out of a continuation cycle's amend, write and evidence", async () => {
+    // Break caught: only cycle 1 filtered the tournament exclusion, so a
+    // tournament profile the roster matched after the first request cap joined
+    // the snapshot, the group and the evidence queue through a continuation.
+    const tournament = {
+      region: "eu",
+      realm: "draenor",
+      name: "tournamentalt"
+    } as const;
+    const harness = handlerHarness({
+      roster: [...rosterOf(399), candidate(tournament)],
+      sweepRequestCap: 50,
+      matching: [tournament],
+      tournamentProfile: tournament
+    });
+    const connections = recordingConnections();
+    harness.repositories.characterConnections = connections.repository;
+
+    await harness.handler.execute(harness.runId);
+    for (
+      let cycle = 0;
+      harness.enqueuedFingerprintAdmissions.length > 0;
+      cycle += 1
+    ) {
+      if (cycle > 20) throw new Error("continuation did not terminate");
+      harness.enqueuedFingerprintAdmissions.length = 0;
+      await harness.handler.execute(
+        harness.runId,
+        undefined,
+        continuation(harness)
+      );
+    }
+
+    expect(harness.snapshots.amended.length).toBeGreaterThan(0);
+    expect(harness.snapshotCharacterKeys()).not.toContainEqual(tournament);
+    for (const amend of harness.snapshots.amended) {
+      expect(amend.characters.map((item) => item.key)).not.toContainEqual(
+        tournament
+      );
+    }
+    for (const write of connections.writes) {
+      for (const family of write.families) {
+        expect(family.observed.map((item) => item.key)).not.toContainEqual(
+          tournament
+        );
+      }
+    }
+    expect(harness.enqueuedEvidence).not.toContainEqual(tournament);
   });
 
   it("restores the Raider.IO limitation when the chain seals", async () => {

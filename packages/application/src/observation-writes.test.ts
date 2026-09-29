@@ -96,6 +96,7 @@ describe("observation writes", () => {
       runId: "run",
       rootKey,
       reservationId: "res",
+      excludedTournamentIds: new Set(),
       sweep: { kind: "capped", characters: [character(fpKey, "fingerprint")] }
     });
     expect(write.families.map((family) => family.family)).toEqual([
@@ -111,6 +112,7 @@ describe("observation writes", () => {
         runId: "run",
         rootKey,
         reservationId: "res",
+        excludedTournamentIds: new Set(),
         sweep: { kind: "capped", characters: [], skippedHistoricalGuilds: 1 }
       }).families[0]
     ).toMatchObject({ decision: "added_only", reason: "skipped_guild" });

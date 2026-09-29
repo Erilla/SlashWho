@@ -193,7 +193,6 @@ describe("database migrations", () => {
     expect(
       journal.entries.slice(-38).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
-      { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
       { idx: 34, tag: "0035_operator_auth" },
@@ -230,7 +229,8 @@ describe("database migrations", () => {
       { idx: 65, tag: "0066_raiderio_logged_kills" },
       { idx: 66, tag: "0067_raiderio_tier_reads" },
       { idx: 67, tag: "0068_raiderio_vantus_null" },
-      { idx: 68, tag: "0069_character_groups" }
+      { idx: 68, tag: "0069_character_groups" },
+      { idx: 69, tag: "0070_fingerprint_excluded_tournament_characters" }
     ]);
   });
 

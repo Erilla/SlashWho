@@ -893,6 +893,21 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   }
                   fingerprintFailure = sweep;
                 } else {
+                  // Cycle 1 learned which tournament profiles to leave out;
+                  // every later cycle inherits that from the stored cursor.
+                  const excludedTournamentCharacters = new Set(
+                    resume
+                      ? resume.excludedTournamentCharacterIds
+                      : outcome.state === "partial"
+                        ? outcome.excludedTournamentCharacterIds
+                        : []
+                  );
+                  const sweepCharacters = sweep.characters.filter(
+                    (character) =>
+                      !excludedTournamentCharacters.has(
+                        canonicalCharacterId(character.key)
+                      )
+                  );
                   const knownCharacterIds = new Set(
                     outcome.characters.map((character) =>
                       canonicalCharacterId(character.key)
@@ -909,7 +924,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     }
                   }
                   const newlyAdmittedFingerprintMatches = deduplicateCharacters(
-                    [...sweep.characters]
+                    sweepCharacters
                   ).filter(
                     (character) =>
                       !knownCharacterIds.has(
@@ -946,6 +961,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                         : null,
                     limitationCode: raiderIoLimitation,
                     historicalGuilds,
+                    excludedTournamentCharacterIds: [
+                      ...excludedTournamentCharacters
+                    ],
                     // Progress is a cursor that moved or a roster exhausted.
                     // A `capped` that swept nothing re-stores the cursor it
                     // was given, and must not reset the give-up counter.
@@ -967,7 +985,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     const amended =
                       await repositories.snapshots.amendAndFinishFingerprintSweep(
                         resume.snapshotId,
-                        [...sweep.characters],
+                        sweepCharacters,
                         {
                           runId,
                           reservationId: admission.reservationId,
@@ -1004,14 +1022,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       runId,
                       rootKey: run.rootKey,
                       sweep,
+                      excludedTournamentIds: excludedTournamentCharacters,
                       reservationId: admission.reservationId
                     });
                   } else {
-                    const excludedTournamentCharacters = new Set(
-                      outcome.state === "partial"
-                        ? outcome.excludedTournamentCharacterIds
-                        : []
-                    );
                     const characters = deduplicateCharacters([
                       ...outcome.characters,
                       ...sweep.characters

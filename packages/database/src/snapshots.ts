@@ -329,6 +329,8 @@ export function createSnapshotRepositories(
               resumeLimitationCode:
                 cursor.resumeAfter === null ? null : cursor.limitationCode,
               historicalGuilds: cursor.historicalGuilds,
+              excludedTournamentCharacterIds:
+                cursor.excludedTournamentCharacterIds,
               resumeSnapshotId:
                 cursor.resumeAfter === null ? null : snapshot.id,
               advanced: cursor.advanced
@@ -467,6 +469,8 @@ export function createSnapshotRepositories(
               resumeLimitationCode:
                 cursor.resumeAfter === null ? null : cursor.limitationCode,
               historicalGuilds: cursor.historicalGuilds,
+              excludedTournamentCharacterIds:
+                cursor.excludedTournamentCharacterIds,
               resumeSnapshotId: cursor.resumeAfter === null ? null : snapshotId,
               advanced: cursor.advanced
             }
