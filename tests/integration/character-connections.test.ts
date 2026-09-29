@@ -1134,6 +1134,59 @@ describe("character connections: observation writes", () => {
       });
     });
 
+    /**
+     * Holds the rebuild lock exclusively, as a rebuild does, and expects
+     * `operation` to give up on its 5 s `lock_timeout` well before the 15 s
+     * race below: without the timeout it would wait for the hold forever.
+     */
+    async function expectLockTimeoutBehindRebuild(
+      operation: () => Promise<unknown>
+    ): Promise<void> {
+      const hold = await pool.connect();
+      const WAITED = Symbol("waited");
+      let pending: Promise<unknown> | undefined;
+      try {
+        await hold.query("BEGIN");
+        await hold.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended('character-groups-rebuild', 0))"
+        );
+        pending = operation().then(
+          () => "resolved",
+          (error: unknown) => error
+        );
+        const settled = await Promise.race([
+          pending,
+          new Promise((resolve) => setTimeout(() => resolve(WAITED), 15_000))
+        ]);
+        expect(settled).not.toBe(WAITED);
+        expect(settled).toBeInstanceOf(Error);
+        expect((settled as Error).message).toMatch(/lock timeout/);
+      } finally {
+        await hold.query("ROLLBACK");
+        hold.release();
+        await pending;
+      }
+    }
+
+    it("gives up a post-write recompute on its lock timeout behind a rebuild", async () => {
+      // Break caught: `recomputeGroupsOf` without its `lock_timeout` waited
+      // behind a rebuild with no limit, holding the handler's job slot.
+      await publishedRun();
+      const rootId = await characterId(rootKey);
+      await expectLockTimeoutBehindRebuild(() =>
+        connections().recomputeGroupsOf([rootId])
+      );
+    });
+
+    it("gives up a maintenance pass on its lock timeout behind a rebuild", async () => {
+      // Break caught: `recomputePass` without its `lock_timeout` waited behind
+      // a rebuild with no limit, holding the hourly maintenance job.
+      await publishedRun();
+      await expectLockTimeoutBehindRebuild(() =>
+        connections().recomputePass({ budgetMs: 30_000 })
+      );
+    });
+
     it("takes the rebuild lock exclusively, blocking until a shared holder releases it", async () => {
       await publishedRun();
       const hold = await pool.connect();

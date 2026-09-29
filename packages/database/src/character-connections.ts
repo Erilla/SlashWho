@@ -40,6 +40,23 @@ export async function lockGroups(client: PoolClient): Promise<void> {
 
 const LOCK_TIMEOUT = "5s";
 
+/**
+ * One recompute transaction: the lock timeout, then the rebuild lock shared,
+ * then the groups lock. Every recompute goes through here, so none can wait
+ * behind a rebuild without limit, holding its job slot.
+ */
+function withGroupsTransaction<T>(
+  pool: Pool,
+  work: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  return withTransaction(pool, async (client) => {
+    await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+    await lockRebuildShared(client);
+    await lockGroups(client);
+    return work(client);
+  });
+}
+
 /** Every source discovery can attribute a link to. */
 const ALL_OBSERVATION_SOURCES = [
   "claimed",
@@ -263,12 +280,9 @@ export function createCharacterConnectionRepositories(
       const done = new Set<string>();
       for (const seed of seedIds) {
         if (done.has(seed)) continue;
-        const members = await withTransaction(pool, async (client) => {
-          await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
-          await lockRebuildShared(client);
-          await lockGroups(client);
-          return recomputeComponent(client, seed);
-        });
+        const members = await withGroupsTransaction(pool, (client) =>
+          recomputeComponent(client, seed)
+        );
         for (const id of members) done.add(id);
       }
     },
@@ -284,10 +298,7 @@ export function createCharacterConnectionRepositories(
        * transaction. Returns false once none remain.
        */
       const assignNextUngrouped = (): Promise<boolean> =>
-        withTransaction(pool, async (client) => {
-          await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
-          await lockRebuildShared(client);
-          await lockGroups(client);
+        withGroupsTransaction(pool, async (client) => {
           await client.query(
             `UPDATE character_groups_maintenance
              SET cycle_started_at = COALESCE(cycle_started_at, now())
@@ -316,10 +327,7 @@ export function createCharacterConnectionRepositories(
         // its expiry while the first handler still runs) clear or restart
         // the cycle in between: the completion then recorded a NULL start,
         // or stamped complete a fresh cycle that had recomputed nothing.
-        const step = await withTransaction(pool, async (client) => {
-          await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
-          await lockRebuildShared(client);
-          await lockGroups(client);
+        const step = await withGroupsTransaction(pool, async (client) => {
           const state = await client.query<{ cursor_group_id: string | null }>(
             `UPDATE character_groups_maintenance
              SET cycle_started_at = COALESCE(cycle_started_at, now())
