@@ -158,10 +158,7 @@ EVIDENCE_JOB_CREDENTIAL_ENCRYPTION_KEY=<64 hex characters, identical to the web 
 # a visitor's 3600 account gets 18.
 EVIDENCE_REQUEST_CAP=500
 # Per-cycle cap, not a per-guild limit: a sweep that reaches it resumes from a
-# stored cursor on a follow-up cycle until the roster is exhausted. Known
-# limitation: a continued cycle does not re-apply the first cycle's
-# tournament-profile exclusions, so a later cycle can re-introduce a tournament
-# character the first cycle filtered out.
+# stored cursor on a follow-up cycle until the roster is exhausted.
 BLIZZARD_SWEEP_REQUEST_CAP=300
 BLIZZARD_HOURLY_REQUEST_BUDGET=28800
 FINGERPRINT_MINIMUM_COMMON=200

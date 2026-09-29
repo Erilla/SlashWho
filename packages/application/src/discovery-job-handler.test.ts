@@ -1637,6 +1637,43 @@ describe("discovery job handler", () => {
     expect(snapshot).not.toHaveProperty("excludedTournamentCharacterIds");
   });
 
+  it("queues no evidence for a tournament profile the first sweep cycle matches", async () => {
+    // Break caught: admission enqueued full evidence for every sweep match,
+    // including a tournament profile the snapshot had just excluded.
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    repositories.fingerprintSweeps.requestAdmission = async () => ({
+      kind: "admitted",
+      reservationId: "tournament-evidence-reservation",
+      requestCap: 300
+    });
+    const gateway = new MutableGateway();
+    gateway.getClaimedCharacters = async () => ({
+      characters: [
+        character(secondKey),
+        { ...character(fingerprintKey), isTournamentProfile: true }
+      ]
+    });
+    const blizzardGateway = new MutableBlizzardGateway();
+    blizzardGateway.roster = [character(fingerprintKey)];
+    blizzardGateway.fingerprints.set(keyId(rootKey), achievementFingerprint());
+    blizzardGateway.fingerprints.set(
+      keyId(fingerprintKey),
+      achievementFingerprint()
+    );
+    const enqueueFullEvidence = vi.fn(async () => {});
+
+    await handlerFor(repositories, gateway, {
+      blizzardGateway,
+      enqueueFullEvidence
+    }).execute(run.id, delivery());
+
+    expect(enqueueFullEvidence).not.toHaveBeenCalledWith(
+      fingerprintKey,
+      rootKey
+    );
+  });
+
   it("spends no Raider.IO request per swept candidate", async () => {
     // Break caught: checking each candidate's upstream ownership cost one
     // unbudgeted Raider.IO request per roster member — hundreds per sweep,

@@ -72,7 +72,12 @@ export type DiscoveryOutcome =
       limitationCode: "privacy_hidden" | "request_cap" | "unsupported_member";
       /** Privacy-hidden ownership was observed even when another limitation won. */
       privacyHiddenObserved?: true;
-      /** Transient exclusions for subsequent discovery stages; never persist or expose. */
+      /**
+       * Transient exclusions for subsequent discovery stages. The only place
+       * they may be stored is the fingerprint sweep cursor, so continuation
+       * cycles can apply them; only `getResumeState` reads them back. Never
+       * log or return them.
+       */
       excludedTournamentCharacterIds?: readonly string[];
       characters: readonly DiscoveredCharacter[];
     } & GuildReadsDropped)
