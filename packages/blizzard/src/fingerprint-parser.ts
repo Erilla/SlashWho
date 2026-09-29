@@ -206,6 +206,8 @@ export function createFingerprintParserPool(
           thread.worker.postMessage({ id, body }, [body]);
         } catch {
           thread.pending.delete(id);
+          // Ref'd above for this parse; nothing else owes a reply.
+          if (thread.pending.size === 0) thread.worker.unref();
           resolve(fingerprintFromBytes(retained));
         }
       });
