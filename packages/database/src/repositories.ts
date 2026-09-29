@@ -1973,7 +1973,13 @@ export interface CharacterConnectionRepository {
     groupsRecomputed: number;
     /** Previously-ungrouped characters newly assigned a group this call. */
     ungroupedAssigned: number;
+    /** Whether any cycle completed during this call. */
     cycleCompleted: boolean;
+    /**
+     * Cycles completed during this call: at most two, a cycle already in
+     * progress when it began and then one that began during it.
+     */
+    cyclesCompleted: number;
   }>;
   rebuild(): Promise<{ observers: number; links: number; groups: number }>;
 }

@@ -1028,6 +1028,58 @@ describe("character connections: observation writes", () => {
       expect(partial.cycleCompleted).toBe(false);
     });
 
+    it("finishes an inherited cycle, then starts and completes its own before stopping", async () => {
+      // Break caught: a pass returned as soon as any cycle ended, even with
+      // budget left, so a cycle already in progress when the pass began left
+      // the next one to the next hourly pass, and a manual edit waited up to
+      // three hours to be covered.
+      await publishedRun();
+      await connections().recomputePass({ budgetMs: 30_000 });
+      const groups = await pool.query<{ id: string }>(
+        `SELECT id FROM character_groups ORDER BY id`
+      );
+      expect(groups.rows).toHaveLength(3);
+      // A cycle another pass began an hour ago, walked past the first group.
+      await pool.query(
+        `UPDATE character_groups_maintenance
+            SET cycle_started_at = now() - interval '1 hour', cursor_group_id = $1
+          WHERE id = 1`,
+        [groups.rows[0]!.id]
+      );
+      const passStartedAt = (
+        await pool.query<{ now: Date }>(`SELECT now() AS now`)
+      ).rows[0]!.now;
+
+      const pass = await connections().recomputePass({ budgetMs: 20_000 });
+
+      // Two groups finish the inherited cycle; all three make the pass's own.
+      expect(pass).toMatchObject({
+        cycleCompleted: true,
+        cyclesCompleted: 2,
+        groupsRecomputed: 5
+      });
+      const state = await pool.query<{
+        cycle_started_at: Date | null;
+        cursor_group_id: string | null;
+        last_cycle_started_at: Date;
+        uncovered: string;
+      }>(
+        `SELECT m.cycle_started_at, m.cursor_group_id, m.last_cycle_started_at,
+                (SELECT count(*) FROM character_groups g
+                  WHERE g.recomputed_at < m.last_cycle_started_at)::text AS uncovered
+           FROM character_groups_maintenance m WHERE m.id = 1`
+      );
+      expect(state.rows[0]).toMatchObject({
+        cycle_started_at: null,
+        cursor_group_id: null,
+        uncovered: "0"
+      });
+      // The recorded cycle is the pass's own, not the inherited one.
+      expect(
+        state.rows[0]!.last_cycle_started_at.getTime()
+      ).toBeGreaterThanOrEqual(passStartedAt.getTime());
+    });
+
     it("refuses a maintenance cursor outside a cycle", async () => {
       await expect(
         pool.query(

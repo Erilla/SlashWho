@@ -89,6 +89,7 @@ const allowlist = new Set([
   // Character groups recompute and write (#738).
   "groupsRecomputed",
   "cycleCompleted",
+  "cyclesCompleted",
   "ungroupedAssigned",
   "unknownCharacters",
   // `write` or `recompute`: which part of a character groups write failed.

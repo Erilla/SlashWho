@@ -292,23 +292,62 @@ export function createCharacterConnectionRepositories(
       const withinBudget = () => Date.now() - startedAt < budgetMs;
       let groupsRecomputed = 0;
       let ungroupedAssigned = 0;
+      let cyclesCompleted = 0;
+      // The start, as stored, of the cycle already in progress when this
+      // pass first looked: null when there was none, undefined until then.
+      let inheritedCycleStartedAt: string | null | undefined;
+      const noteInherited = (cycleStartedAt: string | null) => {
+        if (inheritedCycleStartedAt === undefined) {
+          inheritedCycleStartedAt = cycleStartedAt;
+        }
+      };
+      const result = () => ({
+        groupsRecomputed,
+        ungroupedAssigned,
+        cycleCompleted: cyclesCompleted > 0,
+        cyclesCompleted
+      });
+
+      /**
+       * Joins the running cycle, starting one when none is. Returns the
+       * cursor, and the joined cycle's start unless this transaction started
+       * it.
+       */
+      const joinCycle = async (client: PoolClient) => {
+        const state = await client.query<{
+          cursor_group_id: string | null;
+          cycle_started_at: string;
+          started_here: boolean;
+        }>(
+          `UPDATE character_groups_maintenance
+           SET cycle_started_at = COALESCE(cycle_started_at, now())
+           WHERE id = 1
+           RETURNING cursor_group_id, cycle_started_at::text AS cycle_started_at,
+                     cycle_started_at = now() AS started_here`
+        );
+        const row = state.rows[0];
+        return {
+          cursor: row?.cursor_group_id ?? null,
+          joinedCycleStartedAt: row?.started_here
+            ? null
+            : (row?.cycle_started_at ?? null)
+        };
+      };
 
       /**
        * Assigns one ungrouped character to a group, in its own short
        * transaction. Returns false once none remain.
        */
-      const assignNextUngrouped = (): Promise<boolean> =>
-        withGroupsTransaction(pool, async (client) => {
-          await client.query(
-            `UPDATE character_groups_maintenance
-             SET cycle_started_at = COALESCE(cycle_started_at, now())
-             WHERE id = 1`
-          );
+      const assignNextUngrouped = async (): Promise<boolean> => {
+        const assigned = await withGroupsTransaction(pool, async (client) => {
+          const { joinedCycleStartedAt } = await joinCycle(client);
           const ungrouped = await firstUngrouped(client);
-          if (ungrouped === null) return false;
-          await recomputeComponent(client, ungrouped);
-          return true;
+          if (ungrouped !== null) await recomputeComponent(client, ungrouped);
+          return { joinedCycleStartedAt, found: ungrouped !== null };
         });
+        noteInherited(assigned.joinedCycleStartedAt);
+        return assigned.found;
+      };
 
       // Ungrouped characters, handled once up front in their own short
       // transactions rather than re-scanned for on every group step below.
@@ -318,9 +357,7 @@ export function createCharacterConnectionRepositories(
       }
 
       for (;;) {
-        if (!withinBudget()) {
-          return { groupsRecomputed, ungroupedAssigned, cycleCompleted: false };
-        }
+        if (!withinBudget()) return result();
         // Every step, the cycle's end included, runs in one transaction
         // under one hold of the groups lock. Ending the cycle in later
         // transactions let an overlapping pass (pg-boss retries the job at
@@ -328,12 +365,7 @@ export function createCharacterConnectionRepositories(
         // the cycle in between: the completion then recorded a NULL start,
         // or stamped complete a fresh cycle that had recomputed nothing.
         const step = await withGroupsTransaction(pool, async (client) => {
-          const state = await client.query<{ cursor_group_id: string | null }>(
-            `UPDATE character_groups_maintenance
-             SET cycle_started_at = COALESCE(cycle_started_at, now())
-             WHERE id = 1 RETURNING cursor_group_id`
-          );
-          const cursor = state.rows[0]?.cursor_group_id ?? null;
+          const { cursor, joinedCycleStartedAt } = await joinCycle(client);
           const next = await client.query<{
             id: string;
             seed: string | null;
@@ -351,17 +383,22 @@ export function createCharacterConnectionRepositories(
             const ungrouped = await firstUngrouped(client);
             if (ungrouped !== null) {
               await recomputeComponent(client, ungrouped);
-              return { kind: "ungrouped_assigned" as const };
+              return {
+                kind: "ungrouped_assigned" as const,
+                joinedCycleStartedAt
+              };
             }
-            const completed = await client.query(
+            const completed = await client.query<{ started: string }>(
               `UPDATE character_groups_maintenance
                SET last_cycle_started_at = cycle_started_at, last_cycle_completed_at = now(),
                    cycle_started_at = NULL, cursor_group_id = NULL
-               WHERE id = 1 AND cycle_started_at IS NOT NULL`
+               WHERE id = 1 AND cycle_started_at IS NOT NULL
+               RETURNING last_cycle_started_at::text AS started`
             );
             return {
               kind: "cycle_ended" as const,
-              completed: completed.rowCount === 1
+              joinedCycleStartedAt,
+              completedCycleStartedAt: completed.rows[0]?.started ?? null
             };
           }
           if (!group.seed) {
@@ -374,24 +411,36 @@ export function createCharacterConnectionRepositories(
               `UPDATE character_groups_maintenance SET cursor_group_id = $1 WHERE id = 1`,
               [group.id]
             );
-            return { kind: "empty_group_deleted" as const };
+            return {
+              kind: "empty_group_deleted" as const,
+              joinedCycleStartedAt
+            };
           }
           await recomputeComponent(client, group.seed);
           await client.query(
             `UPDATE character_groups_maintenance SET cursor_group_id = $1 WHERE id = 1`,
             [group.id]
           );
-          return { kind: "group_recomputed" as const };
+          return { kind: "group_recomputed" as const, joinedCycleStartedAt };
         });
 
+        noteInherited(step.joinedCycleStartedAt);
         if (step.kind === "group_recomputed") groupsRecomputed += 1;
         if (step.kind === "ungrouped_assigned") ungroupedAssigned += 1;
         if (step.kind === "cycle_ended") {
-          return {
-            groupsRecomputed,
-            ungroupedAssigned,
-            cycleCompleted: step.completed
-          };
+          if (step.completedCycleStartedAt === null) return result();
+          cyclesCompleted += 1;
+          // A cycle that was already in progress when the pass began may
+          // have started before a recent edit, so the pass carries on into a
+          // new cycle while budget remains. Any other cycle began during this
+          // pass, whether this pass or an overlapping one started it, so it
+          // is already a full cover and there is no point walking again.
+          // Stopping only at a cycle this pass started itself let two
+          // overlapping passes each complete the other's cycle and start a
+          // new one, until both ran out of budget.
+          if (step.completedCycleStartedAt !== inheritedCycleStartedAt) {
+            return result();
+          }
         }
       }
     },

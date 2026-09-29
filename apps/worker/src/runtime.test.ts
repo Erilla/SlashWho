@@ -1863,7 +1863,8 @@ describe("worker runtime", () => {
     const recomputePass = vi.fn(async () => ({
       groupsRecomputed: 2,
       ungroupedAssigned: 1,
-      cycleCompleted: false
+      cycleCompleted: false,
+      cyclesCompleted: 0
     }));
     const { run, logged } = maintenanceHarness({
       characterConnections: { recomputePass },
@@ -1878,7 +1879,8 @@ describe("worker runtime", () => {
         event: "character_groups_recompute",
         groupsRecomputed: 2,
         ungroupedAssigned: 1,
-        cycleCompleted: false
+        cycleCompleted: false,
+        cyclesCompleted: 0
       })
     );
   });

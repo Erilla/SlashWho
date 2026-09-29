@@ -470,6 +470,7 @@ describe("worker logger", () => {
       groupsRecomputed: 3,
       ungroupedAssigned: 1,
       cycleCompleted: true,
+      cyclesCompleted: 2,
       durationMs: 12
     });
     logger.info({ event: "character_groups_write", unknownCharacters: 1 });
@@ -495,6 +496,7 @@ describe("worker logger", () => {
       groupsRecomputed: 3,
       ungroupedAssigned: 1,
       cycleCompleted: true,
+      cyclesCompleted: 2,
       durationMs: 12
     });
     expect(parsed[0]).not.toHaveProperty("droppedFields");

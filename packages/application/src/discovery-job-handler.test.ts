@@ -3171,7 +3171,8 @@ function recordingConnections() {
         return {
           groupsRecomputed: 0,
           ungroupedAssigned: 0,
-          cycleCompleted: true
+          cycleCompleted: true,
+          cyclesCompleted: 1
         };
       },
       async rebuild() {
