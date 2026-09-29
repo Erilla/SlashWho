@@ -71,6 +71,12 @@ Each `character_groups_write_failed` record carries a `stage`:
 A replay failure, a `stage: "write"` record, or an `a_completeness` finding
 means: fix the cause, rebuild, and restart the three days.
 
+Before treating a lone `removed` failure as a restart, run the replay once
+more. A continuation or seal amends its snapshot in place, keeping its id, so
+one that commits between the replay's audit read and its page reads can show
+a false `removed` that `page_moved` does not catch. A `removed` that survives
+the second run is real.
+
 ## Triggering each risky path
 
 Each path needs at least one publication in the window, and the replay's

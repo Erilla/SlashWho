@@ -312,9 +312,10 @@ family: `observer_character_id`, `family` (`raiderio` or `fingerprint`),
   completion discovers only the Raider.IO family, so it records and blocks only
   that family. It never blocks a chain's later cycles or its seal.
 - **Clocks.** `run_started_at` is the run's `discovery_runs.started_at`. Every
-  `observed_at` in the new tables is the database's `now()`, and every
-  `written_at` its `clock_timestamp()` at the ledger insert, never the
-  worker's clock.
+  `observed_at` in the new tables is the database's `now()`, never the
+  worker's clock. A writer's `written_at` is its `clock_timestamp()` at the
+  ledger insert; backfill and rebuild rows take the column default, their
+  transaction's start.
 
 **The ledger: `character_connection_write_log`.** Append-only: one row per
 publication per source family it wrote or decided. It is written in the same
@@ -330,7 +331,7 @@ write committed.
 | `decision`              | `added_only`, `replaced` or `blocked`.                                                                                                                                                                                                         |
 | `reason`                | Why, from the handler's own facts: `raiderio_complete`, `raiderio_limited`, `privacy_hidden`, `continuation`, `not_due`, `capped`, `matched`, `unread`, `skipped_guild`, `live_sweep_completion`, `blocked_by_newer`, `backfill` or `rebuild`. |
 | `run_started_at`        | The run's `discovery_runs.started_at`. The ledger's rows are ordered by this, then by `written_at`.                                                                                                                                            |
-| `written_at`            | The database's `clock_timestamp()` at the insert, after the writer's lock waits.                                                                                                                                                               |
+| `written_at`            | For a writer's row, the database's `clock_timestamp()` at the insert, after its lock waits. For a backfill or rebuild row, its transaction's start.                                                                                            |
 
 It holds run, reservation and character ids and enum values, nothing else.
 
