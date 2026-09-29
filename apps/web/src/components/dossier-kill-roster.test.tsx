@@ -69,6 +69,17 @@ it("summarises the raid in one line", () => {
   );
 });
 
+it("leaves Vantus runes out when Raider.IO gives no Vantus data, and never shows it as zero", () => {
+  // #747: a null count is no answer. "0 Vantus runes" would claim the raid
+  // used none.
+  expect(rosterSummary({ ...roster, vantusCount: null })).toBe(
+    "20 players · 2 tanks, 4 healers, 14 DPS · item level 290.3 (284.9–293.1) · pulled 17:17 UTC · 8:27 fight · 2 deaths"
+  );
+  expect(rosterSummary({ ...roster, vantusCount: 0 })).toMatch(
+    / · 0 Vantus runes$/
+  );
+});
+
 it("lists each raider with role, class colour, realm where it differs, and item level", () => {
   render(<DossierKillRoster guildRealm="Twisting Nether" roster={roster} />);
 

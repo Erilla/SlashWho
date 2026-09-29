@@ -185,7 +185,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-36).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-37).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 31, tag: "0032_report_provenance" },
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
@@ -222,7 +222,8 @@ describe("database migrations", () => {
       { idx: 63, tag: "0064_history_actor_requests" },
       { idx: 64, tag: "0065_guild_report_requests" },
       { idx: 65, tag: "0066_raiderio_logged_kills" },
-      { idx: 66, tag: "0067_raiderio_tier_reads" }
+      { idx: 66, tag: "0067_raiderio_tier_reads" },
+      { idx: 67, tag: "0068_raiderio_vantus_null" }
     ]);
   });
 
@@ -655,5 +656,71 @@ describe("database migrations", () => {
         )
       }
     ]);
+  });
+
+  it("forgets stored schema_drift refusals and admits a read with no Vantus data", async () => {
+    // #747: every schema_drift refusal stored before 0068 was a kill Raider.IO
+    // sent `log.vantus: null` for. Forgotten, each is read again next run
+    // rather than 30 days later; other refusals stand.
+    await pool.query("DROP SCHEMA public CASCADE");
+    await pool.query("CREATE SCHEMA public");
+    await pool.query("DROP SCHEMA drizzle CASCADE");
+
+    const migrationSource = new URL(
+      "../../packages/database/drizzle/",
+      import.meta.url
+    );
+    const folder = mkdtempSync(join(tmpdir(), "slashwho-migrations-"));
+    try {
+      mkdirSync(join(folder, "meta"));
+      for (const file of readdirSync(migrationSource).filter(
+        (name) => name.endsWith(".sql") && name.slice(0, 4) <= "0067"
+      )) {
+        copyFileSync(new URL(file, migrationSource), join(folder, file));
+      }
+      const journal = JSON.parse(
+        readFileSync(new URL("meta/_journal.json", migrationSource), "utf8")
+      ) as { entries: Array<{ tag: string }> };
+      journal.entries = journal.entries.filter(
+        ({ tag }) => tag.slice(0, 4) <= "0067"
+      );
+      writeFileSync(
+        join(folder, "meta", "_journal.json"),
+        JSON.stringify(journal)
+      );
+      process.env.SLASHWHO_MIGRATIONS_FOLDER = folder;
+      try {
+        await runMigrations(pool);
+      } finally {
+        delete process.env.SLASHWHO_MIGRATIONS_FOLDER;
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+
+    await pool.query(
+      `INSERT INTO raiderio_logged_encounters (logged_encounter_id, unavailable_code, read_at)
+       VALUES (1, 'schema_drift', now()), (2, 'not_found', now()), (3, 'private', now())`
+    );
+
+    await runMigrations(pool);
+
+    const kept = await pool.query<{ logged_encounter_id: string }>(
+      `SELECT logged_encounter_id FROM raiderio_logged_encounters
+        ORDER BY logged_encounter_id`
+    );
+    expect(kept.rows.map((row) => Number(row.logged_encounter_id))).toEqual([
+      2, 3
+    ]);
+    await expect(
+      pool.query(
+        `INSERT INTO raiderio_logged_encounters (
+           logged_encounter_id, raid_slug, boss_slug, pulled_at, defeated_at,
+           duration_ms, item_level_average, item_level_min, item_level_max,
+           death_count, vantus_count, roster_state, read_at
+         ) VALUES (4, 'tier-mn-1', 'midnight-falls', now(), now(), 1, 1, 1, 1,
+                   0, NULL, 'available', now())`
+      )
+    ).resolves.toBeDefined();
   });
 });

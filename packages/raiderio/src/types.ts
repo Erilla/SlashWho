@@ -138,7 +138,8 @@ export type LoggedEncounter = Readonly<{
   /** Null for a kill with no guild: a pug. */
   guild: Readonly<{ name: string; realm: string; region: string }> | null;
   deathCount: number;
-  vantusCount: number;
+  /** Null where Raider.IO gives no Vantus data for the boss; never zero runes. */
+  vantusCount: number | null;
   /**
    * `guildPrivacy.shareRaidUntil`: until when the guild shares its raids, or
    * null when Raider.IO names no end.

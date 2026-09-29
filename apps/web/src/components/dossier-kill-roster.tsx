@@ -55,7 +55,10 @@ export function rosterSummary(roster: AvailableRoster): string {
     `pulled ${new Date(roster.pulledAt).toISOString().slice(11, 16)} UTC`,
     `${fightLength(roster.durationMs)} fight`,
     counted(roster.deathCount, "death"),
-    counted(roster.vantusCount, "Vantus rune")
+    // Null is Raider.IO giving no Vantus data (#747): left out, never "0".
+    ...(roster.vantusCount === null
+      ? []
+      : [counted(roster.vantusCount, "Vantus rune")])
   ].join(" · ");
 }
 

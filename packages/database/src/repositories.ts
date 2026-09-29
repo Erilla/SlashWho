@@ -555,7 +555,8 @@ export interface RaiderIoLoggedEncounterInput {
   guild: { name: string; realm: string; region: string } | null;
   itemLevel: { average: number; min: number; max: number };
   deathCount: number;
-  vantusCount: number;
+  /** Null where Raider.IO gives no Vantus data for the boss; never zero runes. */
+  vantusCount: number | null;
   /**
    * Until when the guild shares its raids, as Raider.IO last said, or null
    * where it named no end. A visible roster is read again once it has passed.
