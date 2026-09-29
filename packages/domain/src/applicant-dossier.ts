@@ -50,6 +50,12 @@ export type DossierKillEvidence = Readonly<{
   reportUrl: string | null;
   /** Absent on evidence collected before Warcraft Logs exposed the owner. */
   uploader?: string | null;
+  /**
+   * The identity the fight was logged under, present only when it is not
+   * `character` (#721). An annotation: attribution and de-duplication never
+   * read it.
+   */
+  loggedAs?: CharacterKey;
   performance: DossierKillPerformance;
 }>;
 /**
@@ -63,6 +69,8 @@ export type DossierTierBestParse = Readonly<{
   bossName: string;
   character: CharacterKey;
   rankingsUrl: string;
+  /** The identity the rankings were read under, when not `character` (#721). */
+  loggedAs?: CharacterKey;
   performance: DossierKillPerformance;
 }>;
 export type DossierWipeEvidence = Readonly<{
@@ -209,6 +217,8 @@ export type ApplicantDossierParseMetric =
 export type ApplicantDossierCharacterParses = Readonly<{
   character: string;
   spec?: Readonly<{ name: string; iconUrl: string }> | null;
+  /** Present only when the row's leading parse was logged under a former name (#721). */
+  loggedAs?: CharacterKey;
   damage: ApplicantDossierParseMetric;
   healing: ApplicantDossierParseMetric;
   bossDamage: ApplicantDossierParseMetric;
@@ -493,25 +503,57 @@ function killRoster(
   };
 }
 
+type ParseCandidate = Readonly<{
+  metric: ApplicantDossierParseMetric;
+  loggedAs: CharacterKey | undefined;
+}>;
+
 function selectParseMetric(
-  metrics: readonly ApplicantDossierParseMetric[]
-): ApplicantDossierParseMetric {
-  const available = metrics
+  candidates: readonly ParseCandidate[]
+): ParseCandidate {
+  const available = candidates
     .filter(
       (
-        metric
-      ): metric is Extract<
-        ApplicantDossierParseMetric,
-        { state: "available" }
-      > => metric.state === "available"
+        candidate
+      ): candidate is ParseCandidate & {
+        metric: Extract<ApplicantDossierParseMetric, { state: "available" }>;
+      } => candidate.metric.state === "available"
     )
     .sort(
-      (a, b) => b.percentile - a.percentile || text(a.reportUrl, b.reportUrl)
+      (a, b) =>
+        b.metric.percentile - a.metric.percentile ||
+        text(a.metric.reportUrl, b.metric.reportUrl)
     );
   if (available.length > 0) return available[0]!;
-  return metrics.some((metric) => metric.state === "not_applicable")
-    ? { state: "not_applicable" }
-    : { state: "unavailable" };
+  return {
+    metric: candidates.some(({ metric }) => metric.state === "not_applicable")
+      ? { state: "not_applicable" }
+      : { state: "unavailable" },
+    loggedAs: undefined
+  };
+}
+
+/**
+ * The identity a row's numbers were logged under, when it is not the
+ * character's own. A row shows up to three numbers that may come from
+ * different fights, so it follows the highest displayed one: the parse the
+ * row leads with, and the one a reader looks at first.
+ */
+function rowLoggedAs(
+  selected: readonly ParseCandidate[]
+): CharacterKey | undefined {
+  let leading: ParseCandidate | undefined;
+  for (const candidate of selected) {
+    if (candidate.metric.state !== "available") continue;
+    if (
+      !leading ||
+      leading.metric.state !== "available" ||
+      candidate.metric.percentile > leading.metric.percentile
+    ) {
+      leading = candidate;
+    }
+  }
+  return leading?.loggedAs;
 }
 
 function parseCandidate(
@@ -566,13 +608,15 @@ function aggregateEventParses(
     );
     const candidates = (
       select: (performance: DossierKillPerformance) => DossierKillParseMetric
-    ): readonly ApplicantDossierParseMetric[] => [
-      ...characterKills.map((kill) =>
-        parseCandidate(kill, select(kill.performance))
-      ),
-      ...characterTierBests.map((tierBest) =>
-        tierBestCandidate(tierBest, select(tierBest.performance))
-      )
+    ): readonly ParseCandidate[] => [
+      ...characterKills.map((kill) => ({
+        metric: parseCandidate(kill, select(kill.performance)),
+        loggedAs: kill.loggedAs
+      })),
+      ...characterTierBests.map((tierBest) => ({
+        metric: tierBestCandidate(tierBest, select(tierBest.performance)),
+        loggedAs: tierBest.loggedAs
+      }))
     ];
     const spec =
       selectParseSpec(characterKills) ??
@@ -583,13 +627,18 @@ function aggregateEventParses(
             value != null
         ) ??
       null;
+    const damage = selectParseMetric(candidates((p) => p.damage));
+    const healing = selectParseMetric(candidates((p) => p.healing));
+    const bossDamage = selectParseMetric(candidates((p) => p.bossDamage));
+    const loggedAs = rowLoggedAs([damage, healing, bossDamage]);
     return [
       {
         character: character.displayName,
         ...(spec === null ? {} : { spec }),
-        damage: selectParseMetric(candidates((p) => p.damage)),
-        healing: selectParseMetric(candidates((p) => p.healing)),
-        bossDamage: selectParseMetric(candidates((p) => p.bossDamage))
+        ...(loggedAs ? { loggedAs } : {}),
+        damage: damage.metric,
+        healing: healing.metric,
+        bossDamage: bossDamage.metric
       }
     ];
   });

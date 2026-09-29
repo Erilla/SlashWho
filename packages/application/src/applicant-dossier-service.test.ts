@@ -4054,6 +4054,68 @@ describe("applicant dossier Warcraft Logs identity", () => {
     expect(JSON.stringify(result.dossier.limitations)).not.toContain("ryalts");
   });
 
+  it("marks a parse read under the alias's collection as logged under that name (#721)", async () => {
+    // Break caught: the queried identity was dropped as each kill was
+    // re-keyed to the subject, so a parse from the former name read as if the
+    // current one had logged it.
+    const { dossiers, repositories } = fixture();
+    withRecordedIds(repositories, [
+      { key: root, characterId: 40989140 },
+      { key: alt, characterId: 40989140 }
+    ]);
+    const reserve = repositories.evidence.reserve as ReturnType<typeof vi.fn>;
+    const reserveEach = reserve.getMockImplementation() as (
+      input: unknown
+    ) => Promise<{ completed: { kills: Record<string, unknown>[] } }>;
+    reserve.mockImplementation(async (input: { key: CharacterKey }) => {
+      const reservation = await reserveEach(input);
+      if (input.key.name !== alt.name) return reservation;
+      const [kill] = reservation.completed.kills;
+      return {
+        ...reservation,
+        completed: {
+          ...reservation.completed,
+          kills: [
+            {
+              ...kill,
+              id: "10000000-0000-4000-8000-000000000021",
+              fightUrl: "https://www.warcraftlogs.com/reports/former#fight=3",
+              performance: {
+                damage: { state: "available", percentile: 88 },
+                healing: { state: "unavailable" },
+                bossDamage: { state: "unavailable" }
+              }
+            }
+          ]
+        }
+      };
+    });
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    const boss = result.dossier.raids
+      .flatMap((raid) => raid.bosses)
+      .find((item) => item.state === "kill");
+    if (boss?.state !== "kill") throw new Error("expected_kill");
+    expect(boss.bestParses[0]).toMatchObject({
+      character: "Ryii",
+      loggedAs: alt,
+      damage: { state: "available", percentile: 88 }
+    });
+    // Annotation only: the row is still the one identity's.
+    expect(boss.bestParses).toHaveLength(1);
+  });
+
+  it("marks no parse as logged under another name for a lone identity", async () => {
+    const { dossiers } = fixture();
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+
+    expect(JSON.stringify(result.dossier.raids)).not.toContain("loggedAs");
+  });
+
   it("attributes a limitation on the alias's collection to the one identity, once", async () => {
     const { dossiers, repositories } = fixture({
       evidenceLimitationCode: "request_cap"

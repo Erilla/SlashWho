@@ -151,6 +151,12 @@ export const applicantDossierCharacterParsesSchema = z
       .strict()
       .nullable()
       .optional(),
+    /**
+     * The identity the row's leading parse was logged under, present only when
+     * that is not the character's current name. Optional, so older snapshots
+     * stay valid (#721).
+     */
+    loggedAs: characterKeySchema.optional(),
     damage: applicantDossierParseMetricSchema,
     healing: applicantDossierParseMetricSchema,
     bossDamage: applicantDossierParseMetricSchema

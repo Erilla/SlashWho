@@ -8,7 +8,10 @@ import {
   Fragment,
   type ReactNode,
   useContext,
-  useId
+  useEffect,
+  useId,
+  useRef,
+  useState
 } from "react";
 
 import { dossierPath } from "../lib/dossier-path";
@@ -78,6 +81,81 @@ function characterKey(reference: CharacterReference): CharacterKey {
   return "displayName" in reference ? reference.key : reference;
 }
 
+function identityLabel(identity: CharacterKey): string {
+  return `${formatCharacterDisplayName(identity.name)}-${formatCharacterDisplayName(identity.realm)}`;
+}
+
+/**
+ * An icon after a name that carries what the name cannot: a hover tooltip on
+ * the name competed with its link and did not exist on touch. The icon opens
+ * on hover, keyboard focus and tap (a tap toggles it, because Safari does not
+ * focus a button it is tapped), and Escape or a tap elsewhere closes it.
+ */
+function IdentityHint({
+  label,
+  text
+}: Readonly<{ label: string; text: string }>) {
+  const tooltipId = useId();
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: Event) => {
+      if (
+        event.type === "keydown" &&
+        (event as KeyboardEvent).key !== "Escape"
+      ) {
+        return;
+      }
+      if (
+        event.type === "pointerdown" &&
+        rootRef.current?.contains(event.target as Node)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+
+  return (
+    <span className="dossier-identity-hint" ref={rootRef}>
+      <button
+        aria-describedby={tooltipId}
+        aria-expanded={open}
+        aria-label={label}
+        className="dossier-identity-hint-trigger"
+        onClick={() => setOpen((value) => !value)}
+        type="button"
+      >
+        <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
+          <path
+            d="M2.5 8a5.5 5.5 0 1 0 1.7-4M2.5 2.5v2.8h2.8M8 5v3.2l2 1.3"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.5"
+          />
+        </svg>
+      </button>
+      <span
+        className="dossier-identity-hint-tooltip"
+        data-open={open}
+        id={tooltipId}
+        role="tooltip"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
 export function DossierCharacterProvider({
   characters,
   current = null,
@@ -115,7 +193,6 @@ export function DossierCharacterName({
   const resolved = resolveCharacter(character, characters);
   const key = characterKey(character);
   const href = current && sameCharacter(key, current) ? null : dossierPath(key);
-  const tooltipId = useId();
   // A reviewer can declare a name Warcraft Logs has also verified, so the
   // two lists overlap; the tooltip names each former identity once.
   const historicAliases = showGuild
@@ -139,47 +216,27 @@ export function DossierCharacterName({
 
   return (
     <>
-      <span
-        className={
-          historicAliases.length ? "dossier-character-alias-anchor" : undefined
-        }
-      >
-        {href ? (
-          <Link
-            aria-describedby={historicAliases.length ? tooltipId : undefined}
-            className={className}
-            href={href}
-            // A dossier can name dozens of characters, and each would otherwise
-            // prefetch its own dossier route as it scrolls into view.
-            prefetch={false}
-          >
-            {formatCharacterDisplayName(resolved.displayName)}
-          </Link>
-        ) : (
-          <span
-            aria-describedby={historicAliases.length ? tooltipId : undefined}
-            className={className}
-            tabIndex={historicAliases.length ? 0 : undefined}
-          >
-            {formatCharacterDisplayName(resolved.displayName)}
-          </span>
-        )}
-        {historicAliases.length ? (
-          <span
-            className="dossier-character-alias-tooltip"
-            id={tooltipId}
-            role="tooltip"
-          >
-            Also known as:{" "}
-            {historicAliases
-              .map(
-                (alias) =>
-                  `${formatCharacterDisplayName(alias.name)}-${formatCharacterDisplayName(alias.realm)}`
-              )
-              .join(", ")}
-          </span>
-        ) : null}
-      </span>
+      {href ? (
+        <Link
+          className={className}
+          href={href}
+          // A dossier can name dozens of characters, and each would otherwise
+          // prefetch its own dossier route as it scrolls into view.
+          prefetch={false}
+        >
+          {formatCharacterDisplayName(resolved.displayName)}
+        </Link>
+      ) : (
+        <span className={className}>
+          {formatCharacterDisplayName(resolved.displayName)}
+        </span>
+      )}
+      {historicAliases.length ? (
+        <IdentityHint
+          label="Also known as"
+          text={`Also known as: ${historicAliases.map(identityLabel).join(", ")}`}
+        />
+      ) : null}
       {showGuild && resolved.guild ? (
         <span className="dossier-character-guild">
           {`<${resolved.guild.name}>`}
@@ -190,8 +247,13 @@ export function DossierCharacterName({
 }
 
 export function DossierCharacterNameByName({
-  name
-}: Readonly<{ name: string }>) {
+  name,
+  loggedAs
+}: Readonly<{
+  name: string;
+  /** Set when the row's parse was logged under a name other than this one. */
+  loggedAs?: CharacterKey | undefined;
+}>) {
   const characters = useContext(DossierCharactersContext);
   const normalizedName = name.trim().toLowerCase();
   const matches = characters.filter(
@@ -201,7 +263,7 @@ export function DossierCharacterNameByName({
   );
   const character = matches.length === 1 ? matches[0] : null;
 
-  return character ? (
+  const label = character ? (
     <DossierCharacterName
       character={character}
       className="dossier-parse-character"
@@ -210,6 +272,19 @@ export function DossierCharacterNameByName({
     <span className="dossier-character-name dossier-parse-character">
       {formatCharacterDisplayName(name)}
     </span>
+  );
+
+  // One grid cell in the parse list, so the icon stays with its name.
+  return loggedAs ? (
+    <span className="dossier-parse-identity">
+      {label}
+      <IdentityHint
+        label="Logged under a former name"
+        text={`Logged as ${identityLabel(loggedAs)}`}
+      />
+    </span>
+  ) : (
+    label
   );
 }
 
