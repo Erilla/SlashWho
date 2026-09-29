@@ -100,6 +100,12 @@ export interface FingerprintSweepCursor {
    */
   historicalGuilds?: readonly CharacterGuild[];
   /**
+   * Canonical ids of the tournament profiles cycle 1 excluded. Continuation
+   * cycles do no discovery of their own, so they read the exclusion from here
+   * and apply it to whatever the sweep matches.
+   */
+  excludedTournamentCharacterIds?: readonly string[];
+  /**
    * True when this cycle moved the sweep forward -- it swept at least one new
    * candidate, or it exhausted the roster. False only for a cycle that swept
    * nothing new (the budget ran out before the first candidate), which is what
@@ -1508,6 +1514,7 @@ export interface FingerprintSweepRepository {
   getResumeState(key: CharacterKey): Promise<{
     resumeAfter: string;
     historicalGuilds: readonly CharacterGuild[];
+    excludedTournamentCharacterIds: readonly string[];
     snapshotId: string;
     /**
      * The run that published `snapshotId`, and so the only run allowed to

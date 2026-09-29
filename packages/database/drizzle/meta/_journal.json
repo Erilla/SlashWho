@@ -484,6 +484,13 @@
       "when": 1792011600020,
       "tag": "0069_character_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1792011600021,
+      "tag": "0070_fingerprint_excluded_tournament_characters",
+      "breakpoints": true
     }
   ]
 }

@@ -133,8 +133,13 @@ export function continuationCycleWrite(input: {
   runId: string;
   rootKey: CharacterKey;
   sweep: SweepForWrite;
+  excludedTournamentIds: ReadonlySet<string>;
   reservationId: string;
 }): ObservationWriteInput {
+  const matches = input.sweep.characters.filter(
+    (character) =>
+      !input.excludedTournamentIds.has(canonicalCharacterId(character.key))
+  );
   return {
     runId: input.runId,
     observerKey: input.rootKey,
@@ -142,7 +147,7 @@ export function continuationCycleWrite(input: {
       fingerprintFamily(
         input.rootKey,
         input.sweep,
-        input.sweep.characters,
+        matches,
         input.reservationId
       )
     ]
