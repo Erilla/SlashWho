@@ -47,10 +47,6 @@ export interface FingerprintParserPool extends FingerprintParser {
   close(): Promise<void>;
 }
 
-export const inlineFingerprintParser: FingerprintParser = {
-  parse: (body) => Promise.resolve(fingerprintFromBytes(body))
-};
-
 /**
  * The thread's whole program, as source rather than a file. A file would have
  * to survive the web bundler, the worker's `tsx` runtime and the test runner
@@ -58,7 +54,7 @@ export const inlineFingerprintParser: FingerprintParser = {
  * `fingerprintFromResponse` and is tested against it. The reply is a flat
  * `[id, timestamp, id, timestamp, ...]` array handed back without a copy, so
  * the 1.9 MB object graph never crosses the thread boundary. `null` is a body
- * that is not the expected shape; `error` is a thread that could not run.
+ * that is not the expected shape.
  */
 const WORKER_SOURCE = `
 const { parentPort } = require("node:worker_threads");
