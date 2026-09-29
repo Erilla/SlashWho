@@ -3,6 +3,7 @@ import type {
   CharacterGroupsAudit,
   CharacterGroupsLedgerRow,
   CharacterGroupsObservation,
+  CharacterGroupsPublication,
   StoredSnapshot
 } from "@slashwho/database";
 import {
@@ -56,7 +57,8 @@ describe("ledger checks", () => {
           reservationId: "res1",
           runId: "r1",
           observerId: "o",
-          at: minutesAgo(60)
+          at: minutesAgo(60),
+          limitationCode: null
         }
       ]
     });
@@ -74,7 +76,8 @@ describe("ledger checks", () => {
           reservationId: "res2",
           runId: "r1",
           observerId: "o",
-          at: minutesAgo(60)
+          at: minutesAgo(60),
+          limitationCode: null
         }
       ]
     });
@@ -83,6 +86,31 @@ describe("ledger checks", () => {
         check: "a_completeness",
         detail: expect.stringContaining("res2")
       })
+    ]);
+  });
+
+  it("(a) names a lost continuation even when its run's first cycle wrote both families", () => {
+    // Break caught: matching a reservation by its run and any fingerprint
+    // row let a lost continuation hide behind cycle 1's fingerprint row.
+    const audit = baseAudit({
+      graph: graphOf({ names: ["o"] }),
+      ledger: [
+        backfill("o", "raiderio", minutesAgo(600)),
+        ledgerRow({ runId: "r1", family: "raiderio" }),
+        ledgerRow({
+          runId: "r1",
+          family: "fingerprint",
+          sweepReservationId: "res1"
+        })
+      ],
+      publications: [
+        { kind: "run", runId: "r1", observerId: "o", at: minutesAgo(60) },
+        reservation("res1", "r1", minutesAgo(60)),
+        reservation("res2", "r1", minutesAgo(40))
+      ]
+    });
+    expect(auditLedger(audit).failures).toEqual([
+      { check: "a_completeness", detail: "reservation res2 for eu/draenor/o" }
     ]);
   });
 
@@ -254,8 +282,163 @@ describe("ledger checks", () => {
     });
   });
 
+  it("counts a not_due refresh: a Raider.IO-only row from an observer swept before", () => {
+    const audit = baseAudit({
+      ledger: [
+        backfill("o", "raiderio", minutesAgo(600)),
+        // Before o was ever swept: a plain Raider.IO-only run.
+        ledgerRow({
+          runId: "r0",
+          family: "raiderio",
+          reason: "raiderio_complete",
+          writtenAt: minutesAgo(400)
+        }),
+        // o's first sweep cycle, both families under one run.
+        ledgerRow({
+          runId: "r1",
+          family: "raiderio",
+          reason: "raiderio_complete",
+          writtenAt: minutesAgo(300)
+        }),
+        ledgerRow({
+          runId: "r1",
+          family: "fingerprint",
+          reason: "matched",
+          sweepReservationId: "res1",
+          writtenAt: minutesAgo(300)
+        }),
+        // The not_due refreshes, each reason once.
+        ...["raiderio_complete", "raiderio_limited", "privacy_hidden"].map(
+          (reason, index) =>
+            ledgerRow({
+              runId: `r${2 + index}`,
+              family: "raiderio",
+              reason,
+              writtenAt: minutesAgo(200 - index)
+            })
+        ),
+        // A live-sweep completion is not one.
+        ledgerRow({
+          runId: "r5",
+          family: "raiderio",
+          reason: "live_sweep_completion",
+          writtenAt: minutesAgo(100)
+        }),
+        // Nor is another observer's Raider.IO-only run, never swept.
+        ledgerRow({
+          runId: "r6",
+          observerId: "p",
+          family: "raiderio",
+          reason: "raiderio_complete",
+          writtenAt: minutesAgo(90)
+        }),
+        // Nor is a later sweep's first cycle, though o was swept before it.
+        ledgerRow({
+          runId: "r7",
+          family: "raiderio",
+          reason: "raiderio_complete",
+          writtenAt: minutesAgo(50)
+        }),
+        ledgerRow({
+          runId: "r7",
+          family: "fingerprint",
+          reason: "matched",
+          sweepReservationId: "res7",
+          writtenAt: minutesAgo(50)
+        })
+      ]
+    });
+    expect(auditLedger(audit).coverage).toMatchObject({ not_due_refresh: 3 });
+  });
+
+  it("takes an observer's baseline fingerprint row as a sweep before a not_due refresh", () => {
+    const audit = baseAudit({
+      ledger: [
+        backfill("o", "fingerprint", minutesAgo(600)),
+        backfill("o", "raiderio", minutesAgo(600)),
+        ledgerRow({
+          runId: "r1",
+          family: "raiderio",
+          reason: "raiderio_complete",
+          writtenAt: minutesAgo(100)
+        })
+      ]
+    });
+    expect(auditLedger(audit).coverage).toMatchObject({ not_due_refresh: 1 });
+  });
+
+  it("counts a seal by its reservation, whatever the ledger reason says", () => {
+    // Break caught: a seal whose chain skipped a guild is logged
+    // `skipped_guild`, and a blocked one `blocked_by_newer`, so counting by
+    // reason missed both; and a capped cycle can carry `skipped_guild` too.
+    const chain = (
+      runId: string,
+      last: { reason: string; decision?: string; limitationCode: string | null }
+    ) => ({
+      ledger: [
+        ledgerRow({
+          runId,
+          family: "fingerprint",
+          reason: "capped",
+          sweepReservationId: `${runId}-1`,
+          writtenAt: minutesAgo(50)
+        }),
+        ledgerRow({
+          runId,
+          family: "fingerprint",
+          reason: last.reason,
+          decision: last.decision ?? "added_only",
+          sweepReservationId: `${runId}-2`,
+          writtenAt: minutesAgo(40)
+        })
+      ],
+      publications: [
+        reservation(`${runId}-1`, runId, minutesAgo(50)),
+        reservation(`${runId}-2`, runId, minutesAgo(40), last.limitationCode)
+      ]
+    });
+    const coverageOf = (...chains: ReturnType<typeof chain>[]) =>
+      auditLedger(
+        baseAudit({
+          ledger: [
+            backfill("o", "fingerprint", minutesAgo(600)),
+            ...chains.flatMap((c) => c.ledger)
+          ],
+          publications: chains.flatMap((c) => c.publications)
+        })
+      ).coverage;
+
+    expect(
+      coverageOf(
+        chain("skip", { reason: "skipped_guild", limitationCode: null })
+      )
+    ).toMatchObject({ sweep_seal: 1 });
+    expect(
+      coverageOf(
+        chain("blocked", {
+          reason: "blocked_by_newer",
+          decision: "blocked",
+          limitationCode: "raiderio_limited"
+        })
+      )
+    ).toMatchObject({ sweep_seal: 1 });
+    expect(
+      coverageOf(
+        chain("capped", {
+          reason: "skipped_guild",
+          limitationCode: "fingerprint_sweep_capped"
+        })
+      ).sweep_seal
+    ).toBeUndefined();
+  });
+
   it("counts sweep publications by cycle: first, continuation and seal", () => {
     const audit = baseAudit({
+      publications: [
+        reservation("res1", "r1", minutesAgo(50)),
+        reservation("res2", "r1", minutesAgo(40)),
+        reservation("res3", "r1", minutesAgo(30), null)
+      ],
       ledger: [
         backfill("o", "fingerprint", minutesAgo(600)),
         ledgerRow({
@@ -338,6 +521,124 @@ describe("drift", () => {
     ]);
   });
 
+  it("fails a missed split across a pair some published snapshot once observed", () => {
+    // Break caught: a retraction deletes its row just as a manual removal
+    // does, so judging by the current links called every missed split
+    // manual, and it never failed.
+    const retracted = baseAudit({
+      ...manualOnlyDriftAudit(),
+      observedEver: new Map([["o", new Set(["t"])]])
+    });
+    expect(auditDrift(retracted)).toEqual({
+      failures: [expect.objectContaining({ check: "drift" })],
+      reports: []
+    });
+    // Observed the other way round, from the other part's root, too.
+    const fromTarget = baseAudit({
+      ...manualOnlyDriftAudit(),
+      observedEver: new Map([["t", new Set(["o"])]])
+    });
+    expect(auditDrift(fromTarget).failures).toEqual([
+      expect.objectContaining({ check: "drift" })
+    ]);
+  });
+
+  it("bounds pending drift by the measured cycle: an hour plus twice the last cycle's length", () => {
+    // Break caught: a fixed 2 h bound false-failed a cycle that needs more
+    // than one hourly pass. The last cycle took 90 minutes, so the bound is
+    // 1 h + 2 × 90 min = 4 h.
+    const at = (writtenAt: Date) =>
+      groupDriftAudit({
+        writtenAt,
+        recomputedAt: minutesAgo(500),
+        maintenance: {
+          lastCycleStartedAt: minutesAgo(400),
+          lastCycleCompletedAt: minutesAgo(310)
+        }
+      });
+    expect(auditDrift(at(minutesAgo(239)))).toMatchObject({
+      failures: [],
+      reports: [expect.objectContaining({ check: "drift_pending" })]
+    });
+    expect(auditDrift(at(minutesAgo(241))).failures).toEqual([
+      {
+        check: "drift_stale_pending",
+        detail: "2 characters around eu/draenor/a, pending over 240 minutes"
+      }
+    ]);
+  });
+
+  it("keeps a two-hour floor on the bound when the last cycle was short", () => {
+    const at = (writtenAt: Date) =>
+      groupDriftAudit({
+        writtenAt,
+        recomputedAt: minutesAgo(500),
+        maintenance: {
+          lastCycleStartedAt: minutesAgo(400),
+          lastCycleCompletedAt: minutesAgo(399)
+        }
+      });
+    expect(auditDrift(at(minutesAgo(119))).failures).toEqual([]);
+    expect(auditDrift(at(minutesAgo(121))).failures).toEqual([
+      expect.objectContaining({ check: "drift_stale_pending" })
+    ]);
+  });
+
+  it("measures a busy group's staleness from its earliest uncovered write, not its newest", () => {
+    // Break caught: the newest write set the clock, so a group written at
+    // least hourly kept real drift pending for ever.
+    const audit = baseAudit({
+      ...groupDriftAudit({
+        writtenAt: minutesAgo(250),
+        recomputedAt: minutesAgo(300),
+        maintenance: { lastCycleStartedAt: null, lastCycleCompletedAt: null }
+      }),
+      ledger: [250, 190, 130, 70, 10].map((minutes) =>
+        ledgerRow({
+          runId: `r${minutes}`,
+          family: "raiderio",
+          runStartedAt: minutesAgo(minutes),
+          writtenAt: minutesAgo(minutes)
+        })
+      )
+    });
+    expect(auditDrift(audit).failures).toEqual([
+      expect.objectContaining({ check: "drift_stale_pending" })
+    ]);
+  });
+
+  it("measures the manual arm from the earliest manual change no cycle covers", () => {
+    const audit = (manualChanges: Date[]) =>
+      baseAudit({
+        graph: graphOf({
+          names: ["o", "t"],
+          links: [{ a: "o", b: "t", strength: "manual" }],
+          groupOf: new Map([
+            ["o", "g1"],
+            ["t", "g2"]
+          ])
+        }),
+        groups: new Map([
+          ["g1", { recomputedAt: minutesAgo(600), members: ["o"] }],
+          ["g2", { recomputedAt: minutesAgo(600), members: ["t"] }]
+        ]),
+        maintenance: {
+          lastCycleStartedAt: minutesAgo(300),
+          lastCycleCompletedAt: minutesAgo(299)
+        },
+        manualChanges
+      });
+    // The change before the cycle started is covered; the one after it,
+    // 150 minutes ago, has waited past the 2 h bound.
+    expect(
+      auditDrift(audit([minutesAgo(400), minutesAgo(150), minutesAgo(5)]))
+        .failures
+    ).toEqual([expect.objectContaining({ check: "drift_stale_pending" })]);
+    expect(
+      auditDrift(audit([minutesAgo(400), minutesAgo(5)])).failures
+    ).toEqual([]);
+  });
+
   it("treats drift as pending when any group involved is pending, the absorbed side of a merge included", () => {
     expect(auditDrift(mergeWithPendingAbsorbedAudit()).failures).toEqual([]);
   });
@@ -406,7 +707,7 @@ describe("drift", () => {
           lastCycleStartedAt: minutesAgo(30),
           lastCycleCompletedAt: minutesAgo(29)
         },
-        manualChangedAt
+        manualChanges: [manualChangedAt]
       });
     expect(auditDrift(merge(minutesAgo(5)))).toMatchObject({
       failures: [],
@@ -468,7 +769,7 @@ describe("drift", () => {
           ["g1", { recomputedAt: minutesAgo(300), members: ["o"] }],
           ["g2", { recomputedAt: minutesAgo(300), members: ["t"] }]
         ]),
-        manualChangedAt
+        manualChanges: [manualChangedAt]
       });
     expect(auditDrift(at(minutesAgo(119)))).toMatchObject({
       failures: [],
@@ -780,6 +1081,23 @@ describe("page comparison", () => {
     ]);
   });
 
+  it("does not report a research state change for a borrowed, provisional page", () => {
+    // Today's state for a provisional page is the borrowed snapshot's, not
+    // the page's assembled state, so every one would show as changed.
+    const graph = graphOf({ names: ["o"], latestSnapshot: new Map() });
+    const [id, borrowed] = page("o", [row("o", "input")]);
+    const result = comparePages(
+      baseAudit({ graph, roots: [key("o")] }),
+      legacyPages([[id, { ...borrowed, provisional: true }]]),
+      CONFIG
+    );
+    expect(result.reports).toEqual([]);
+    expect(result.counts).toMatchObject({
+      provisional: 1,
+      researchStateChanged: 0
+    });
+  });
+
   it("fails a page over the ceiling", () => {
     const graph = graphOf({
       names: ["o", "a"],
@@ -945,6 +1263,97 @@ describe("replay", () => {
       "drift_manual"
     ]);
   });
+
+  it("reports its window, the publications it checked and the last cycle", () => {
+    // Break caught: a rebuild just before a replay left (a) to (d) nearly
+    // empty, and nothing in the output showed it.
+    const audit = baseAudit({
+      ledger: [
+        backfill("o", "raiderio", minutesAgo(600)),
+        ledgerRow({ runId: "r1", family: "raiderio" })
+      ],
+      publications: [
+        { kind: "run", runId: "before", observerId: "o", at: minutesAgo(700) },
+        { kind: "run", runId: "r1", observerId: "o", at: minutesAgo(60) },
+        { kind: "run", runId: "young", observerId: "o", at: minutesAgo(1) }
+      ],
+      maintenance: {
+        lastCycleStartedAt: minutesAgo(30),
+        lastCycleCompletedAt: minutesAgo(29)
+      }
+    });
+    const report = replayCharacterGroups(audit, new Map(), CONFIG);
+    expect(report).toMatchObject({
+      failures: [],
+      windowStart: minutesAgo(600).toISOString(),
+      publicationsChecked: 1,
+      lastCycleStartedAt: minutesAgo(30).toISOString(),
+      lastCycleCompletedAt: minutesAgo(29).toISOString()
+    });
+    expect(replayCharacterGroups(baseAudit(), new Map(), CONFIG)).toMatchObject(
+      {
+        windowStart: null,
+        lastCycleStartedAt: null,
+        lastCycleCompletedAt: null
+      }
+    );
+  });
+
+  it("fails maintenance_stale when no cycle has completed within the bound", () => {
+    // Break caught: with no completed cycle, drift was never judged and the
+    // replay passed.
+    const audit = (
+      windowStartedAt: Date,
+      maintenance: CharacterGroupsAudit["maintenance"]
+    ) =>
+      baseAudit({
+        ledger: [backfill("o", "raiderio", windowStartedAt)],
+        maintenance
+      });
+    const checks = (value: CharacterGroupsAudit) =>
+      replayCharacterGroups(value, new Map(), CONFIG).failures.map(
+        (finding) => finding.check
+      );
+    const never = { lastCycleStartedAt: null, lastCycleCompletedAt: null };
+    expect(checks(audit(minutesAgo(119), never))).toEqual([]);
+    expect(checks(audit(minutesAgo(121), never))).toEqual([
+      "maintenance_stale"
+    ]);
+    // A cycle completed long ago, and the window started just now: measured
+    // from the window start.
+    const old = {
+      lastCycleStartedAt: minutesAgo(1_000),
+      lastCycleCompletedAt: minutesAgo(999)
+    };
+    expect(checks(audit(minutesAgo(10), old))).toEqual([]);
+    expect(checks(audit(minutesAgo(900), old))).toEqual(["maintenance_stale"]);
+    // A long last cycle stretches the bound: 1 h + 2 × 100 min.
+    const long = {
+      lastCycleStartedAt: minutesAgo(350),
+      lastCycleCompletedAt: minutesAgo(250)
+    };
+    expect(checks(audit(minutesAgo(900), long))).toEqual([]);
+    const longer = {
+      lastCycleStartedAt: minutesAgo(370),
+      lastCycleCompletedAt: minutesAgo(270)
+    };
+    expect(checks(audit(minutesAgo(900), longer))).toEqual([
+      "maintenance_stale"
+    ]);
+  });
+
+  it("measures maintenance from the first ledger write when there is no baseline row", () => {
+    const audit = (writtenAt: Date) =>
+      baseAudit({
+        ledger: [ledgerRow({ runId: "r1", family: "raiderio", writtenAt })]
+      });
+    const checks = (value: CharacterGroupsAudit) =>
+      replayCharacterGroups(value, new Map(), CONFIG).failures.map(
+        (finding) => finding.check
+      );
+    expect(checks(audit(minutesAgo(30)))).toEqual([]);
+    expect(checks(audit(minutesAgo(130)))).toEqual(["maintenance_stale"]);
+  });
 });
 
 const NOW = new Date("2026-10-01T12:00:00Z");
@@ -1027,7 +1436,8 @@ function baseAudit(
     ledger: [],
     publications: [],
     latestRawMembership: new Map(),
-    manualChangedAt: null,
+    manualChanges: [],
+    observedEver: new Map(),
     manualCreatedAt: [],
     roots: [],
     ungroupedSince: new Map(),
@@ -1072,6 +1482,26 @@ function backfill(
     runStartedAt: writtenAt,
     writtenAt
   });
+}
+
+/**
+ * A published sweep reservation of o's. By default its cycle was capped,
+ * which is what the handler stores on a cycle that did not seal.
+ */
+function reservation(
+  reservationId: string,
+  runId: string,
+  at: Date,
+  limitationCode: string | null = "fingerprint_sweep_capped"
+): CharacterGroupsPublication {
+  return {
+    kind: "reservation",
+    reservationId,
+    runId,
+    observerId: "o",
+    at,
+    limitationCode
+  };
 }
 
 /**

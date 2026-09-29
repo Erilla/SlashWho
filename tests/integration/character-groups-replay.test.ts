@@ -319,7 +319,11 @@ describe("character groups replay", () => {
 
     const { report } = await replay();
     expect(report.failures).toEqual([]);
-    expect(report.coverage).toMatchObject({ raiderio_complete: 2, matched: 1 });
+    expect(report.coverage).toMatchObject({
+      raiderio_complete: 2,
+      matched: 1,
+      not_due_refresh: 1
+    });
   });
 
   it("5. accounts for a capped first cycle and its continuation", async () => {
@@ -370,6 +374,37 @@ describe("character groups replay", () => {
       sweep_continuation: 1,
       sweep_seal: 1
     });
+  });
+
+  it("5b. names a continuation whose write was lost, behind cycle 1's rows", async () => {
+    const root = key("oscar");
+    const first = await publishFirstCycle(
+      "oscar",
+      [],
+      {
+        kind: "capped",
+        characters: [member("foxtrot", "fingerprint")],
+        skippedHistoricalGuilds: 0
+      },
+      { resumeAfter: JSON.stringify(["eu", "draenor", "golf"]) }
+    );
+    const continuation = await admitSweep(repositories, first.runId, root);
+    await repositories.snapshots.amendAndFinishFingerprintSweep(
+      first.snapshotId,
+      [member("hotel", "fingerprint")],
+      { ...continuation, runId: first.runId, limitationCode: null },
+      { resumeAfter: null, limitationCode: null, advanced: true }
+    );
+
+    const { report } = await replay();
+    expect(
+      report.failures.filter((finding) => finding.check === "a_completeness")
+    ).toEqual([
+      {
+        check: "a_completeness",
+        detail: `reservation ${continuation.reservationId} for eu/draenor/oscar`
+      }
+    ]);
   });
 
   it("6. passes presence for a character both sources found", async () => {
@@ -678,5 +713,50 @@ describe("character groups replay", () => {
         finding.check.startsWith("drift")
       )
     ).toEqual([]);
+  });
+
+  it("15. fails a missed split across a pair a published snapshot once held", async () => {
+    // Break caught: a retraction deletes its row just as a manual removal
+    // does, so a stored group the recompute failed to split passed as
+    // `drift_manual` for good.
+    await publishRaiderIo("oscar", [member("alpha", "claimed")]);
+    await publishRaiderIo("oscar", []);
+    await completeCycle();
+    const [oscar, alpha] = [
+      await characterId("oscar"),
+      await characterId("alpha")
+    ];
+    // Stand in for a recompute that failed to split: put alpha back in
+    // oscar's group, with every write long since covered.
+    await pool.query(
+      `UPDATE character_group_members
+       SET group_id = (SELECT group_id FROM character_group_members WHERE character_id = $1)
+       WHERE character_id = $2`,
+      [oscar, alpha]
+    );
+    await pool.query(
+      `UPDATE character_connection_write_log SET written_at = written_at - interval '1 hour'`
+    );
+
+    const { audit, report } = await replay();
+    expect([...(audit.observedEver.get(oscar) ?? [])]).toEqual([alpha]);
+    expect(report.failures).toEqual([
+      expect.objectContaining({ check: "drift" })
+    ]);
+    expect(
+      report.reports.filter((finding) => finding.check === "drift_manual")
+    ).toEqual([]);
+  });
+
+  it("reads its clock from the database inside the consistent read", async () => {
+    const before = await pool.query<{ now: Date }>(`SELECT now() AS now`);
+    const audit = await loadCharacterGroupsAudit(pool);
+    const after = await pool.query<{ now: Date }>(`SELECT now() AS now`);
+    expect(audit.now.getTime()).toBeGreaterThanOrEqual(
+      before.rows[0]!.now.getTime()
+    );
+    expect(audit.now.getTime()).toBeLessThanOrEqual(
+      after.rows[0]!.now.getTime()
+    );
   });
 });

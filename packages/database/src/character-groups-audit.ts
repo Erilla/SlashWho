@@ -36,6 +36,9 @@ export type CharacterGroupsObservation = Readonly<{
  * a Raider.IO row, or a published sweep reservation, which owes a fingerprint
  * row. `at` is when it was published: the run's `completed_at`, or the
  * reservation's `finished_at`, since an amend never moves `refreshed_at`.
+ * A reservation's `limitationCode` is the one its cycle published with:
+ * `fingerprint_sweep_capped` for a cycle that stopped at its cap, anything
+ * else for the cycle that read to the end of the roster.
  */
 export type CharacterGroupsPublication = Readonly<
   | { kind: "run"; runId: string; observerId: string; at: Date }
@@ -45,6 +48,7 @@ export type CharacterGroupsPublication = Readonly<
       runId: string;
       observerId: string;
       at: Date;
+      limitationCode: string | null;
     }
 >;
 
@@ -67,13 +71,20 @@ export type CharacterGroupsAudit = Readonly<{
   /** Root id to its latest snapshot's member ids, ignoring suppression. */
   latestRawMembership: ReadonlyMap<string, readonly string[]>;
   /**
+   * Root id to every other character any of its snapshots from a complete
+   * run ever held, suppression ignored. Snapshots are immutable apart from
+   * a continuation's additions, so this is what the root was ever seen to
+   * observe, whatever the links say now.
+   */
+  observedEver: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
    * Every root's latest snapshot id, as `getCurrent` chooses it, suppression
    * aside. Today's pages are resolved after this read, so a page resolved
    * from any other snapshot moved in between.
    */
   latestSnapshotIds: ReadonlySet<string>;
-  /** The newest `manual_dossier_connections.created_at` or `excluded_at`. */
-  manualChangedAt: Date | null;
+  /** Every `manual_dossier_connections.created_at` and `excluded_at`. */
+  manualChanges: readonly Date[];
   /** Every `manual_dossier_connections.created_at`, for coverage. */
   manualCreatedAt: readonly Date[];
   /** Every character in any latest snapshot, suppressed ones left out. */
@@ -123,18 +134,25 @@ const LATEST_SNAPSHOTS = `
 /**
  * Loads the character groups replay's inputs in one consistent read (#738).
  * Read-only: it runs in a `READ ONLY` transaction and writes nothing.
+ *
+ * `now` is the database's own clock, read inside that transaction, since
+ * every time the replay compares it with was stamped by the database or the
+ * worker, never by the machine running the replay. Tests may pass their own.
  */
 export function loadCharacterGroupsAudit(
   pool: Pool,
-  now: Date = new Date()
+  now?: Date
 ): Promise<CharacterGroupsAudit> {
   return withConsistentRead(pool, (client) => load(client, now));
 }
 
 async function load(
   client: PoolClient,
-  now: Date
+  nowOverride: Date | undefined
 ): Promise<CharacterGroupsAudit> {
+  const now =
+    nowOverride ??
+    (await client.query<{ now: Date }>(`SELECT now() AS now`)).rows[0]!.now;
   const characterRows = await client.query<{
     id: string;
     region: CharacterKey["region"];
@@ -258,13 +276,10 @@ async function load(
            AND (suppression.expires_at IS NULL OR suppression.expires_at > now())
        )`
   );
-  const manualChanged = await client.query<{ changed_at: Date | null }>(
-    `SELECT max(GREATEST(created_at, COALESCE(excluded_at, created_at))) AS changed_at
-     FROM manual_dossier_connections`
-  );
-  const manualCreatedRows = await client.query<{ created_at: Date }>(
-    `SELECT created_at FROM manual_dossier_connections`
-  );
+  const manualCreatedRows = await client.query<{
+    created_at: Date;
+    excluded_at: Date | null;
+  }>(`SELECT created_at, excluded_at FROM manual_dossier_connections`);
 
   const exclusionRows = await client.query<{ maker: string; target: string }>(
     `SELECT exclusion.root_character_id AS maker, target.id AS target
@@ -335,6 +350,23 @@ async function load(
     ]);
   }
 
+  const everRows = await client.query<{
+    root_character_id: string;
+    character_id: string;
+  }>(
+    `SELECT DISTINCT snapshot.root_character_id, member.character_id
+     FROM snapshots snapshot
+     JOIN discovery_runs run ON run.id = snapshot.discovery_run_id AND run.status = 'complete'
+     JOIN snapshot_characters member ON member.snapshot_id = snapshot.id
+     WHERE member.character_id <> snapshot.root_character_id`
+  );
+  const observedEver = new Map<string, Set<string>>();
+  for (const row of everRows.rows) {
+    const members = observedEver.get(row.root_character_id) ?? new Set();
+    members.add(row.character_id);
+    observedEver.set(row.root_character_id, members);
+  }
+
   const observationRows = await client.query<{
     character_low_id: string;
     character_high_id: string;
@@ -383,9 +415,10 @@ async function load(
     discovery_run_id: string;
     root_id: string;
     finished_at: Date;
+    limitation_code: string | null;
   }>(
     `SELECT reservation.id, admission.discovery_run_id, root.id AS root_id,
-            reservation.finished_at
+            reservation.finished_at, reservation.limitation_code
      FROM fingerprint_sweep_reservations reservation
      JOIN fingerprint_sweep_admissions admission ON admission.id = reservation.admission_id
      JOIN discovery_runs run ON run.id = admission.discovery_run_id
@@ -484,12 +517,18 @@ async function load(
         reservationId: row.id,
         runId: row.discovery_run_id,
         observerId: row.root_id,
-        at: row.finished_at
+        at: row.finished_at,
+        limitationCode: row.limitation_code
       }))
     ],
     latestRawMembership,
+    observedEver,
     latestSnapshotIds: new Set(latestRows.rows.map((row) => row.id)),
-    manualChangedAt: manualChanged.rows[0]?.changed_at ?? null,
+    manualChanges: manualCreatedRows.rows.flatMap((row) =>
+      row.excluded_at === null
+        ? [row.created_at]
+        : [row.created_at, row.excluded_at]
+    ),
     manualCreatedAt: manualCreatedRows.rows.map((row) => row.created_at),
     roots: [...rootIds]
       .map((id) => characters.get(id)?.key)

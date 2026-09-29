@@ -28,6 +28,12 @@ export type ReplayReport = Readonly<{
   reports: readonly ReplayFinding[];
   counts: Readonly<Record<string, number>>;
   coverage: Readonly<Record<string, number>>;
+  /** The newest backfill or rebuild row, where checks (a) to (d) start. */
+  windowStart: string | null;
+  /** Publications check (a) looked at: in the window, and settled. */
+  publicationsChecked: number;
+  lastCycleStartedAt: string | null;
+  lastCycleCompletedAt: string | null;
 }>;
 
 export type ReplayConfig = Readonly<{ DOSSIER_CHARACTER_CEILING: number }>;
@@ -41,12 +47,32 @@ type Resolve = (
 /** A publication younger than this may still have its write pending. */
 const PENDING_MS = 10 * 60 * 1000;
 
+const HOUR_MS = 60 * 60 * 1000;
+
 /**
- * Drift may stay pending this long after what set it off: two hourly
- * maintenance intervals, so a cycle has had a full hour to start after the
- * trigger and another to complete. Past it, the backstop has missed.
+ * How long drift may stay pending after what set it off, and how long the
+ * maintenance may go without completing a cycle:
+ * `max(2 h, 1 h + 2 × the last cycle's length)`, or 2 h with no cycle
+ * measured.
+ *
+ * A trigger that lands just after a cycle started is only covered by the
+ * next cycle to start. A pass stops at the first completed cycle that began
+ * during it, so it completes at most two: the next pass, up to an hour
+ * later, may have to finish the current cycle before it starts the covering
+ * one, and then complete that. Past the bound, the backstop has missed.
  */
-const PENDING_DRIFT_BOUND_MS = 2 * 60 * 60 * 1000;
+function pendingDriftBoundMs(
+  maintenance: CharacterGroupsAudit["maintenance"]
+): number {
+  const { lastCycleStartedAt, lastCycleCompletedAt } = maintenance;
+  if (lastCycleStartedAt === null || lastCycleCompletedAt === null)
+    return 2 * HOUR_MS;
+  const cycleMs = lastCycleCompletedAt.getTime() - lastCycleStartedAt.getTime();
+  return Math.max(2 * HOUR_MS, HOUR_MS + 2 * Math.max(0, cycleMs));
+}
+
+/** The sweep limitation a cycle that stopped at its cap publishes with. */
+const CAPPED_SWEEP_LIMITATION = "fingerprint_sweep_capped";
 
 /**
  * None of these times is a commit time. `recomputed_at`, `cycle_started_at`
@@ -101,6 +127,7 @@ const familyOfSource = (source: string): "raiderio" | "fingerprint" =>
 export function auditLedger(audit: CharacterGroupsAudit): {
   failures: ReplayFinding[];
   coverage: Record<string, number>;
+  publicationsChecked: number;
 } {
   const failures: ReplayFinding[] = [];
   const describe = describer(audit.graph);
@@ -121,9 +148,11 @@ export function auditLedger(audit: CharacterGroupsAudit): {
         row.sweepReservationId === null ? [] : [row.sweepReservationId]
       )
   );
+  let publicationsChecked = 0;
   for (const publication of audit.publications) {
     const at = publication.at.getTime();
     if (at <= start || at > cutoff) continue;
+    publicationsChecked += 1;
     const owed =
       publication.kind === "run"
         ? raiderIoRuns.has(publication.runId)
@@ -222,15 +251,26 @@ export function auditLedger(audit: CharacterGroupsAudit): {
     }
   }
 
-  return { failures, coverage: ledgerCoverage(audit, start) };
+  return {
+    failures,
+    coverage: ledgerCoverage(audit, start),
+    publicationsChecked
+  };
 }
 
 /**
- * One count per ledger reason in the window, plus the sweep publications by
- * cycle: a run's first fingerprint row with a reservation is its first
- * cycle, every later one a continuation, and a continuation that matched
- * (or found the root unread) is the seal. `manual_added` counts the manual
- * connections made in the window.
+ * One count per ledger reason in the window, plus derived paths:
+ * - the sweep publications by cycle: a run's first fingerprint row with a
+ *   reservation is its first cycle, and every later one a continuation. A
+ *   continuation whose reservation published without the capped limitation
+ *   is the seal, whatever its ledger reason: a seal whose chain skipped a
+ *   guild is logged `skipped_guild` and a blocked one `blocked_by_newer`,
+ *   while a capped cycle can be logged `skipped_guild` too;
+ * - `not_due_refresh`: a Raider.IO row, other than a baseline or a
+ *   live-sweep completion, from a run with no fingerprint row, by an
+ *   observer with an earlier fingerprint row. That is a run that published
+ *   without sweeping because its root was swept recently;
+ * - `manual_added`: the manual connections made in the window.
  */
 function ledgerCoverage(
   audit: CharacterGroupsAudit,
@@ -239,6 +279,36 @@ function ledgerCoverage(
   const coverage: Record<string, number> = {};
   const add = (name: string) => {
     coverage[name] = (coverage[name] ?? 0) + 1;
+  };
+  const sealing = new Set(
+    audit.publications.flatMap((publication) =>
+      publication.kind === "reservation" &&
+      publication.limitationCode !== CAPPED_SWEEP_LIMITATION
+        ? [publication.reservationId]
+        : []
+    )
+  );
+  const fingerprintRuns = new Set(
+    audit.ledger
+      .filter((row) => row.family === "fingerprint")
+      .map((row) => row.runId)
+  );
+  const firstFingerprintAt = new Map<string, number>();
+  for (const row of audit.ledger) {
+    if (row.family !== "fingerprint") continue;
+    const at = row.writtenAt.getTime();
+    firstFingerprintAt.set(
+      row.observerId,
+      Math.min(firstFingerprintAt.get(row.observerId) ?? at, at)
+    );
+  }
+  const isNotDueRefresh = (row: CharacterGroupsLedgerRow) => {
+    if (row.family !== "raiderio") return false;
+    if (BASELINE_REASONS.has(row.reason)) return false;
+    if (row.reason === "live_sweep_completion") return false;
+    if (fingerprintRuns.has(row.runId)) return false;
+    const swept = firstFingerprintAt.get(row.observerId);
+    return swept !== undefined && swept < row.writtenAt.getTime();
   };
   const sweepRows = audit.ledger.filter(
     (row) =>
@@ -257,6 +327,7 @@ function ledgerCoverage(
   for (const row of audit.ledger) {
     if (row.writtenAt.getTime() <= start) continue;
     add(row.reason);
+    if (isNotDueRefresh(row)) add("not_due_refresh");
     if (!isSweepRow.has(row)) continue;
     add("sweep_publication");
     if (firstCycle.get(`${row.runId}\0${row.observerId}`) === row) {
@@ -264,7 +335,7 @@ function ledgerCoverage(
       continue;
     }
     add("sweep_continuation");
-    if (row.reason === "matched" || row.reason === "unread") add("sweep_seal");
+    if (sealing.has(row.sweepReservationId!)) add("sweep_seal");
   }
   // A manual add writes no ledger row, so it is counted from its own table.
   for (const createdAt of audit.manualCreatedAt) {
@@ -276,18 +347,23 @@ function ledgerCoverage(
 /**
  * Drift between the stored groups and the groups the links recompute to.
  * Each cluster of overlapping recomputed and stored groups is judged once:
- * - pending, and reported, while any stored group in it is pending (its
- *   members' newest ledger write is later than its recompute, and no
- *   maintenance cycle that started after that write has completed), while
- *   any ungrouped character in it is newer than the last such cycle, or
+ * - pending, and reported, while any stored group in it is pending (a
+ *   member has a ledger write later than the group's recompute that no
+ *   completed maintenance cycle started after), while any ungrouped
+ *   character in it is newer than the last completed cycle's start, or
  *   while a manual link joins it across stored groups and a manual change
- *   is newer than the last such cycle. A write within 5 s before a
- *   recompute or a cycle start is not covered by it;
- * - failed as stale pending once what set a pending arm off is more than 2
- *   hours old, a missing or stale maintenance cycle included;
- * - reported, when the stored group is coarser than the recomputed ones only
- *   across pairs with no observed link, which is how a removed manual row,
- *   which leaves no trace, shows;
+ *   is newer than that start. A write within 5 s before a recompute or a
+ *   cycle start is not covered by it;
+ * - failed as stale pending once what set a pending arm off is older than
+ *   the bound (`pendingDriftBoundMs`). A group's clock runs from its
+ *   earliest uncovered write, and the manual arm's from the earliest
+ *   uncovered manual change, so a group written every hour still goes
+ *   stale;
+ * - reported, when the stored group is coarser than the recomputed ones and
+ *   no member of one recomputed part was ever observed by a member of
+ *   another, in any published snapshot. That is how a removed manual row,
+ *   which leaves no trace, shows. A retraction also deletes its row, so the
+ *   current links cannot tell the two apart; the snapshots can;
  * - failed otherwise.
  */
 export function auditDrift(audit: CharacterGroupsAudit): {
@@ -335,29 +411,40 @@ export function auditDrift(audit: CharacterGroupsAudit): {
       lastCycleCompletedAt.getTime() >= lastCycleStartedAt.getTime()
     );
   };
-  const newestWrite = new Map<string, number>();
+  const writesBy = new Map<string, number[]>();
   for (const row of audit.ledger) {
-    newestWrite.set(
-      row.observerId,
-      Math.max(newestWrite.get(row.observerId) ?? 0, row.writtenAt.getTime())
-    );
+    writesBy.set(row.observerId, [
+      ...(writesBy.get(row.observerId) ?? []),
+      row.writtenAt.getTime()
+    ]);
   }
-  /** The write a stored group is pending on, or null when it is settled. */
+  /** The earliest uncovered time of those given, or null when all are covered. */
+  const earliestUncovered = (times: readonly number[]): number | null => {
+    const uncovered = times.filter((at) => !cycleCoveredAfter(at));
+    return uncovered.length === 0 ? null : Math.min(...uncovered);
+  };
+  /**
+   * The earliest write a stored group is pending on, or null when it is
+   * settled: a member's write later than the recompute that no completed
+   * cycle covers.
+   */
   const groupPendingSince = (groupId: string): number | null => {
     const group = audit.groups.get(groupId);
     // A member row with no group row cannot happen under one consistent
     // read. Were it to, it has been pending for ever, and fails as stale.
     if (!group) return 0;
-    const written = Math.max(
-      0,
-      ...group.members.map((id) => newestWrite.get(id) ?? 0)
+    const recomputedAt = group.recomputedAt.getTime() - CLOCK_TOLERANCE_MS;
+    return earliestUncovered(
+      group.members.flatMap((id) =>
+        (writesBy.get(id) ?? []).filter((at) => at > recomputedAt)
+      )
     );
-    return written > group.recomputedAt.getTime() - CLOCK_TOLERANCE_MS &&
-      !cycleCoveredAfter(written)
-      ? written
-      : null;
   };
-  const staleBefore = audit.now.getTime() - PENDING_DRIFT_BOUND_MS;
+  const manualPendingSince = earliestUncovered(
+    audit.manualChanges.map((at) => at.getTime())
+  );
+  const boundMs = pendingDriftBoundMs(audit.maintenance);
+  const staleBefore = audit.now.getTime() - boundMs;
   const storedGroupOf = (id: string) => groupOf.get(id) ?? `ungrouped\0${id}`;
 
   for (const indices of clusters.values()) {
@@ -376,8 +463,9 @@ export function auditDrift(audit: CharacterGroupsAudit): {
         idSet.has(link.b) &&
         storedGroupOf(link.a) !== storedGroupOf(link.b)
     );
-    // What set each pending arm off: a group's newest write, an ungrouped
-    // character's creation, or the manual change.
+    // What set each pending arm off: a group's earliest uncovered write, an
+    // ungrouped character's creation, or the earliest uncovered manual
+    // change.
     const triggers = [
       ...groupIds.flatMap((id) => groupPendingSince(id) ?? []),
       ...ungrouped.flatMap((id) => {
@@ -386,17 +474,15 @@ export function auditDrift(audit: CharacterGroupsAudit): {
         const created = audit.ungroupedSince.get(id)?.getTime() ?? 0;
         return cycleCoveredAfter(created) ? [] : [created];
       }),
-      ...(manualAcross &&
-      audit.manualChangedAt !== null &&
-      !cycleCoveredAfter(audit.manualChangedAt.getTime())
-        ? [audit.manualChangedAt.getTime()]
+      ...(manualAcross && manualPendingSince !== null
+        ? [manualPendingSince]
         : [])
     ];
     if (triggers.length > 0) {
       if (triggers.some((at) => at < staleBefore)) {
         failures.push({
           check: "drift_stale_pending",
-          detail: `${ids.length} characters around ${around}, pending over 2 hours`
+          detail: `${ids.length} characters around ${around}, pending over ${Math.round(boundMs / 60_000)} minutes`
         });
       } else {
         reports.push({
@@ -408,12 +494,21 @@ export function auditDrift(audit: CharacterGroupsAudit): {
     }
 
     const coarserOnly = groupIds.length === 1 && ungrouped.length === 0;
-    const observedAcross = audit.observations.some(
-      (row) =>
-        idSet.has(row.lowId) &&
-        idSet.has(row.highId) &&
-        partOf.get(row.lowId) !== partOf.get(row.highId)
-    );
+    // Judged from the immutable snapshots, not the links: a retraction and a
+    // manual removal both delete a row, and only a pair never observed can
+    // have been joined by a manual row alone.
+    const observedAcross =
+      ids.some((from) =>
+        [...(audit.observedEver.get(from) ?? [])].some(
+          (to) => idSet.has(to) && partOf.get(from) !== partOf.get(to)
+        )
+      ) ||
+      audit.observations.some(
+        (row) =>
+          idSet.has(row.lowId) &&
+          idSet.has(row.highId) &&
+          partOf.get(row.lowId) !== partOf.get(row.highId)
+      );
     if (coarserOnly && !observedAcross) {
       reports.push({
         check: "drift_manual",
@@ -708,7 +803,10 @@ export function comparePages(
         });
       }
     }
-    if (today.snapshot.state !== next.research.state) {
+    // A provisional page's snapshot is borrowed from another root, and
+    // today's read exposes no assembled state for the page itself, so its
+    // state is not comparable.
+    if (!today.provisional && today.snapshot.state !== next.research.state) {
       bump("researchStateChanged");
       reports.push({
         check: "research_state_changed",
@@ -734,7 +832,44 @@ export function comparePages(
   return { failures, reports, counts };
 }
 
-/** The whole replay: the pages, the ledger checks and drift. */
+/**
+ * Fails `maintenance_stale` when no maintenance cycle has completed within
+ * the bound, measured from the later of the window start and the last
+ * completed cycle. With no cycle, drift is never judged, so the replay would
+ * otherwise pass however stuck the maintenance is. With no baseline row the
+ * writer's first ledger write stands in for the window start.
+ */
+export function auditMaintenance(audit: CharacterGroupsAudit): {
+  failures: ReplayFinding[];
+} {
+  const baseline = windowStart(audit);
+  const firstWrite = audit.ledger.reduce<number | null>(
+    (earliest, row) =>
+      earliest === null
+        ? row.writtenAt.getTime()
+        : Math.min(earliest, row.writtenAt.getTime()),
+    null
+  );
+  const since = Math.max(
+    baseline > 0 ? baseline : (firstWrite ?? 0),
+    audit.maintenance.lastCycleCompletedAt?.getTime() ?? 0
+  );
+  const boundMs = pendingDriftBoundMs(audit.maintenance);
+  return audit.now.getTime() - since > boundMs
+    ? {
+        failures: [
+          {
+            check: "maintenance_stale",
+            detail: `no maintenance cycle completed in the last ${Math.round(boundMs / 60_000)} minutes`
+          }
+        ]
+      }
+    : { failures: [] };
+}
+
+const isoOrNull = (at: Date | null) => (at === null ? null : at.toISOString());
+
+/** The whole replay: the pages, the ledger checks, drift and maintenance. */
 export function replayCharacterGroups(
   audit: CharacterGroupsAudit,
   legacy: ReadonlyMap<string, ResolvedSubjects | null>,
@@ -742,12 +877,23 @@ export function replayCharacterGroups(
 ): ReplayReport {
   const ledger = auditLedger(audit);
   const drift = auditDrift(audit);
+  const maintenance = auditMaintenance(audit);
   const pages = comparePages(audit, legacy, config);
+  const start = windowStart(audit);
   return {
-    failures: [...pages.failures, ...ledger.failures, ...drift.failures],
+    failures: [
+      ...pages.failures,
+      ...ledger.failures,
+      ...drift.failures,
+      ...maintenance.failures
+    ],
     reports: [...pages.reports, ...drift.reports],
     counts: pages.counts,
-    coverage: ledger.coverage
+    coverage: ledger.coverage,
+    windowStart: start > 0 ? new Date(start).toISOString() : null,
+    publicationsChecked: ledger.publicationsChecked,
+    lastCycleStartedAt: isoOrNull(audit.maintenance.lastCycleStartedAt),
+    lastCycleCompletedAt: isoOrNull(audit.maintenance.lastCycleCompletedAt)
   };
 }
 

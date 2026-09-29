@@ -123,6 +123,7 @@ export { measuredRepositories } from "./measured-repositories";
 export {
   auditDrift,
   auditLedger,
+  auditMaintenance,
   comparePages,
   replayCharacterGroups
 } from "./character-groups-replay";
