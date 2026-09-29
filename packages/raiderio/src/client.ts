@@ -187,7 +187,12 @@ const loggedEncounterResponseSchema = z.object({
     }),
     log: z.object({
       deaths: z.object({ count: z.number().int().nonnegative() }),
-      vantus: z.object({ count: z.number().int().nonnegative() })
+      // Null for a boss Raider.IO holds no Vantus data for (Rashok, the Elder,
+      // the Jailer and others, #747). That is no answer, never zero runes.
+      vantus: z
+        .object({ count: z.number().int().nonnegative() })
+        .nullable()
+        .optional()
     }),
     raid: z.object({ slug: z.string().min(1), difficulty: z.string().min(1) }),
     boss: z.object({ slug: z.string().min(1) }),
@@ -277,7 +282,7 @@ function normalizeLoggedEncounter(value: unknown): LoggedEncounter {
         }
       : null,
     deathCount: killDetails.log.deaths.count,
-    vantusCount: killDetails.log.vantus.count,
+    vantusCount: killDetails.log.vantus?.count ?? null,
     shareRaidUntil: instantOrNull(killDetails.guildPrivacy?.shareRaidUntil),
     roster: hidden
       ? { state: "unavailable", reason: "private" }

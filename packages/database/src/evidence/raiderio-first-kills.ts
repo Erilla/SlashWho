@@ -216,7 +216,8 @@ function mapEncounter(
       max: required(row.item_level_max)
     },
     deathCount: required(row.death_count),
-    vantusCount: required(row.vantus_count),
+    // Null on a read row too: Raider.IO gave no Vantus data (#747).
+    vantusCount: row.vantus_count,
     shareRaidUntil: row.share_raid_until?.toISOString() ?? null,
     rosterState: required(row.roster_state),
     members: members.map((member) => ({

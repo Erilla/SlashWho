@@ -166,6 +166,29 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
     });
   });
 
+  it("stores a kill Raider.IO gives no Vantus data for as null, apart from zero runes", async () => {
+    // #747: the answer check required a Vantus count on every read row, so a
+    // kill Raider.IO sends `log.vantus: null` for could not be stored at all.
+    await save(
+      {
+        encounters: [
+          { ...encounter, vantusCount: null },
+          { ...encounter, loggedEncounterId: 700_002, vantusCount: 0 }
+        ],
+        unavailable: []
+      },
+      "2026-09-28T12:00:00.000Z"
+    );
+
+    const { encounters } = await stored([700_001, 700_002]);
+    expect(
+      encounters.map((item) => [item.loggedEncounterId, item.vantusCount])
+    ).toEqual([
+      [700_001, null],
+      [700_002, 0]
+    ]);
+  });
+
   it("turns a visible roster private when a re-read finds it hidden, and the dossier shows it private", async () => {
     // Break caught (#734 review): a visible roster was never read again and
     // never changed, so a guild that hid its compositions after the kill

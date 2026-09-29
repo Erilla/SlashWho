@@ -740,4 +740,12 @@ it("carries a first kill's roster, or the reason there is none, and never a Raid
   expect(
     accepts({ ...roster, members: [{ ...member, raiderIoCharacterId: 1 }] })
   ).toBe(false);
+  // #747: no Vantus data is null, which is its own answer. It must be given,
+  // not left out, and it is never a negative count.
+  expect(accepts({ ...roster, vantusCount: null })).toBe(true);
+  expect(accepts({ ...roster, vantusCount: 0 })).toBe(true);
+  const { vantusCount, ...withoutVantus } = roster;
+  void vantusCount;
+  expect(accepts(withoutVantus)).toBe(false);
+  expect(accepts({ ...roster, vantusCount: -1 })).toBe(false);
 });

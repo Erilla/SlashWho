@@ -118,7 +118,8 @@ export type DossierLoggedEncounter = Readonly<{
   guild: DossierKillEvidence["guild"];
   itemLevel: Readonly<{ average: number; min: number; max: number }>;
   deathCount: number;
-  vantusCount: number;
+  /** Null where Raider.IO gives no Vantus data for the boss; never zero runes. */
+  vantusCount: number | null;
   roster:
     | Readonly<{
         state: "available";
@@ -158,7 +159,7 @@ export type ApplicantDossierKillRoster =
       pulledAt: string;
       durationMs: number;
       deathCount: number;
-      vantusCount: number;
+      vantusCount: number | null;
       members: readonly ApplicantDossierRosterMember[];
     }>
   | Readonly<{
