@@ -458,4 +458,59 @@ describe("worker logger", () => {
       }))
     );
   });
+
+  it("keeps the character groups maintenance and write fields", () => {
+    const lines: string[] = [];
+    const logger = createWorkerLogger({
+      write: (line: string) => lines.push(line)
+    });
+
+    logger.info({
+      event: "character_groups_recompute",
+      groupsRecomputed: 3,
+      ungroupedAssigned: 1,
+      cycleCompleted: true,
+      cyclesCompleted: 2,
+      durationMs: 12
+    });
+    logger.info({ event: "character_groups_write", unknownCharacters: 1 });
+    logger.info({
+      event: "character_groups_write_failed",
+      stage: "recompute",
+      errorName: "Error"
+    });
+    logger.info({
+      event: "character_groups_merged",
+      stage: "maintenance",
+      mergedGroups: 2
+    });
+
+    const parsed = lines.map(
+      (line) => JSON.parse(line) as Record<string, unknown>
+    );
+    // Only a lost write restarts the replay's three days, so the stage must
+    // survive the allowlist.
+    expect(parsed[2]).toMatchObject({
+      event: "character_groups_write_failed",
+      stage: "recompute",
+      errorName: "Error"
+    });
+    expect(parsed[2]).not.toHaveProperty("droppedFields");
+    expect(parsed[0]).toMatchObject({
+      event: "character_groups_recompute",
+      groupsRecomputed: 3,
+      ungroupedAssigned: 1,
+      cycleCompleted: true,
+      cyclesCompleted: 2,
+      durationMs: 12
+    });
+    expect(parsed[0]).not.toHaveProperty("droppedFields");
+    expect(parsed[1]).toMatchObject({ unknownCharacters: 1 });
+    expect(parsed[3]).toMatchObject({
+      event: "character_groups_merged",
+      stage: "maintenance",
+      mergedGroups: 2
+    });
+    expect(parsed[3]).not.toHaveProperty("droppedFields");
+  });
 });

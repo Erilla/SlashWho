@@ -13,6 +13,8 @@
     "format:check": "prettier --check .",
     "lint": "pnpm --filter @slashwho/web typegen && eslint .",
     "ops:rebuild": "tsx scripts/rebuild-character.mts",
+    "ops:rebuild-groups": "tsx scripts/rebuild-character-groups.mts",
+    "ops:replay-groups": "tsx scripts/diagnostics/character-groups-replay.mts",
     "ops:removals": "tsx scripts/removals.mts",
     "analyze:performance": "tsx scripts/analyze-performance-logs.mts",
     "profile:dossier": "playwright test --config playwright.profile.config.ts",

@@ -102,3 +102,4 @@ export type {
   FingerprintGateway,
   FingerprintSweepOutcome
 } from "./fingerprint-discovery";
+export * from "./character-connections";

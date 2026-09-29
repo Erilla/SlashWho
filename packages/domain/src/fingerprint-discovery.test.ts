@@ -254,7 +254,12 @@ describe("discoverFingerprintMatches", () => {
         },
         options
       )
-    ).resolves.toEqual({ kind: "matched", requestsUsed: 1, characters: [] });
+    ).resolves.toEqual({
+      kind: "matched",
+      requestsUsed: 1,
+      characters: [],
+      unreadRoot: true
+    });
   });
 
   it("finds nothing rather than failing when the root has no readable profile", async () => {
@@ -266,7 +271,46 @@ describe("discoverFingerprintMatches", () => {
         gatewayFor([candidate(matchingKey)], {}),
         options
       )
-    ).resolves.toEqual({ kind: "matched", requestsUsed: 2, characters: [] });
+    ).resolves.toEqual({
+      kind: "matched",
+      requestsUsed: 2,
+      characters: [],
+      unreadRoot: true
+    });
+  });
+
+  it("counts a historical guild it could not read, and still matches the rest", async () => {
+    // Break caught: a 404'd historical guild was silently skipped, so a
+    // `matched` looked like a full read and would retract fingerprint links.
+    const gone = { name: "Gone", region: "eu" as const, realm: "draenor" };
+    const outcome = await discoverFingerprintMatches(
+      root,
+      gatewayFor([], { [keyId(root)]: fingerprint(200) }),
+      { ...options, historicalGuilds: [gone] }
+    );
+
+    expect(outcome).toMatchObject({
+      kind: "matched",
+      skippedHistoricalGuilds: 1
+    });
+  });
+
+  it("counts a skipped historical guild on a capped sweep too", async () => {
+    // Break caught: only `matched` carried the count, so a chain that skipped a
+    // 404'd guild in a capped cycle sealed as a full read and retracted links.
+    const gone = { name: "Gone", region: "eu" as const, realm: "draenor" };
+    const outcome = await discoverFingerprintMatches(
+      root,
+      gatewayFor([candidate(matchingKey)], { [keyId(root)]: fingerprint(200) }),
+      { ...options, requestCap: 3, historicalGuilds: [gone] }
+    );
+
+    expect(outcome).toEqual({
+      kind: "capped",
+      characters: [],
+      requestsUsed: 3,
+      skippedHistoricalGuilds: 1
+    });
   });
 
   it("skips a candidate with no readable profile and keeps sweeping", async () => {

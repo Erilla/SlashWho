@@ -5,7 +5,13 @@ import type {
   PublicErrorCode,
   SnapshotState
 } from "@slashwho/contracts";
-import type { CharacterGuild, CharacterKey } from "@slashwho/domain";
+import type {
+  CharacterGuild,
+  CharacterKey,
+  ConnectionFamily,
+  LedgerReason,
+  ObservationSource
+} from "@slashwho/domain";
 
 export type CallerClass = "anonymous" | "bot";
 export type EvidenceRunStatus =
@@ -1933,11 +1939,66 @@ export interface OperatorAuthRepository {
   }>;
 }
 
+export interface FamilyObservationWrite {
+  readonly family: ConnectionFamily;
+  readonly decision: "added_only" | "replaced";
+  readonly reason: LedgerReason;
+  /** The run's published set for this family, before de-duplication. */
+  readonly observed: readonly Readonly<{
+    key: CharacterKey;
+    source: ObservationSource;
+  }>[];
+  /** The sweep reservation for a fingerprint family write; null otherwise. */
+  readonly sweepReservationId: string | null;
+}
+
+export interface ObservationWriteInput {
+  readonly runId: string;
+  readonly observerKey: CharacterKey;
+  readonly families: readonly FamilyObservationWrite[];
+}
+
+export interface ObservationWriteResult {
+  /** Characters whose counting links this write changed, observer included. */
+  readonly changedCharacterIds: readonly string[];
+  /** Observed keys with no `characters` row, which were skipped. */
+  readonly unknownCharacters: number;
+}
+
+export interface CharacterConnectionRepository {
+  writeObservations(
+    input: ObservationWriteInput
+  ): Promise<ObservationWriteResult>;
+  /**
+   * `mergedGroups` counts recomputed groups that joined two or more existing
+   * groups, each with more than one member.
+   */
+  recomputeGroupsOf(
+    characterIds: readonly string[]
+  ): Promise<{ mergedGroups: number }>;
+  recomputePass(input: { budgetMs: number }): Promise<{
+    groupsRecomputed: number;
+    /** Previously-ungrouped characters newly assigned a group this call. */
+    ungroupedAssigned: number;
+    /** Whether any cycle completed during this call. */
+    cycleCompleted: boolean;
+    /**
+     * Cycles completed during this call: at most two, a cycle already in
+     * progress when it began and then one that began during it.
+     */
+    cyclesCompleted: number;
+    /** Merges of multi-member groups, as `recomputeGroupsOf` counts them. */
+    mergedGroups: number;
+  }>;
+  rebuild(): Promise<{ observers: number; links: number; groups: number }>;
+}
+
 export interface Repositories {
   accountAuth: AccountAuthRepository;
   accountMail: AccountMailRepository;
   accountTokens: AccountTokenRepository;
   accountCredentials?: AccountCredentialRepository;
+  characterConnections?: CharacterConnectionRepository;
   operatorAuth: OperatorAuthRepository;
   searchReservations: SearchReservationRepository;
   runs: {

@@ -49,6 +49,11 @@ export type FingerprintSweepOutcome =
       kind: "matched";
       characters: readonly DiscoveredCharacter[];
       requestsUsed: number;
+      /** The root's own roster or profile answered not found, so nothing was
+       * read to match against. Such a match proves no absence. */
+      unreadRoot?: true;
+      /** Historical guilds skipped because their roster answered not found. */
+      skippedHistoricalGuilds?: number;
     }
   | {
       kind: "capped";
@@ -60,6 +65,11 @@ export type FingerprintSweepOutcome =
        * A capped outcome with no cursor must leave a stored cursor unchanged.
        */
       resumeAfter?: string;
+      /**
+       * Historical guilds skipped because their roster answered not found. A
+       * chain's seal must not retract links a capped cycle's skip never read.
+       */
+      skippedHistoricalGuilds?: number;
     }
   | {
       kind: "failure";
@@ -268,6 +278,7 @@ export async function discoverFingerprintMatches(
   let capped = false;
   const matches: DiscoveredCharacter[] = [];
   let lastSweptId: string | undefined;
+  let skippedHistoricalGuilds = 0;
 
   function throwIfAborted(): void {
     options.signal?.throwIfAborted();
@@ -301,7 +312,12 @@ export async function discoverFingerprintMatches(
       );
     } catch (error) {
       if (isNotFound(error)) {
-        return { kind: "matched", characters: [], requestsUsed };
+        return {
+          kind: "matched",
+          characters: [],
+          requestsUsed,
+          unreadRoot: true
+        };
       }
       throw error;
     }
@@ -317,7 +333,12 @@ export async function discoverFingerprintMatches(
       );
     } catch (error) {
       if (isNotFound(error)) {
-        return { kind: "matched", characters: [], requestsUsed };
+        return {
+          kind: "matched",
+          characters: [],
+          requestsUsed,
+          unreadRoot: true
+        };
       }
       throw error;
     }
@@ -351,7 +372,10 @@ export async function discoverFingerprintMatches(
       } catch (error) {
         // A guild can be renamed or disbanded after its public report. It is an
         // exhausted source, not a fault that invalidates every other guild.
-        if (isNotFound(error)) continue;
+        if (isNotFound(error)) {
+          skippedHistoricalGuilds += 1;
+          continue;
+        }
         throw error;
       }
     }
@@ -529,7 +553,8 @@ export async function discoverFingerprintMatches(
         kind: "capped",
         characters: matches,
         requestsUsed,
-        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId }),
+        ...(skippedHistoricalGuilds > 0 ? { skippedHistoricalGuilds } : {})
       };
     }
     return failureOutcome(error);
@@ -540,7 +565,13 @@ export async function discoverFingerprintMatches(
         kind: "capped",
         characters: matches,
         requestsUsed,
-        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId })
+        ...(lastSweptId === undefined ? {} : { resumeAfter: lastSweptId }),
+        ...(skippedHistoricalGuilds > 0 ? { skippedHistoricalGuilds } : {})
       }
-    : { kind: "matched", characters: matches, requestsUsed };
+    : {
+        kind: "matched",
+        characters: matches,
+        requestsUsed,
+        ...(skippedHistoricalGuilds > 0 ? { skippedHistoricalGuilds } : {})
+      };
 }

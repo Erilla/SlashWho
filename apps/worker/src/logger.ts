@@ -86,6 +86,17 @@ const allowlist = new Set([
   "removedEvidenceRuns",
   "removedCollectionStages",
   "removedRunCosts",
+  // Character groups recompute and write (#738).
+  "groupsRecomputed",
+  "cycleCompleted",
+  "cyclesCompleted",
+  // character_groups_merged: a count of multi-member groups joined.
+  "mergedGroups",
+  "ungroupedAssigned",
+  "unknownCharacters",
+  // `write` or `recompute`: which part of a character groups write failed;
+  // `publication` or `maintenance`: which recompute merged groups.
+  "stage",
   // Webhook delivery failures name the alert, never the webhook.
   "alertEvent",
   // Measurement totals outside the provider-prefixed families below.

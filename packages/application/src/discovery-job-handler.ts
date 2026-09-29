@@ -2,6 +2,7 @@ import type {
   DiscoverCharacterJob,
   DiscoveryWorkContext,
   JobTelemetry,
+  ObservationWriteInput,
   Repositories
 } from "@slashwho/database";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
+  characterGroupsErrorCode,
   deduplicateCharacters,
   discoverCharacter,
   discoverFingerprintMatches,
@@ -23,6 +25,12 @@ import { bestEffort } from "./best-effort";
 import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
+import {
+  continuationCycleWrite,
+  firstSweepCycleWrite,
+  liveSweepCompletionWrite,
+  raiderIoPublicationWrite
+} from "./observation-writes";
 import {
   BLIZZARD_FAST_CALL_MS,
   createMeasurementScope,
@@ -419,6 +427,83 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
     };
   }
 
+  /**
+   * Phase 1's best-effort observation write (#738). It runs after the
+   * publication committed and after the run's timing log, and never throws,
+   * so it cannot change an outcome. The write goes ahead whether or not the
+   * job has been aborted; an abort only skips the group recompute, which the
+   * hourly maintenance pass then covers. A failure logs its `stage`: a lost
+   * write restarts the replay's three days, while a lost recompute heals in
+   * the maintenance cycle.
+   */
+  async function writeCommittedObservations(
+    write: ObservationWriteInput,
+    signal: AbortSignal
+  ): Promise<void> {
+    const connections = options.repositories.characterConnections;
+    if (!connections) return;
+    let result: Awaited<ReturnType<typeof connections.writeObservations>>;
+    try {
+      result = await connections.writeObservations(write);
+    } catch (error) {
+      logObservationFailure("write", error);
+      return;
+    }
+    if (result.unknownCharacters > 0) {
+      try {
+        options.logger?.info({
+          event: "character_groups_write",
+          unknownCharacters: result.unknownCharacters
+        });
+      } catch {
+        // Best effort only, as below.
+      }
+    }
+    if (signal.aborted) return;
+    let mergedGroups: number;
+    try {
+      ({ mergedGroups } = await connections.recomputeGroupsOf(
+        result.changedCharacterIds
+      ));
+    } catch (error) {
+      logObservationFailure("recompute", error);
+      return;
+    }
+    if (mergedGroups > 0) {
+      try {
+        // Counts only: which characters merged is for the replay to show.
+        options.logger?.info({
+          event: "character_groups_merged",
+          stage: "publication",
+          mergedGroups
+        });
+      } catch {
+        // Best effort only, as below.
+      }
+    }
+  }
+
+  function logObservationFailure(
+    stage: "write" | "recompute",
+    error: unknown
+  ): void {
+    // Runs inside the handler's `finally`: a logger that throws here would
+    // replace the run's own outcome, so it is swallowed.
+    try {
+      const errorCode = characterGroupsErrorCode(error);
+      options.logger?.info({
+        event: "character_groups_write_failed",
+        stage,
+        errorName: error instanceof Error ? error.name : "unknown",
+        // The SQLSTATE (55P03 is a lock timeout) or the repository's own
+        // code: what tells a transient failure from a real fault.
+        ...(errorCode === undefined ? {} : { errorCode })
+      });
+    } catch {
+      // Best effort only.
+    }
+  }
+
   return {
     async execute(
       runId: string,
@@ -514,6 +599,10 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       let resume: Awaited<
         ReturnType<Repositories["fingerprintSweeps"]["getResumeState"]>
       > = null;
+      // Set only after a publication call resolves, which is only after its
+      // transaction committed (#738). Written in the outer finally, so a
+      // follow-up that throws, or an abort, cannot skip it.
+      let pendingWrite: ObservationWriteInput | null = null;
       /**
        * Re-enqueues a continuation cycle that made no progress, giving up once
        * the same chain has done so too many times in a row. Returns true when
@@ -694,6 +783,11 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   runId,
                   live.snapshotId
                 );
+                pendingWrite = liveSweepCompletionWrite({
+                  runId,
+                  rootKey: run.rootKey,
+                  characters: outcome.characters
+                });
                 record.outcome = "fingerprint_continuation_pending";
                 return;
               }
@@ -906,6 +1000,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       record.outcome = "continuation_superseded";
                       return;
                     }
+                    pendingWrite = continuationCycleWrite({
+                      runId,
+                      rootKey: run.rootKey,
+                      sweep,
+                      reservationId: admission.reservationId
+                    });
                   } else {
                     const excludedTournamentCharacters = new Set(
                       outcome.state === "partial"
@@ -951,6 +1051,15 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                       cursor,
                       { signal: context.signal }
                     );
+                    pendingWrite = firstSweepCycleWrite({
+                      runId,
+                      rootKey: run.rootKey,
+                      raiderIoCharacters: outcome.characters,
+                      raiderIoLimitation,
+                      sweep,
+                      excludedTournamentIds: excludedTournamentCharacters,
+                      reservationId: admission.reservationId
+                    });
                   }
                   record.outcome = "snapshot";
                   record.state =
@@ -1030,6 +1139,13 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
               },
               { signal: context.signal }
             );
+            pendingWrite = raiderIoPublicationWrite({
+              runId,
+              rootKey: run.rootKey,
+              characters: outcome.characters,
+              limitationCode:
+                outcome.state === "partial" ? outcome.limitationCode : null
+            });
             return;
           }
         }
@@ -1127,6 +1243,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         if (options.logger) {
           record.durationMs = Math.max(0, Math.round(monotonic() - observedAt));
           options.logger.info({ ...record, ...scope.totals() });
+        }
+        if (pendingWrite) {
+          await writeCommittedObservations(pendingWrite, context.signal);
         }
       }
     }

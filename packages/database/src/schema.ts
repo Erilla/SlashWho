@@ -11,6 +11,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uniqueIndex,
@@ -183,6 +184,166 @@ export const snapshotCharacters = pgTable(
     uniqueIndex("snapshot_characters_display_order_idx").on(
       table.snapshotId,
       table.displayOrder
+    )
+  ]
+);
+
+/** Discovery's observed links and reviewers' rejections (#738). See 0069. */
+export const characterConnections = pgTable(
+  "character_connections",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    characterLowId: uuid("character_low_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    characterHighId: uuid("character_high_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    source: text("source"),
+    observedFromCharacterId: uuid("observed_from_character_id"),
+    discoveryRunId: uuid("discovery_run_id"),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull(),
+    rejectionId: uuid("rejection_id"),
+    rejectedFromCharacterId: uuid("rejected_from_character_id")
+  },
+  (table) => [
+    check(
+      "character_connections_order_check",
+      sql`${table.characterLowId} < ${table.characterHighId}`
+    ),
+    check(
+      "character_connections_kind_check",
+      sql`(${table.kind} = 'observed' AND ${table.source} IN ('claimed', 'declared_main', 'profile_guess', 'fingerprint') AND ${table.observedFromCharacterId} IN (${table.characterLowId}, ${table.characterHighId}) AND ${table.discoveryRunId} IS NOT NULL AND ${table.rejectionId} IS NULL AND ${table.rejectedFromCharacterId} IS NULL) OR (${table.kind} = 'rejected' AND ${table.source} IS NULL AND ${table.observedFromCharacterId} IS NULL AND ${table.discoveryRunId} IS NULL AND ${table.rejectionId} IS NOT NULL AND ${table.rejectedFromCharacterId} IS NOT NULL)`
+    ),
+    uniqueIndex("character_connections_observation_idx")
+      .on(
+        table.characterLowId,
+        table.characterHighId,
+        table.source,
+        table.observedFromCharacterId
+      )
+      .where(sql`${table.kind} = 'observed'`),
+    uniqueIndex("character_connections_rejection_idx")
+      .on(table.characterLowId, table.characterHighId, table.rejectionId)
+      .where(sql`${table.kind} = 'rejected'`),
+    index("character_connections_high_idx").on(table.characterHighId),
+    index("character_connections_observer_idx")
+      .on(table.observedFromCharacterId, table.source)
+      .where(sql`${table.kind} = 'observed'`)
+  ]
+);
+
+/** The groups counting links form (#738). See 0069. */
+export const characterGroups = pgTable("character_groups", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  recomputedAt: timestamp("recomputed_at", { withTimezone: true })
+    .defaultNow()
+    .notNull()
+});
+
+/** A group's members (#738). See 0069. */
+export const characterGroupMembers = pgTable(
+  "character_group_members",
+  {
+    characterId: uuid("character_id")
+      .primaryKey()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => characterGroups.id, { onDelete: "cascade" })
+  },
+  (table) => [index("character_group_members_group_idx").on(table.groupId)]
+);
+
+/** The newest write per observer and family; only moves forward (#738). */
+export const characterConnectionWrites = pgTable(
+  "character_connection_writes",
+  {
+    observerCharacterId: uuid("observer_character_id")
+      .notNull()
+      .references(() => characters.id, { onDelete: "cascade" }),
+    family: text("family").notNull(),
+    runId: uuid("run_id").notNull(),
+    runStartedAt: timestamp("run_started_at", { withTimezone: true }).notNull()
+  },
+  (table) => [
+    primaryKey({
+      name: "character_connection_writes_pk",
+      columns: [table.observerCharacterId, table.family]
+    }),
+    check(
+      "character_connection_writes_family_check",
+      sql`${table.family} in ('raiderio', 'fingerprint')`
+    )
+  ]
+);
+
+/** One append-only row per publication per family (#738). See 0069. */
+export const characterConnectionWriteLog = pgTable(
+  "character_connection_write_log",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    runId: uuid("run_id").notNull(),
+    sweepReservationId: uuid("sweep_reservation_id"),
+    observerCharacterId: uuid("observer_character_id").notNull(),
+    family: text("family").notNull(),
+    decision: text("decision").notNull(),
+    reason: text("reason").notNull(),
+    runStartedAt: timestamp("run_started_at", { withTimezone: true }).notNull(),
+    writtenAt: timestamp("written_at", { withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => [
+    index("character_connection_write_log_observer_idx").on(
+      table.observerCharacterId,
+      table.family,
+      table.runStartedAt,
+      table.writtenAt
+    ),
+    index("character_connection_write_log_run_idx").on(table.runId),
+    index("character_connection_write_log_reservation_idx").on(
+      table.sweepReservationId
+    ),
+    check(
+      "character_connection_write_log_family_check",
+      sql`${table.family} IN ('raiderio', 'fingerprint')`
+    ),
+    check(
+      "character_connection_write_log_decision_check",
+      sql`${table.decision} IN ('added_only', 'replaced', 'blocked')`
+    ),
+    check(
+      "character_connection_write_log_reason_check",
+      sql`${table.reason} IN ('raiderio_complete', 'raiderio_limited', 'privacy_hidden', 'capped', 'matched', 'unread', 'skipped_guild', 'live_sweep_completion', 'blocked_by_newer', 'backfill', 'rebuild')`
+    )
+  ]
+);
+
+/** The maintenance recompute's cursor and cycle times; one row (#738). */
+export const characterGroupsMaintenance = pgTable(
+  "character_groups_maintenance",
+  {
+    id: smallint("id").primaryKey(),
+    cursorGroupId: uuid("cursor_group_id"),
+    cycleStartedAt: timestamp("cycle_started_at", { withTimezone: true }),
+    lastCycleStartedAt: timestamp("last_cycle_started_at", {
+      withTimezone: true
+    }),
+    lastCycleCompletedAt: timestamp("last_cycle_completed_at", {
+      withTimezone: true
+    })
+  },
+  (table) => [
+    check("character_groups_maintenance_singleton_check", sql`${table.id} = 1`),
+    // A cursor only means something inside a cycle.
+    check(
+      "character_groups_maintenance_cursor_check",
+      sql`${table.cursorGroupId} IS NULL OR ${table.cycleStartedAt} IS NOT NULL`
     )
   ]
 );

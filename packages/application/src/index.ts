@@ -3,6 +3,13 @@ export {
   recoverStrandedContinuations
 } from "./discovery-job-handler";
 export { collectionProgress } from "./collection-progress";
+export {
+  continuationCycleWrite,
+  firstSweepCycleWrite,
+  liveSweepCompletionWrite,
+  raiderIoPublicationWrite,
+  type SweepForWrite
+} from "./observation-writes";
 export { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 export { startApplicantCollection } from "./start-applicant-collection";
 export { createApplicantEvidenceJobHandler } from "./applicant-evidence-job-handler";
@@ -113,6 +120,28 @@ export {
 } from "./throttle-attribution";
 export type { ThrottledProvider, ThrottleUnit } from "./throttle-attribution";
 export { measuredRepositories } from "./measured-repositories";
+export {
+  auditDrift,
+  auditLedger,
+  auditMaintenance,
+  comparePages,
+  replayCharacterGroups
+} from "./character-groups-replay";
+export type {
+  ReplayConfig,
+  ReplayFinding,
+  ReplayReport
+} from "./character-groups-replay";
+export {
+  compareByLevelThenKey,
+  legacyResolveSubjects
+} from "./dossier-subjects";
+export type {
+  DossierSubject,
+  RankedSubject,
+  ResolvedSubjects,
+  SubjectRepositories
+} from "./dossier-subjects";
 export { queueWaitMs } from "./queue-wait";
 export { createRateLimiter } from "./rate-limit";
 export type {

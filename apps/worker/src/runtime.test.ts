@@ -15,6 +15,7 @@ import type {
 import { DiscoveryQueueStopTimeoutError } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 import type {
+  CharacterConnectionRepository,
   DiscoverCharacterJob,
   DiscoveryQueue,
   DiscoveryWorkContext,
@@ -540,6 +541,49 @@ function runtimeFakes(
       return evidenceWorkHandler;
     },
     sleeps
+  };
+}
+
+/**
+ * The hourly maintenance cycle's own setup, built on {@link runtimeFakes}: a
+ * runtime whose maintenance handler can be invoked directly, with its own
+ * logger capturing every record written during the run.
+ */
+function maintenanceHarness(
+  overrides: {
+    characterConnections?: Partial<CharacterConnectionRepository>;
+    clearStaleCredentials?: Repositories["evidence"]["clearStaleCredentials"];
+  } = {}
+) {
+  const fakes = runtimeFakes();
+  if (overrides.characterConnections) {
+    fakes.repositories.characterConnections =
+      overrides.characterConnections as CharacterConnectionRepository;
+  }
+  if (overrides.clearStaleCredentials) {
+    fakes.cleanup.evidence.mockImplementation(overrides.clearStaleCredentials);
+  }
+  const logged: Record<string, unknown>[] = [];
+  const logger = {
+    info: vi.fn((record: Record<string, unknown>) => {
+      logged.push(record);
+    })
+  };
+  return {
+    fakes,
+    logged,
+    run: async () => {
+      const runtime = await createWorkerRuntime(
+        config,
+        fakes.dependencies,
+        logger
+      );
+      try {
+        await fakes.maintenanceHandler?.();
+      } finally {
+        await runtime.stop();
+      }
+    }
   };
 }
 
@@ -1811,6 +1855,138 @@ describe("worker runtime", () => {
       "private-value"
     );
     await runtime.stop();
+  });
+
+  it("recomputes character groups after the cleanup, even when the cleanup failed", async () => {
+    // Break caught: a cleanup failure rethrew before the recompute ran, so
+    // manual edits never reached the groups and drift failed the replay.
+    const recomputePass = vi.fn(async () => ({
+      groupsRecomputed: 2,
+      ungroupedAssigned: 1,
+      cycleCompleted: false,
+      cyclesCompleted: 0,
+      mergedGroups: 0
+    }));
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass },
+      clearStaleCredentials: async () => {
+        throw new Error("database_unavailable");
+      }
+    });
+    await expect(run()).rejects.toThrow("database_unavailable");
+    expect(recomputePass).toHaveBeenCalledWith({ budgetMs: 30_000 });
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        event: "character_groups_recompute",
+        groupsRecomputed: 2,
+        ungroupedAssigned: 1,
+        cycleCompleted: false,
+        cyclesCompleted: 0
+      })
+    );
+    // Nothing merged, so no alert.
+    expect(
+      logged.find((record) => record.event === "character_groups_merged")
+    ).toBeUndefined();
+  });
+
+  it("logs character_groups_merged, with counts only, when the maintenance pass merged groups", async () => {
+    // Break caught: nothing reported a maintenance merge of two
+    // multi-member groups, such as one a manual edit made.
+    const recomputePass = vi.fn(async () => ({
+      groupsRecomputed: 4,
+      ungroupedAssigned: 0,
+      cycleCompleted: true,
+      cyclesCompleted: 1,
+      mergedGroups: 3
+    }));
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass }
+    });
+    await expect(run()).resolves.toBeUndefined();
+    expect(
+      logged.filter((record) => record.event === "character_groups_merged")
+    ).toEqual([
+      {
+        event: "character_groups_merged",
+        stage: "maintenance",
+        mergedGroups: 3
+      }
+    ]);
+  });
+
+  it("logs character_groups_write_failed and still resolves when only the recompute fails", async () => {
+    // Break caught: this branch had no coverage, so a swallowed error, a
+    // wrongly-shaped record, or a rethrow that broke the cleanup's own
+    // success could all have shipped unnoticed.
+    const recomputePass = vi.fn(async () => {
+      throw new RangeError("recompute_unavailable");
+    });
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass }
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(
+      logged.find((record) => record.event === "character_groups_recompute")
+    ).toBeUndefined();
+    expect(
+      logged.find((record) => record.event === "character_groups_write_failed")
+    ).toEqual({
+      event: "character_groups_write_failed",
+      // A maintenance failure loses no write: the next cycle heals it.
+      stage: "recompute",
+      errorName: "RangeError",
+      durationMs: expect.any(Number)
+    });
+  });
+
+  it("logs the SQLSTATE with a failed maintenance recompute, never the message", async () => {
+    // Break caught: every failure logged the same `errorName`, so a lock
+    // timeout behind a rebuild looked like a real fault.
+    const recomputePass = vi.fn(async () => {
+      throw Object.assign(
+        new Error("canceling statement due to lock timeout"),
+        {
+          name: "error",
+          code: "55P03"
+        }
+      );
+    });
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass }
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    const failure = logged.find(
+      (record) => record.event === "character_groups_write_failed"
+    );
+    expect(failure).toEqual({
+      event: "character_groups_write_failed",
+      stage: "recompute",
+      errorName: "Error",
+      errorCode: "55P03",
+      durationMs: expect.any(Number)
+    });
+    expect(JSON.stringify(failure)).not.toContain("canceling");
+  });
+
+  it("still rejects with the cleanup's own error when the recompute also fails", async () => {
+    // Break caught: a recompute failure could mask or replace the cleanup's
+    // own error, hiding the failure its retry actually needs to see.
+    const recomputePass = vi.fn(async () => {
+      throw new RangeError("recompute_unavailable");
+    });
+    const { run } = maintenanceHarness({
+      characterConnections: { recomputePass },
+      clearStaleCredentials: async () => {
+        throw new Error("database_unavailable");
+      }
+    });
+
+    await expect(run()).rejects.toThrow("database_unavailable");
   });
 
   it("writes one timed record per fingerprint admission, however it ends", async () => {
