@@ -1959,6 +1959,29 @@ describe("Raider.IO-logged first kills (#732)", () => {
     expect(midnightFalls.bestParses).toEqual([]);
   });
 
+  it("carries a kill Raider.IO gives no Vantus data for as null, never zero", () => {
+    // #747: `log.vantus` is null for some bosses. The roster still stands.
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      kills: [],
+      raiderIoFirstKills: [
+        raiderIoKill({
+          encounter: {
+            state: "read",
+            encounter: { ...loggedEncounter, vantusCount: null }
+          }
+        })
+      ],
+      limitations: []
+    });
+
+    expect(verifiedKill(boss(dossier)).firstKill.roster).toEqual({
+      ...availableRoster,
+      vantusCount: null
+    });
+  });
+
   it("counts every raider Raider.IO listed, shown or not", () => {
     // A raider removed from SlashWho is left off the list before it gets
     // here (#734 review), but the raid still had twenty players.

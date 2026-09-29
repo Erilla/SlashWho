@@ -200,7 +200,9 @@ export const dossierKillRosterSchema = z.discriminatedUnion("state", [
       pulledAt: z.iso.datetime(),
       durationMs: z.number().int().nonnegative(),
       deathCount: z.number().int().nonnegative(),
-      vantusCount: z.number().int().nonnegative(),
+      // Null where Raider.IO gives no Vantus data for the boss (#747): no
+      // answer, never zero runes.
+      vantusCount: z.number().int().nonnegative().nullable(),
       members: z.array(dossierRosterMemberSchema).min(1)
     })
     .strict(),

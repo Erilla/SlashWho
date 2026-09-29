@@ -1394,6 +1394,42 @@ describe("Raider.IO logged encounters", () => {
     });
   });
 
+  it("reads a kill Raider.IO gives no Vantus data for, keeping it apart from zero runes", async () => {
+    // Break caught (#747): Raider.IO sends `log.vantus: null` for bosses such
+    // as Rashok, the Elder and the Jailer. Requiring a count refused every
+    // such kill as schema drift, and 224 first kills on test lost their log.
+    const { client: none } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      (body) => {
+        details(body).log.vantus = null;
+      }
+    );
+    const { client: absent } = loggedEncounterClient(
+      readRecorded("logged-encounter-guild-kill"),
+      (body) => {
+        delete details(body).log.vantus;
+      }
+    );
+    const { client: zero } = loggedEncounterClient(
+      readRecorded("logged-encounter-no-guild")
+    );
+
+    await expect(
+      none.getLoggedEncounter("tier-mn-1", 700_001)
+    ).resolves.toMatchObject({
+      kind: "encounter",
+      vantusCount: null,
+      roster: { state: "available" }
+    });
+    await expect(
+      absent.getLoggedEncounter("tier-mn-1", 700_001)
+    ).resolves.toMatchObject({ kind: "encounter", vantusCount: null });
+    // A recorded zero is a real answer, and stays a number.
+    await expect(
+      zero.getLoggedEncounter("tier-mn-1", 700_002)
+    ).resolves.toMatchObject({ kind: "encounter", vantusCount: 0 });
+  });
+
   it("keeps a guild-less kill with its roster", async () => {
     const { client } = loggedEncounterClient(
       readRecorded("logged-encounter-no-guild")

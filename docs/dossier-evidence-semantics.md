@@ -90,6 +90,10 @@ States stay distinct:
   guild hid it, Raider.IO has no logged encounter of the kill, or it has not
   been read yet. It is never an empty table and never "not present".
 - A raider whose item level Raider.IO did not give shows "—", never 0.
+- A kill Raider.IO gives no Vantus data for (`log.vantus: null`, as for
+  Rashok, the Elder or the Jailer) is kept, with its roster. Its Vantus count
+  is stored as null and left out of the roster summary, never shown as 0
+  runes; a recorded 0 is a real answer and is shown (#747).
 - A kill with no guild (a pug) shows "—", as elsewhere.
 
 A failed or capped logged-encounter read makes the run partial, so it never
