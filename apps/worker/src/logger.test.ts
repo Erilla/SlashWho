@@ -394,6 +394,7 @@ describe("worker logger", () => {
         retryAfterMs: 1,
         runId: "run-3"
       },
+      { event: "fingerprint_parser_thread_died", pendingParses: 1 },
       {
         event: "evidence_resume_sweep",
         resumed: 1,

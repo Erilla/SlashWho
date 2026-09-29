@@ -18,7 +18,10 @@ import {
   type EvidenceRunNotifier,
   type FingerprintAlertNotifier
 } from "@slashwho/application";
-import { createBlizzardClient } from "@slashwho/blizzard";
+import {
+  createBlizzardClient,
+  createFingerprintParserPool
+} from "@slashwho/blizzard";
 import {
   collectCharacterEvidenceQueueName,
   createDiscoveryQueue,
@@ -157,7 +160,7 @@ export type WorkerRuntimeDependencies = {
   createFingerprintIntegration?: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
-  ) => Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint">;
+  ) => FingerprintIntegration;
   createFingerprintAlertNotifier?: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
@@ -294,18 +297,40 @@ export const BLIZZARD_WORKER_REQUEST_LIMITS = {
   maxPerSecond: 40
 } as const;
 
+/**
+ * Threads that parse the achievements bodies. A sweep tops out near 25 reads a
+ * second on one thread, about 60 ms of CPU for each 1.9 MB body under load
+ * (#718); the container has 8 CPUs, so four leave the main thread, the database
+ * and the other jobs their share.
+ */
+export const FINGERPRINT_PARSER_THREADS = 4;
+
+export type FingerprintIntegration = Pick<
+  DiscoveryJobHandlerOptions,
+  "blizzardGateway" | "fingerprint"
+> & {
+  /** Ends the parser threads; the worker calls it once the queue has drained. */
+  closeFingerprintParser?: () => Promise<void>;
+};
+
 export function createFingerprintIntegration(
   config: WorkerConfig,
   logger?: DiscoveryLogger
-): Pick<DiscoveryJobHandlerOptions, "blizzardGateway" | "fingerprint"> {
+): FingerprintIntegration {
+  const parserPool = createFingerprintParserPool(FINGERPRINT_PARSER_THREADS, {
+    onThreadDeath: ({ pendingParses }) =>
+      logger?.info({ event: "fingerprint_parser_thread_died", pendingParses })
+  });
   return {
+    closeFingerprintParser: () => parserPool.close(),
     blizzardGateway: createBlizzardClient({
       fetch: globalThis.fetch,
       clientId: config.blizzardClientId,
       clientSecret: config.blizzardClientSecret,
       baseUrl: config.blizzardBaseUrl,
       onThrottle: throttleReporter(logger, "blizzard"),
-      requestLimits: BLIZZARD_WORKER_REQUEST_LIMITS
+      requestLimits: BLIZZARD_WORKER_REQUEST_LIMITS,
+      fingerprintParser: parserPool
     }),
     fingerprint: {
       requestCap: config.blizzardSweepRequestCap,
@@ -470,6 +495,7 @@ type WorkerHandlers = Readonly<{
     WorkerRuntimeDependencies["createEvidenceGateway"]
   >;
   fingerprintAlertNotifier: FingerprintAlertNotifier | undefined;
+  closeFingerprintParser: (() => Promise<void>) | undefined;
 }>;
 
 /**
@@ -493,10 +519,12 @@ function buildHandlers(
     config,
     logger
   );
+  const { closeFingerprintParser, ...fingerprintOptions } =
+    fingerprintIntegration ?? {};
   const handler = dependencies.createHandler({
     repositories,
     gateway,
-    ...fingerprintIntegration,
+    ...fingerprintOptions,
     ...(fingerprintAlertNotifier ? { fingerprintAlertNotifier } : {}),
     ...(discoveryRunNotifier ? { discoveryRunNotifier } : {}),
     enqueueFingerprintAdmission: (runId) =>
@@ -583,7 +611,8 @@ function buildHandlers(
     evidenceHandler,
     gateway,
     evidenceGateway,
-    fingerprintAlertNotifier
+    fingerprintAlertNotifier,
+    closeFingerprintParser
   };
 }
 
@@ -1227,6 +1256,7 @@ export async function createWorkerRuntime(
             );
             if (failed?.status === "rejected") throw failed.reason;
           } catch (error) {
+            void handlers.closeFingerprintParser?.().catch(() => undefined);
             if (
               error instanceof DiscoveryQueueStopTimeoutError ||
               error instanceof AccountMailStopTimeoutError
@@ -1239,6 +1269,8 @@ export async function createWorkerRuntime(
             await pool.end();
             throw error;
           }
+          // After the drain, so a sweep read in flight still has its parser.
+          await handlers.closeFingerprintParser?.();
           await pool.end();
         })();
         return stopping;

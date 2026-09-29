@@ -24,6 +24,10 @@ import type {
   BlizzardRosterCharacter,
   CompletedAchievement
 } from "./types";
+import {
+  fingerprintFromResponse,
+  type FingerprintParser
+} from "./fingerprint-parser";
 import { createRequestLimiter, type RequestLimits } from "./request-limiter";
 
 export type CreateBlizzardClientOptions = Readonly<{
@@ -39,6 +43,12 @@ export type CreateBlizzardClientOptions = Readonly<{
    * credentials shares these limits too; the OAuth token fetch is exempt.
    */
   requestLimits?: RequestLimits;
+  /**
+   * Where an achievements body is parsed into a fingerprint. Defaults to the
+   * calling thread; a process that sweeps many characters passes a pool so the
+   * 1.9 MB parse does not queue behind everything else on its main thread.
+   */
+  fingerprintParser?: FingerprintParser;
 }>;
 
 type CachedPlayableClassNames = Readonly<{
@@ -50,6 +60,10 @@ type CachedPlayableClassNames = Readonly<{
 // refresh bounds the maximum patch staleness without retaining any profile,
 // roster, or fingerprint material.
 const PLAYABLE_CLASS_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+
+type BodyReader = (response: Response) => Promise<unknown>;
+
+const readJson: BodyReader = (response) => response.json();
 
 function createBlizzardError(failure: UpstreamFailure): UpstreamError {
   return createUpstreamError("blizzard", failure);
@@ -130,22 +144,6 @@ function normalizedRosterCharacter(
   return { key, displayName, className, level, guild };
 }
 
-function fingerprintFromResponse(
-  value: unknown
-): AchievementFingerprint | null {
-  const response = valueRecord(value);
-  if (!response || !Array.isArray(response.achievements)) return null;
-
-  const fingerprint = new Map<number, number>();
-  for (const achievement of response.achievements) {
-    const entry = valueRecord(achievement);
-    const id = entry && finiteNumber(entry.id);
-    const timestamp = entry && finiteNumber(entry.completed_timestamp);
-    if (id !== null && timestamp !== null) fingerprint.set(id, timestamp);
-  }
-  return fingerprint;
-}
-
 function completedAchievementsFromResponse(
   value: unknown
 ): readonly CompletedAchievement[] | null {
@@ -202,18 +200,19 @@ export function createBlizzardClient(
     normalize: (value: unknown) => T | null,
     signal?: AbortSignal,
     onProfileRequest?: BlizzardProfileRequestObserver,
-    waitForSlot?: BlizzardSlotWait
+    waitForSlot?: BlizzardSlotWait,
+    readBody: BodyReader = readJson
   ): Promise<T> {
     const token = await tokens.token(signal);
     await onProfileRequest?.();
     signal?.throwIfAborted();
-    if (!limiter) return send(url, token, normalize, signal);
+    if (!limiter) return send(url, token, normalize, signal, readBody);
     const acquire = () => limiter.acquire(signal);
     const release = await (waitForSlot ? waitForSlot(acquire) : acquire());
     // The slot is held until the body is read, so a slow body still counts
     // against the requests in flight.
     try {
-      return await send(url, token, normalize, signal);
+      return await send(url, token, normalize, signal, readBody);
     } finally {
       release();
     }
@@ -223,7 +222,8 @@ export function createBlizzardClient(
     url: URL,
     token: string,
     normalize: (value: unknown) => T | null,
-    signal?: AbortSignal
+    signal: AbortSignal | undefined,
+    readBody: BodyReader
   ): Promise<T> {
     signal?.throwIfAborted();
     let response: Response;
@@ -245,7 +245,7 @@ export function createBlizzardClient(
       throw createBlizzardError(responseFailure(response, options.onThrottle));
 
     try {
-      const normalized = normalize(await response.json());
+      const normalized = normalize(await readBody(response));
       signal?.throwIfAborted();
       if (normalized === null) throw new Error("invalid_response");
       return normalized;
@@ -415,12 +415,25 @@ export function createBlizzardClient(
     waitForSlot?: BlizzardSlotWait
   ): Promise<AchievementFingerprint> {
     const validKey = validCharacterKey(key);
+    const parser = options.fingerprintParser;
+    if (!parser) {
+      return request(
+        achievementsUrl(validKey),
+        fingerprintFromResponse,
+        signal,
+        onProfileRequest,
+        waitForSlot
+      );
+    }
+    // The body is read as bytes and parsed by the parser, so the body read is
+    // what the request's slot is held for, as before.
     return request(
       achievementsUrl(validKey),
-      fingerprintFromResponse,
+      (value) => value as AchievementFingerprint | null,
       signal,
       onProfileRequest,
-      waitForSlot
+      waitForSlot,
+      async (response) => parser.parse(await response.arrayBuffer())
     );
   }
 

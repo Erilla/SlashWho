@@ -27,6 +27,8 @@ const allowlist = new Set([
   // upstream_throttle: a closed provider set and the upstream's Retry-After.
   "provider",
   "retryAfterMs",
+  // fingerprint_parser_thread_died: how many parses the thread held.
+  "pendingParses",
   // discovery_run names the root it researched, as it always has.
   "region",
   "realm",
