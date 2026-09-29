@@ -49,11 +49,13 @@ const PENDING_MS = 10 * 60 * 1000;
 const PENDING_DRIFT_BOUND_MS = 2 * 60 * 60 * 1000;
 
 /**
- * `written_at`, `recomputed_at`, `cycle_started_at` and `created_at` are each
- * their transaction's start, `now()`, not its commit. The writer waits up to
- * its 5 s `lock_timeout` for a lock, so a write that started that close
- * before a recompute or a cycle start can still commit after it, unseen:
- * such a write is not taken as covered by it.
+ * None of these times is a commit time. `recomputed_at`, `cycle_started_at`
+ * and `created_at` are their transaction's start, `now()`, and a recompute
+ * reads only once it holds its locks, later still. A writer stamps
+ * `written_at` with the clock at its ledger insert, after its lock waits, so
+ * the tolerance only has to cover the gap from that insert to the write's
+ * commit: a write stamped this close before a recompute or a cycle start can
+ * still commit after it, unseen, and is not taken as covered by it.
  */
 const CLOCK_TOLERANCE_MS = 5 * 1000;
 

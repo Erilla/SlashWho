@@ -559,6 +559,14 @@ const COUNTING_LINKS_FROM = `
   WHERE target.id <> manual.root_character_id
     AND (manual.root_character_id = ANY($1) OR target.id = ANY($1))`;
 
+/**
+ * Appends the ledger row. `written_at` is the clock at this insert, the last
+ * statement of its family's write and after every lock wait, rather than the
+ * column default's transaction start: a writer can wait out a 5 s
+ * `lock_timeout` on the rebuild lock and another on the root lock before it
+ * gets here, and the replay's clock tolerance should only have to cover the
+ * gap from this insert to the commit.
+ */
 async function logWrite(
   client: PoolClient,
   runId: string,
@@ -571,8 +579,8 @@ async function logWrite(
   await client.query(
     `INSERT INTO character_connection_write_log
        (run_id, sweep_reservation_id, observer_character_id, family, decision,
-        reason, run_started_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)`,
+        reason, run_started_at, written_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, clock_timestamp())`,
     [
       runId,
       family.sweepReservationId,

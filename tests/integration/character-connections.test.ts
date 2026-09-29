@@ -117,6 +117,52 @@ describe("character connections: observation writes", () => {
     expect(marker.rows).toEqual([{ family: "raiderio", run_id: runId }]);
   });
 
+  it("stamps the ledger row when it is inserted, not when its transaction began", async () => {
+    // Break caught: `written_at` defaulted to the transaction's start, so a
+    // writer that waited on its locks logged a time up to 10 s before its
+    // commit, past the replay's 5 s clock tolerance.
+    const runId = await publishedRun();
+    const hold = await pool.connect();
+    let released: Date;
+    let write: Promise<unknown>;
+    try {
+      await hold.query("BEGIN");
+      await hold.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`root:${rootKey.region}:${rootKey.realm}:${rootKey.name}`]
+      );
+      write = connections().writeObservations({
+        runId,
+        observerKey: rootKey,
+        families: [
+          {
+            family: "raiderio",
+            decision: "added_only",
+            reason: "raiderio_limited",
+            sweepReservationId: null,
+            observed: [{ key: altKey, source: "claimed" }]
+          }
+        ]
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      released = (
+        await hold.query<{ at: Date }>(`SELECT clock_timestamp() AS at`)
+      ).rows[0]!.at;
+      await hold.query("COMMIT");
+    } finally {
+      hold.release();
+    }
+    await write;
+    const ledger = await pool.query<{ written_at: Date }>(
+      `SELECT written_at FROM character_connection_write_log WHERE run_id = $1`,
+      [runId]
+    );
+    expect(ledger.rows).toHaveLength(1);
+    expect(ledger.rows[0]!.written_at.getTime()).toBeGreaterThanOrEqual(
+      released.getTime()
+    );
+  });
+
   it("records both sources before de-duplication", async () => {
     // Break caught: de-duplicated input stored a character both sources found
     // as Raider.IO only, and presence failed for its fingerprint link.

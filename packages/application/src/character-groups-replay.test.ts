@@ -480,8 +480,9 @@ describe("drift", () => {
   });
 
   it("treats a write up to 5 s before its group's recompute as pending, and one 5 s before or earlier as settled", () => {
-    // `written_at` and `recomputed_at` are each their transaction's start, so
-    // a recompute that started just after a write began may not have seen it.
+    // Neither `written_at` nor `recomputed_at` is a commit time, so a
+    // recompute that started just after a write's ledger insert may not have
+    // seen it.
     const recomputedAt = minutesAgo(60);
     const at = (msBefore: number) =>
       groupDriftAudit({
