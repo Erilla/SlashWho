@@ -66,6 +66,12 @@ export type CharacterGroupsAudit = Readonly<{
   publications: readonly CharacterGroupsPublication[];
   /** Root id to its latest snapshot's member ids, ignoring suppression. */
   latestRawMembership: ReadonlyMap<string, readonly string[]>;
+  /**
+   * Every root's latest snapshot id, as `getCurrent` chooses it, suppression
+   * aside. Today's pages are resolved after this read, so a page resolved
+   * from any other snapshot moved in between.
+   */
+  latestSnapshotIds: ReadonlySet<string>;
   /** The newest `manual_dossier_connections.created_at` or `excluded_at`. */
   manualChangedAt: Date | null;
   /** Every `manual_dossier_connections.created_at`, for coverage. */
@@ -482,6 +488,7 @@ async function load(
       }))
     ],
     latestRawMembership,
+    latestSnapshotIds: new Set(latestRows.rows.map((row) => row.id)),
     manualChangedAt: manualChanged.rows[0]?.changed_at ?? null,
     manualCreatedAt: manualCreatedRows.rows.map((row) => row.created_at),
     roots: [...rootIds]

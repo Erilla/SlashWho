@@ -137,6 +137,13 @@ That means the maintenance recompute is not completing its cycles — check
 the worker's `character_groups_recompute` records for whether cycles are
 starting, finishing, and finishing inside their budget.
 
+### `page_moved`
+
+The replay reads today's pages after its own consistent read of the groups.
+A page whose root published a new snapshot in between is skipped and reported
+as `page_moved`, and counted in `movedPages` rather than `pages`: it is not a
+failure, and the next replay compares it.
+
 ## Log records
 
 - `character_groups_recompute` with `groupsRecomputed`, `cycleCompleted` and

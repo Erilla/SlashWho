@@ -9,14 +9,29 @@ import {
   loadCharacterGroupsAudit
 } from "@slashwho/database";
 import {
+  applicationConfigSchema,
   legacyResolveSubjects,
   replayCharacterGroups
 } from "@slashwho/application";
 import { requiredEnvironment, runIfMain } from "../lib/cli.mts";
 
-const CONFIG = { DOSSIER_CHARACTER_CEILING: 50 };
+/**
+ * The ceiling the web applies, read with the web's own parser so its default
+ * and bounds cannot drift from it. Only this key is parsed: the full
+ * application config also demands the web's secrets.
+ */
+export function replayConfig(
+  environment: Readonly<Record<string, string | undefined>> = process.env
+): { DOSSIER_CHARACTER_CEILING: number } {
+  const parsed = applicationConfigSchema
+    .pick({ DOSSIER_CHARACTER_CEILING: true })
+    .safeParse(environment);
+  if (!parsed.success) throw new Error("invalid_dossier_character_ceiling");
+  return parsed.data;
+}
 
 export async function main(): Promise<void> {
+  const config = replayConfig();
   const pool = new Pool({
     connectionString: requiredEnvironment("DATABASE_URL")
   });
@@ -27,10 +42,10 @@ export async function main(): Promise<void> {
     for (const key of audit.roots) {
       legacy.set(
         canonicalCharacterId(key),
-        await legacyResolveSubjects(key, repositories, CONFIG)
+        await legacyResolveSubjects(key, repositories, config)
       );
     }
-    const report = replayCharacterGroups(audit, legacy, CONFIG);
+    const report = replayCharacterGroups(audit, legacy, config);
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     if (report.failures.length > 0) process.exitCode = 1;
   } finally {

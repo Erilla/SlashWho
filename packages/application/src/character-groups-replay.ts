@@ -480,6 +480,8 @@ function withRecomputedGroups(graph: GroupGraph): GroupGraph {
  * - Reports growth, research state changes, shared exclusions and the
  *   limitations they remove.
  * - Skips a page any of whose characters published under 10 minutes ago.
+ * - Skips, and reports as `page_moved`, a page resolved from a snapshot other
+ *   than the latest the audit read.
  *
  * `resolve` is the phase 2 resolution; tests replace it.
  */
@@ -507,6 +509,7 @@ export function comparePages(
   const counts: Record<string, number> = {
     pages: 0,
     pendingPages: 0,
+    movedPages: 0,
     provisional: 0,
     unchanged: 0,
     grew: 0,
@@ -540,9 +543,17 @@ export function comparePages(
       bump("pendingPages");
       continue;
     }
+    const page = describeKey(key);
+    // Today's page was resolved after the audit's read. One built from a
+    // snapshot published in between is not comparable with the audit's
+    // groups, and would show its changes as removals.
+    if (!audit.latestSnapshotIds.has(today.snapshot.id)) {
+      bump("movedPages");
+      reports.push({ check: "page_moved", detail: page });
+      continue;
+    }
     bump("pages");
     if (today.provisional) bump("provisional");
-    const page = describeKey(key);
     const next = originId === undefined ? null : resolve(key, graph, config);
     if (!next || originId === undefined) {
       failures.push({ check: "page_missing", detail: page });

@@ -874,6 +874,40 @@ describe("page comparison", () => {
     expect(result.counts).toMatchObject({ pages: 0, pendingPages: 1 });
   });
 
+  it("skips a page whose snapshot moved after the audit's read, as page_moved", () => {
+    // Break caught: the script resolves today's pages after the audit's
+    // consistent read, so a publication in between showed its new members
+    // (or its dropped ones) against the audit's older groups, and failed as
+    // `removed`.
+    const graph = graphOf({
+      names: ["o", "a", "p"],
+      links: [{ a: "o", b: "a", strength: "raiderio" }]
+    });
+    const [id, moved] = page("o", [row("o", "input"), row("p", "claimed")]);
+    const legacy = legacyPages([
+      [id, { ...moved, snapshot: { ...moved.snapshot, id: "snapshot-newer" } }]
+    ]);
+    const result = comparePages(
+      baseAudit({ graph, roots: [key("o")] }),
+      legacy,
+      CONFIG
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.reports).toEqual([
+      { check: "page_moved", detail: "eu/draenor/o" }
+    ]);
+    expect(result.counts).toMatchObject({ pages: 0, movedPages: 1 });
+
+    // The same page from the audit's own snapshot is compared, and fails.
+    expect(
+      comparePages(
+        baseAudit({ graph, roots: [key("o")] }),
+        legacyPages([page("o", [row("o", "input"), row("p", "claimed")])]),
+        CONFIG
+      ).failures
+    ).toEqual([{ check: "removed", detail: "eu/draenor/p from eu/draenor/o" }]);
+  });
+
   it("never prints a suppressed character's key", () => {
     const graph = graphOf({
       names: ["o", "hidden"],
@@ -984,7 +1018,7 @@ function graphOf(
 function baseAudit(
   overrides: Partial<CharacterGroupsAudit> = {}
 ): CharacterGroupsAudit {
-  return {
+  const audit = {
     now: NOW,
     graph: graphOf({}),
     groups: new Map(),
@@ -998,6 +1032,14 @@ function baseAudit(
     roots: [],
     ungroupedSince: new Map(),
     ...overrides
+  };
+  // By default each root's page was resolved from the snapshot the audit
+  // read, the id `page` gives it.
+  return {
+    ...audit,
+    latestSnapshotIds:
+      overrides.latestSnapshotIds ??
+      new Set(audit.roots.map((root) => `snapshot-${root.name}`))
   };
 }
 
