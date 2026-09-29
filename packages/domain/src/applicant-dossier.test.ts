@@ -2312,3 +2312,112 @@ describe("Raider.IO-logged first kills (#732)", () => {
     ]);
   });
 });
+
+describe("parse rows logged under a former identity (#721)", () => {
+  const former: CharacterKey = {
+    region: "eu",
+    realm: "neptulon",
+    name: "erilla"
+  };
+  const parseOf = (percentile: number) => ({
+    damage: { state: "available" as const, percentile },
+    healing: { state: "unavailable" as const },
+    bossDamage: { state: "unavailable" as const }
+  });
+
+  function parsesFor(kills: DossierKillEvidence[]) {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills,
+      limitations: []
+    });
+    return verifiedKill(dossier.raids[0]!.bosses[0]!).bestParses;
+  }
+
+  it("carries no loggedAs for a kill logged under the current name", () => {
+    const [row] = parsesFor([kill(root, { performance: parseOf(90) })]);
+    expect(row).not.toHaveProperty("loggedAs");
+  });
+
+  it("names the former identity when the displayed kill came from it", () => {
+    const [row] = parsesFor([
+      kill(root, {
+        reportUrl: "https://www.warcraftlogs.com/reports/old#fight=8",
+        loggedAs: former,
+        performance: parseOf(90)
+      })
+    ]);
+    expect(row).toMatchObject({ character: "Ryii", loggedAs: former });
+  });
+
+  it("follows the kill whose parse is displayed when a row combines both", () => {
+    const rows = (oldPercentile: number, newPercentile: number) =>
+      parsesFor([
+        kill(root, {
+          killedAt: "2024-10-01T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/old#fight=8",
+          loggedAs: former,
+          performance: parseOf(oldPercentile)
+        }),
+        kill(root, {
+          killedAt: "2024-10-02T20:00:00.000Z",
+          reportUrl: "https://www.warcraftlogs.com/reports/new#fight=8",
+          performance: parseOf(newPercentile)
+        })
+      ]);
+
+    expect(rows(97, 80)[0]).toMatchObject({ loggedAs: former });
+    expect(rows(80, 97)[0]).not.toHaveProperty("loggedAs");
+  });
+
+  it("follows a tier best read under the former identity", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [kill(root, { performance: parseOf(70) })],
+      tierBests: [tierBest(root, { loggedAs: former })],
+      limitations: []
+    });
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.bestParses[0]).toMatchObject({ loggedAs: former });
+  });
+
+  it("prefers the current name when a former name ties the parse", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [kill(root, { performance: parseOf(50) })],
+      tierBests: [
+        tierBest(root, {
+          loggedAs: former,
+          rankingsUrl:
+            "https://www.warcraftlogs.com/character/eu/neptulon/erilla",
+          performance: parseOf(90)
+        }),
+        tierBest(root, {
+          rankingsUrl:
+            "https://www.warcraftlogs.com/character/eu/silvermoon/ryii",
+          performance: parseOf(90)
+        })
+      ],
+      limitations: []
+    });
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.bestParses[0]).not.toHaveProperty("loggedAs");
+  });
+
+  it("never drops the kill evidence it annotates", () => {
+    const dossier = buildApplicantDossier({
+      root,
+      characters: [rootCharacter],
+      kills: [kill(root, { loggedAs: former, performance: parseOf(90) })],
+      limitations: []
+    });
+    const boss = verifiedKill(dossier.raids[0]!.bosses[0]!);
+    expect(boss.firstKill.characters).toEqual([root]);
+    expect(boss.firstKill.reportUrl).toBe(
+      "https://www.warcraftlogs.com/reports/shared#fight=8"
+    );
+  });
+});

@@ -265,9 +265,20 @@ function hasNoParse(kill: StoredCharacterMythicKill): boolean {
   );
 }
 
+/** The queried identity, when the evidence is shown under another (#721). */
+function loggedAsOf(
+  queried: CharacterKey,
+  character: CharacterKey
+): { loggedAs?: CharacterKey } {
+  return canonicalCharacterId(queried) === canonicalCharacterId(character)
+    ? {}
+    : { loggedAs: queried };
+}
+
 function cachedKill(
   kill: StoredCharacterMythicKill,
-  character: CharacterKey
+  character: CharacterKey,
+  queried: CharacterKey
 ): StoredRankKillEvidence {
   return {
     raidId: kill.raidId,
@@ -277,6 +288,7 @@ function cachedKill(
     journalBossId: kill.journalBossId,
     bossOrder: kill.bossOrder,
     character,
+    ...loggedAsOf(queried, character),
     killedAt: kill.killedAt,
     guild: kill.guild ? { ...kill.guild, region: character.region } : null,
     uploader: kill.uploader ?? null,
@@ -292,12 +304,14 @@ function cachedKill(
 
 function cachedTierBest(
   tierBest: StoredCharacterTierBestParse,
-  character: CharacterKey
+  character: CharacterKey,
+  queried: CharacterKey
 ): DossierTierBestParse {
   return {
     raidName: tierBest.raidName,
     bossName: tierBest.bossName,
     character,
+    ...loggedAsOf(queried, character),
     rankingsUrl: tierBest.rankingsUrl,
     performance: tierBest.performance
   };
@@ -480,11 +494,14 @@ async function gatherCharacterEvidence(
   return {
     limitations,
     collectedAt: completed?.run.completedAt ?? null,
-    kills: completed?.kills.map((kill) => cachedKill(kill, attributed)) ?? [],
+    kills:
+      completed?.kills.map((kill) =>
+        cachedKill(kill, attributed, character.key)
+      ) ?? [],
     wipes: completed?.wipes.map((wipe) => cachedWipe(wipe, attributed)) ?? [],
     tierBests:
       completed?.tierBests.map((tierBest) =>
-        cachedTierBest(tierBest, attributed)
+        cachedTierBest(tierBest, attributed, character.key)
       ) ?? [],
     raiderIoFirstKills:
       completed?.raiderIoFirstKills?.map((kill) =>

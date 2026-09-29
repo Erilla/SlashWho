@@ -104,7 +104,10 @@ export function DossierParseList({
               role="group"
             >
               {showCharacterName ? (
-                <DossierCharacterNameByName name={parse.character} />
+                <DossierCharacterNameByName
+                  loggedAs={parse.loggedAs}
+                  name={parse.character}
+                />
               ) : null}
               <span className="dossier-parse-metrics">
                 <ParseMetric

@@ -3449,27 +3449,69 @@ td > .collection-progress {
     min-height: 6.5rem;
   }
 }
-.dossier-character-alias-anchor {
+/* The icon after a name that carries what the name cannot (#721). It is not
+   itself positioned: the tooltip hangs off the row, so it is bounded by the
+   row's width rather than by wherever the icon happens to sit, which keeps it
+   inside the viewport at phone width. */
+.dossier-character-row,
+.dossier-parse-list li {
   position: relative;
-  display: inline-block;
 }
 
-.dossier-character-alias-tooltip {
+.dossier-identity-hint {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.dossier-identity-hint-trigger {
+  display: inline-flex;
+  width: 1.65rem;
+  height: 1.65rem;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: help;
+  transition: color 140ms ease;
+}
+
+.dossier-identity-hint-trigger:hover,
+.dossier-identity-hint-trigger[aria-expanded="true"] {
+  color: var(--text);
+}
+
+.dossier-identity-hint-trigger svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.dossier-identity-hint-tooltip {
   position: absolute;
   z-index: 10;
-  top: calc(100% + 0.4rem);
+  top: calc(100% + 0.25rem);
   left: 0;
   width: max-content;
-  max-width: min(24rem, 80vw);
+  max-width: min(24rem, 100%);
   padding: 0.4rem 0.6rem;
   border-radius: 0.35rem;
   background: #17202b;
   color: #fff;
   box-shadow: 0 4px 12px #0006;
+  overflow-wrap: anywhere;
   visibility: hidden;
 }
 
-.dossier-character-alias-anchor:hover .dossier-character-alias-tooltip,
-.dossier-character-alias-anchor:focus-within .dossier-character-alias-tooltip {
+.dossier-identity-hint-tooltip[data-open="true"] {
   visibility: visible;
+}
+
+.dossier-parse-identity {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
 }

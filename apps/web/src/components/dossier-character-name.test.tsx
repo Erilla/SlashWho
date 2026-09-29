@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it } from "vitest";
 
 import type { CharacterKey, DossierCharacter } from "@slashwho/contracts";
@@ -46,28 +47,58 @@ const sameNamedPriest: DossierCharacter = {
 
 afterEach(cleanup);
 
-it("shows comma-separated historic identities on hover and keyboard focus", () => {
+const formerAliases = [
+  { region: "eu", realm: "neptulon", name: "erilla" },
+  { region: "eu", realm: "draenor", name: "former" }
+] as const;
+
+it("puts the alias list on an icon beside the name, not on the name", () => {
   render(
     <DossierCharacterName
-      character={{
-        ...mage,
-        historicAliases: [
-          { region: "eu", realm: "neptulon", name: "erilla" },
-          { region: "eu", realm: "draenor", name: "former" }
-        ]
-      }}
+      character={{ ...mage, historicAliases: [...formerAliases] }}
       showGuild
     />
   );
-  // The name is a link, so it is already the single focus stop that reveals
-  // the tooltip; a tabindex on top would add a second.
-  const name = screen.getByRole("link", { name: "Ryii" });
+  const icon = screen.getByRole("button", { name: "Also known as" });
   const tooltip = screen.getByRole("tooltip");
-  expect(name).not.toHaveAttribute("tabindex");
-  expect(name).toHaveAttribute("aria-describedby", tooltip.id);
+  expect(icon).toHaveAttribute("aria-describedby", tooltip.id);
   expect(tooltip).toHaveTextContent(
     "Also known as: Erilla-Neptulon, Former-Draenor"
   );
+  // The icon follows the name in the document, so it reads as beside it.
+  const name = screen.getByRole("link", { name: "Ryii" });
+  expect(
+    name.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+});
+
+it("leaves the name a plain link with no tooltip attached", () => {
+  render(
+    <DossierCharacterName
+      character={{ ...mage, historicAliases: [...formerAliases] }}
+      showGuild
+    />
+  );
+  const name = screen.getByRole("link", { name: "Ryii" });
+  expect(name).not.toHaveAttribute("aria-describedby");
+  expect(name).not.toHaveAttribute("tabindex");
+  expect(name).toHaveAttribute("href", "/dossiers/eu/silvermoon/ryii");
+  expect(name.parentElement).not.toHaveClass("dossier-character-alias-anchor");
+});
+
+it("keeps the current character's name out of the tab order", () => {
+  render(
+    <DossierCharacterProvider characters={[mage]} current={mage.key}>
+      <DossierCharacterName
+        character={{ ...mage, historicAliases: [...formerAliases] }}
+        showGuild
+      />
+    </DossierCharacterProvider>
+  );
+  const name = screen.getByText("Ryii");
+  expect(name).not.toHaveAttribute("tabindex");
+  expect(name).not.toHaveAttribute("aria-describedby");
+  expect(screen.getByRole("button", { name: "Also known as" })).toBeVisible();
 });
 
 it("names Warcraft Logs-verified aliases alongside declared ones, once each", () => {
@@ -89,10 +120,81 @@ it("names Warcraft Logs-verified aliases alongside declared ones, once each", ()
   );
 });
 
-it("does not create an alias tooltip when no aliases exist", () => {
+it("shows no icon when no aliases exist", () => {
   render(<DossierCharacterName character={mage} showGuild />);
   expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
   expect(screen.getByText("Ryii")).not.toHaveAttribute("tabindex");
+});
+
+it("shows no icon for inline mentions, which do not ask for the guild", () => {
+  render(
+    <DossierCharacterName
+      character={{ ...mage, historicAliases: [...formerAliases] }}
+    />
+  );
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+});
+
+it("opens the tooltip on a tap and closes it on Escape or a tap elsewhere", async () => {
+  const user = userEvent.setup();
+  render(
+    <DossierCharacterName
+      character={{ ...mage, historicAliases: [...formerAliases] }}
+      showGuild
+    />
+  );
+  const icon = screen.getByRole("button", { name: "Also known as" });
+  expect(icon).toHaveAttribute("aria-expanded", "false");
+
+  fireEvent.click(icon);
+  expect(icon).toHaveAttribute("aria-expanded", "true");
+
+  await user.keyboard("{Escape}");
+  expect(icon).toHaveAttribute("aria-expanded", "false");
+
+  fireEvent.click(icon);
+  await user.pointer({ keys: "[TouchA]", target: document.body });
+  expect(icon).toHaveAttribute("aria-expanded", "false");
+});
+
+it("opens on a mouse hover and closes on Escape while still hovered", async () => {
+  const user = userEvent.setup();
+  render(
+    <DossierCharacterName
+      character={{ ...mage, historicAliases: [...formerAliases] }}
+      showGuild
+    />
+  );
+  const icon = screen.getByRole("button", { name: "Also known as" });
+  const tooltip = screen.getByRole("tooltip");
+  expect(tooltip).toHaveAttribute("data-open", "false");
+  await user.hover(icon);
+  expect(tooltip).toHaveAttribute("data-open", "true");
+  await user.keyboard("{Escape}");
+  expect(tooltip).toHaveAttribute("data-open", "false");
+});
+
+it("says which name a parse was logged under, only when one is given", () => {
+  const former = { region: "eu", realm: "neptulon", name: "erilla" } as const;
+  const { rerender } = render(
+    <DossierCharacterProvider characters={[mage]}>
+      <DossierCharacterNameByName loggedAs={former} name="Ryii" />
+    </DossierCharacterProvider>
+  );
+  expect(
+    screen.getByRole("button", { name: "Logged under a former name" })
+  ).toBeInTheDocument();
+  expect(screen.getByRole("tooltip")).toHaveTextContent(
+    "Logged as Erilla-Neptulon"
+  );
+
+  rerender(
+    <DossierCharacterProvider characters={[mage]}>
+      <DossierCharacterNameByName name="Ryii" />
+    </DossierCharacterProvider>
+  );
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
 });
 
 function dossierCharacter(
