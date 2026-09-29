@@ -857,6 +857,67 @@ describe("character connections: observation writes", () => {
       expect(partial.cycleCompleted).toBe(false);
     });
 
+    it("refuses a maintenance cursor outside a cycle", async () => {
+      await expect(
+        pool.query(
+          `UPDATE character_groups_maintenance
+           SET cursor_group_id = gen_random_uuid(), cycle_started_at = NULL WHERE id = 1`
+        )
+      ).rejects.toThrow(/character_groups_maintenance_cursor_check/);
+    });
+
+    it("records only a cycle that recomputed every group, when two passes overlap", async () => {
+      // Break caught: completing a cycle took three transactions (the step
+      // that found no next group, an ungrouped drain, then the completion)
+      // with no re-check between them. An overlapping pass (pg-boss retries
+      // the job at 300 s while the first handler still runs) could complete
+      // a cycle the other had already cleared, writing a NULL
+      // `last_cycle_started_at`, or stamp complete a cycle its own drain had
+      // just restarted, which recomputed nothing. The replay reads
+      // `last_cycle_started_at` as "every group was recomputed after this".
+      const addCharacters = async (prefix: string, count: number) => {
+        for (let index = 0; index < count; index += 1) {
+          const name = `${prefix}${String.fromCharCode(97 + index)}`;
+          await pool.query(
+            `INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url)
+             VALUES ('eu', 'draenor', $1, $1, 'Mage', 80, 'https://raider.io/x')`,
+            [name]
+          );
+        }
+      };
+      await addCharacters("seeded", 12);
+      await connections().recomputePass({ budgetMs: 30_000 });
+
+      for (let round = 0; round < 10; round += 1) {
+        await addCharacters(`round${String.fromCharCode(97 + round)}`, 3);
+        const passes = await Promise.all([
+          connections().recomputePass({ budgetMs: 30_000 }),
+          connections().recomputePass({ budgetMs: 30_000 })
+        ]);
+        expect(passes.some((pass) => pass.cycleCompleted)).toBe(true);
+
+        const state = await pool.query<{
+          started: boolean;
+          uncovered: string;
+          ungrouped: string;
+        }>(
+          `SELECT m.last_cycle_started_at IS NOT NULL AS started,
+                  (SELECT count(*) FROM character_groups g
+                    WHERE m.last_cycle_started_at IS NULL
+                       OR g.recomputed_at < m.last_cycle_started_at)::text AS uncovered,
+                  (SELECT count(*) FROM characters c
+                    WHERE NOT EXISTS (SELECT 1 FROM character_group_members gm WHERE gm.character_id = c.id))::text AS ungrouped
+             FROM character_groups_maintenance m WHERE m.id = 1`
+        );
+        expect({ round, ...state.rows[0] }).toEqual({
+          round,
+          started: true,
+          uncovered: "0",
+          ungrouped: "0"
+        });
+      }
+    });
+
     it("rebuilds from snapshots under the exclusive lock, excluding concurrent writes", async () => {
       // Break caught: a write interleaving with the rebuild's delete and
       // re-insert left observations the ledger could not explain.

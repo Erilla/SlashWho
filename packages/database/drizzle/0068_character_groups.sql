@@ -98,7 +98,8 @@ CREATE TABLE "character_groups_maintenance" (
 	"cycle_started_at" timestamp with time zone,
 	"last_cycle_started_at" timestamp with time zone,
 	"last_cycle_completed_at" timestamp with time zone,
-	CONSTRAINT "character_groups_maintenance_singleton_check" CHECK ("id" = 1)
+	CONSTRAINT "character_groups_maintenance_singleton_check" CHECK ("id" = 1),
+	CONSTRAINT "character_groups_maintenance_cursor_check" CHECK ("cursor_group_id" IS NULL OR "cycle_started_at" IS NOT NULL)
 );
 --> statement-breakpoint
 INSERT INTO "character_groups_maintenance" ("id") VALUES (1);

@@ -339,7 +339,12 @@ export const characterGroupsMaintenance = pgTable(
     })
   },
   (table) => [
-    check("character_groups_maintenance_singleton_check", sql`${table.id} = 1`)
+    check("character_groups_maintenance_singleton_check", sql`${table.id} = 1`),
+    // A cursor only means something inside a cycle.
+    check(
+      "character_groups_maintenance_cursor_check",
+      sql`${table.cursorGroupId} IS NULL OR ${table.cycleStartedAt} IS NOT NULL`
+    )
   ]
 );
 

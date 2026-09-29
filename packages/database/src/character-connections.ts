@@ -289,12 +289,9 @@ export function createCharacterConnectionRepositories(
              SET cycle_started_at = COALESCE(cycle_started_at, now())
              WHERE id = 1`
           );
-          const ungrouped = await client.query<{ id: string }>(
-            `SELECT c.id FROM characters c LEFT JOIN character_group_members m ON m.character_id = c.id
-             WHERE m.character_id IS NULL ORDER BY c.id LIMIT 1`
-          );
-          if (!ungrouped.rows[0]) return false;
-          await recomputeComponent(client, ungrouped.rows[0].id);
+          const ungrouped = await firstUngrouped(client);
+          if (ungrouped === null) return false;
+          await recomputeComponent(client, ungrouped);
           return true;
         });
 
@@ -304,14 +301,17 @@ export function createCharacterConnectionRepositories(
         if (!(await assignNextUngrouped())) break;
         ungroupedAssigned += 1;
       }
-      if (!withinBudget()) {
-        return { groupsRecomputed, ungroupedAssigned, cycleCompleted: false };
-      }
 
       for (;;) {
         if (!withinBudget()) {
           return { groupsRecomputed, ungroupedAssigned, cycleCompleted: false };
         }
+        // Every step, the cycle's end included, runs in one transaction
+        // under one hold of the groups lock. Ending the cycle in later
+        // transactions let an overlapping pass (pg-boss retries the job at
+        // its expiry while the first handler still runs) clear or restart
+        // the cycle in between: the completion then recorded a NULL start,
+        // or stamped complete a fresh cycle that had recomputed nothing.
         const step = await withTransaction(pool, async (client) => {
           await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
           await lockRebuildShared(client);
@@ -331,7 +331,27 @@ export function createCharacterConnectionRepositories(
             [cursor]
           );
           const group = next.rows[0];
-          if (!group) return { kind: "no_next_group" as const };
+          if (!group) {
+            // The walk is past the last group. A character created since the
+            // drain above still needs a group before the cycle may end. Its
+            // new group may sort before the cursor, but it is stamped within
+            // this cycle, so the cycle still covers it.
+            const ungrouped = await firstUngrouped(client);
+            if (ungrouped !== null) {
+              await recomputeComponent(client, ungrouped);
+              return { kind: "ungrouped_assigned" as const };
+            }
+            const completed = await client.query(
+              `UPDATE character_groups_maintenance
+               SET last_cycle_started_at = cycle_started_at, last_cycle_completed_at = now(),
+                   cycle_started_at = NULL, cursor_group_id = NULL
+               WHERE id = 1 AND cycle_started_at IS NOT NULL`
+            );
+            return {
+              kind: "cycle_ended" as const,
+              completed: completed.rowCount === 1
+            };
+          }
           if (!group.seed) {
             // An empty group has nothing to recompute: drop it and move on,
             // rather than leaving it to be skipped forever.
@@ -353,43 +373,13 @@ export function createCharacterConnectionRepositories(
         });
 
         if (step.kind === "group_recomputed") groupsRecomputed += 1;
-
-        if (step.kind === "no_next_group") {
-          // Check once more for ungrouped characters -- created since the
-          // batch above ran -- before recording the cycle as complete.
-          const before = ungroupedAssigned;
-          while (withinBudget()) {
-            if (!(await assignNextUngrouped())) break;
-            ungroupedAssigned += 1;
-          }
-          if (!withinBudget()) {
-            return {
-              groupsRecomputed,
-              ungroupedAssigned,
-              cycleCompleted: false
-            };
-          }
-          if (ungroupedAssigned === before) {
-            await withTransaction(pool, async (client) => {
-              await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
-              await lockRebuildShared(client);
-              await lockGroups(client);
-              await client.query(
-                `UPDATE character_groups_maintenance
-                 SET last_cycle_started_at = cycle_started_at, last_cycle_completed_at = now(),
-                     cycle_started_at = NULL, cursor_group_id = NULL
-                 WHERE id = 1`
-              );
-            });
-            return {
-              groupsRecomputed,
-              ungroupedAssigned,
-              cycleCompleted: true
-            };
-          }
-          // Draining created new groups that may sort past the cursor;
-          // give the walk another pass before trying to finish again.
-          continue;
+        if (step.kind === "ungrouped_assigned") ungroupedAssigned += 1;
+        if (step.kind === "cycle_ended") {
+          return {
+            groupsRecomputed,
+            ungroupedAssigned,
+            cycleCompleted: step.completed
+          };
         }
       }
     },
@@ -428,6 +418,15 @@ export function createCharacterConnectionRepositories(
     }
   };
   return { characterConnections };
+}
+
+/** The first character with no group, or null when every one has a group. */
+async function firstUngrouped(client: PoolClient): Promise<string | null> {
+  const ungrouped = await client.query<{ id: string }>(
+    `SELECT c.id FROM characters c LEFT JOIN character_group_members m ON m.character_id = c.id
+     WHERE m.character_id IS NULL ORDER BY c.id LIMIT 1`
+  );
+  return ungrouped.rows[0]?.id ?? null;
 }
 
 /**
