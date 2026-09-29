@@ -428,10 +428,12 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
 
   /**
    * Phase 1's best-effort observation write (#738). It runs after the
-   * publication committed and after the run's timing log, never throws, and
-   * ignores the job's abort signal, so it cannot change an outcome. On a
-   * shutdown it still writes, but leaves the group recompute to the hourly
-   * maintenance pass.
+   * publication committed and after the run's timing log, and never throws,
+   * so it cannot change an outcome. The write goes ahead whether or not the
+   * job has been aborted; an abort only skips the group recompute, which the
+   * hourly maintenance pass then covers. A failure logs its `stage`: a lost
+   * write restarts the replay's three days, while a lost recompute heals in
+   * the maintenance cycle.
    */
   async function writeCommittedObservations(
     write: ObservationWriteInput,
@@ -439,28 +441,45 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
   ): Promise<void> {
     const connections = options.repositories.characterConnections;
     if (!connections) return;
+    let result: Awaited<ReturnType<typeof connections.writeObservations>>;
     try {
-      const result = await connections.writeObservations(write);
-      if (!signal.aborted) {
-        await connections.recomputeGroupsOf(result.changedCharacterIds);
-      }
-      if (result.unknownCharacters > 0) {
+      result = await connections.writeObservations(write);
+    } catch (error) {
+      logObservationFailure("write", error);
+      return;
+    }
+    if (result.unknownCharacters > 0) {
+      try {
         options.logger?.info({
           event: "character_groups_write",
           unknownCharacters: result.unknownCharacters
         });
-      }
-    } catch (error) {
-      // Runs inside the handler's `finally`: a logger that throws here would
-      // replace the run's own outcome, so it is swallowed.
-      try {
-        options.logger?.info({
-          event: "character_groups_write_failed",
-          errorName: error instanceof Error ? error.name : "unknown"
-        });
       } catch {
-        // Best effort only.
+        // Best effort only, as below.
       }
+    }
+    if (signal.aborted) return;
+    try {
+      await connections.recomputeGroupsOf(result.changedCharacterIds);
+    } catch (error) {
+      logObservationFailure("recompute", error);
+    }
+  }
+
+  function logObservationFailure(
+    stage: "write" | "recompute",
+    error: unknown
+  ): void {
+    // Runs inside the handler's `finally`: a logger that throws here would
+    // replace the run's own outcome, so it is swallowed.
+    try {
+      options.logger?.info({
+        event: "character_groups_write_failed",
+        stage,
+        errorName: error instanceof Error ? error.name : "unknown"
+      });
+    } catch {
+      // Best effort only.
     }
   }
 

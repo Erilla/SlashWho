@@ -609,8 +609,11 @@ route: `pageMembers`, labels and research state.
 - **Three clean days.** The replay passes against test on three consecutive
   days of live publications. Drift is zero after each completed cursor cycle.
 - **No lost writes.** In those three days there is no
-  `character_groups_write_failed`, and no publication missing a ledger row. If
-  either happens, fix its cause, run the rebuild, and restart the three days.
+  `character_groups_write_failed` with `stage: "write"`, and no publication
+  missing a ledger row. If either happens, fix its cause, run the rebuild,
+  and restart the three days. A `stage: "recompute"` failure loses no write:
+  the maintenance cycle heals it, and the replay's `drift_stale_pending`
+  catches one that never heals.
 - **Every risky path was exercised.** The window must include at least one
   publication of each of:
   - a first sweep cycle (`createAndFinishFingerprintSweep`);

@@ -58,8 +58,18 @@ railway logs <deployment-id> -s worker -e test --json -n 5000 --since <ISO> --un
 in 30-minute slices, filtering the `--json` lines (one object per line, with
 `event` among the fields) in a small script rather than by grepping text.
 
-A failure, or an `a_completeness` finding, means: fix the cause, rebuild, and
-restart the three days.
+Each `character_groups_write_failed` record carries a `stage`:
+
+- `stage: "write"` is a lost observation write, which the replay's ledger
+  checks cannot explain. It restarts the three days.
+- `stage: "recompute"` is a group recompute that failed after its write
+  committed, or a maintenance pass that failed. No write was lost: the next
+  maintenance cycle recomputes the groups it missed. It does not restart the
+  three days on its own. A recompute that never heals shows up in the replay
+  as `drift_stale_pending`, which does.
+
+A replay failure, a `stage: "write"` record, or an `a_completeness` finding
+means: fix the cause, rebuild, and restart the three days.
 
 ## Triggering each risky path
 
@@ -103,13 +113,16 @@ Each path needs at least one publication in the window, and the replay's
 
 ## Exit criteria
 
-From the spec, with Low 1:
+From the spec:
 
 - three consecutive days of passing replays;
 - no failing drift (`drift` or `drift_stale_pending`) after each completed
   cursor cycle — `drift_pending` and `drift_manual` are reports, not
   failures, and do not block on their own;
-- no `character_groups_write_failed` and no `a_completeness` finding;
+- no `character_groups_write_failed` with `stage: "write"`, and no
+  `a_completeness` finding — a `stage: "recompute"` record heals through the
+  maintenance cycle and blocks only if the replay then reports
+  `drift_stale_pending`;
 - every path above appears in `coverage`;
 - the integration suite passing.
 
@@ -129,7 +142,8 @@ starting, finishing, and finishing inside their budget.
 - `character_groups_recompute` with `groupsRecomputed`, `cycleCompleted` and
   `durationMs`;
 - `character_groups_write` with `unknownCharacters`;
-- `character_groups_write_failed` with `errorName`.
+- `character_groups_write_failed` with `stage` (`write` or `recompute`) and
+  `errorName`, plus `durationMs` when the maintenance pass logs it.
 
 ## Rollback
 

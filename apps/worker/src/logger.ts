@@ -91,6 +91,8 @@ const allowlist = new Set([
   "cycleCompleted",
   "ungroupedAssigned",
   "unknownCharacters",
+  // `write` or `recompute`: which part of a character groups write failed.
+  "stage",
   // Webhook delivery failures name the alert, never the webhook.
   "alertEvent",
   // Measurement totals outside the provider-prefixed families below.

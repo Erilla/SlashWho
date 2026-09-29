@@ -1075,6 +1075,9 @@ async function characterGroupsRecompute(context: WorkerContext): Promise<void> {
   } catch (error) {
     logger?.info({
       event: "character_groups_write_failed",
+      // Nothing was written here, so no write was lost: the next
+      // maintenance cycle recomputes what this one missed.
+      stage: "recompute",
       errorName: errorName(error),
       durationMs: elapsedMs(clock, startedAt)
     });

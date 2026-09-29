@@ -473,10 +473,23 @@ describe("worker logger", () => {
       durationMs: 12
     });
     logger.info({ event: "character_groups_write", unknownCharacters: 1 });
+    logger.info({
+      event: "character_groups_write_failed",
+      stage: "recompute",
+      errorName: "Error"
+    });
 
     const parsed = lines.map(
       (line) => JSON.parse(line) as Record<string, unknown>
     );
+    // Only a lost write restarts the replay's three days, so the stage must
+    // survive the allowlist.
+    expect(parsed[2]).toMatchObject({
+      event: "character_groups_write_failed",
+      stage: "recompute",
+      errorName: "Error"
+    });
+    expect(parsed[2]).not.toHaveProperty("droppedFields");
     expect(parsed[0]).toMatchObject({
       event: "character_groups_recompute",
       groupsRecomputed: 3,

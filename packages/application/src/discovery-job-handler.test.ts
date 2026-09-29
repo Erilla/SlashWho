@@ -3340,9 +3340,51 @@ describe("observation writes after publication", () => {
     await handlerFor(repositories, new MutableGateway(), {
       logger: { info: (value) => logged.push(value) }
     }).execute(run.id, delivery());
-    expect(logged.map((record) => record.event)).toContain(
-      "character_groups_write_failed"
-    );
+    // A lost write restarts the replay's three days; the stage says so.
+    expect(
+      logged.filter(
+        (record) => record.event === "character_groups_write_failed"
+      )
+    ).toEqual([
+      {
+        event: "character_groups_write_failed",
+        stage: "write",
+        errorName: "Error"
+      }
+    ]);
+    await expect(
+      repositories.snapshots.getCurrent(rootKey)
+    ).resolves.toMatchObject({ state: "complete" });
+  });
+
+  it("logs a failed recompute apart from a failed write, and changes nothing else", async () => {
+    // Break caught: a lost recompute, which the maintenance cycle heals,
+    // logged exactly as a lost write, which restarts the three days.
+    const repositories = createMemoryRepositories();
+    const logged: Record<string, unknown>[] = [];
+    const connections = recordingConnections();
+    repositories.characterConnections = {
+      ...connections.repository,
+      async recomputeGroupsOf() {
+        throw new Error("lock timeout");
+      }
+    };
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await handlerFor(repositories, new MutableGateway(), {
+      logger: { info: (value) => logged.push(value) }
+    }).execute(run.id, delivery());
+    expect(connections.writes).toHaveLength(1);
+    expect(
+      logged.filter(
+        (record) => record.event === "character_groups_write_failed"
+      )
+    ).toEqual([
+      {
+        event: "character_groups_write_failed",
+        stage: "recompute",
+        errorName: "Error"
+      }
+    ]);
     await expect(
       repositories.snapshots.getCurrent(rootKey)
     ).resolves.toMatchObject({ state: "complete" });

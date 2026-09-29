@@ -1903,6 +1903,8 @@ describe("worker runtime", () => {
       logged.find((record) => record.event === "character_groups_write_failed")
     ).toEqual({
       event: "character_groups_write_failed",
+      // A maintenance failure loses no write: the next cycle heals it.
+      stage: "recompute",
       errorName: "RangeError",
       durationMs: expect.any(Number)
     });
