@@ -123,7 +123,11 @@ describe("ranked Mythic backfill", () => {
     expect(reportReads).toBeGreaterThan(0);
   });
 
-  it("skips a report with null ranked characters and continues to the next fight", async () => {
+  it("reads a report with null ranked characters once, and proves it by a name a later report proved", async () => {
+    // The unlinked report names Erilla nowhere, so its first ranking proves
+    // nothing. The linked one proves Erilla by canonical id, and the other
+    // metric's ranking of the unlinked report then proves it with no second
+    // read (#742).
     let unlinkedReads = 0;
     const fetch = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -207,7 +211,8 @@ describe("ranked Mythic backfill", () => {
     expect(result).toMatchObject({
       kind: "evidence",
       kills: [
-        { fightUrl: "https://www.warcraftlogs.com/reports/linked#fight=11" }
+        { fightUrl: "https://www.warcraftlogs.com/reports/linked#fight=11" },
+        { fightUrl: "https://www.warcraftlogs.com/reports/unlinked#fight=10" }
       ]
     });
     if (result.kind !== "evidence") throw new Error("expected_evidence");
@@ -1628,13 +1633,17 @@ describe("reading each ranked report once (#712)", () => {
       rankedCharacters?: null;
       requestCap?: number;
       cursor?: WarcraftLogsRankedBackfillCursor;
-      /** Walk Kin'garoth's ranking before Argus's. */
+      /**
+       * Walk Kin'garoth's ranking before Argus's. The walk takes encounters
+       * in id order, so this sets which boss has the lower id.
+       */
       kingarothFirst?: boolean;
       /** Reshapes the night's kills before they are answered. */
       reshape?: (fights: ReturnType<typeof fight>[]) => void;
     }> = {}
   ) => {
     const reads: string[] = [];
+    const argusId = options.kingarothFirst ? 2092 : 2080;
     const client = createWarcraftLogsClient({
       fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(
@@ -1654,15 +1663,10 @@ describe("reading each ranked report once (#712)", () => {
                 character: {
                   id: 40989140,
                   damage: {
-                    rankings: options.kingarothFirst
-                      ? [
-                          { encounterID: 2088, totalKills: 1 },
-                          { encounterID: 2092, totalKills: 1 }
-                        ]
-                      : [
-                          { encounterID: 2092, totalKills: 1 },
-                          { encounterID: 2088, totalKills: 1 }
-                        ]
+                    rankings: [
+                      { encounterID: argusId, totalKills: 1 },
+                      { encounterID: 2088, totalKills: 1 }
+                    ]
                   },
                   healing: { rankings: [] }
                 }
@@ -1679,7 +1683,7 @@ describe("reading each ranked report once (#712)", () => {
                       {
                         report: {
                           code: "night",
-                          fightID: variables.encounterId === 2092 ? 10 : 11
+                          fightID: variables.encounterId === argusId ? 10 : 11
                         },
                         spec: "Holy"
                       }
@@ -1693,14 +1697,14 @@ describe("reading each ranked report once (#712)", () => {
         const value = report("night", 10);
         const entry = value.data.reportData.report;
         entry.zone.encounters = [
-          { id: 2092, journalID: 2032 },
+          { id: argusId, journalID: 2032 },
           { id: 2088, journalID: 1987 },
           { id: 2069, journalID: 1983 }
         ];
         // A read that names one fight -- the per-fight read this replaced --
         // is answered with that fight alone.
         const fights = [
-          fight(10, 2092, "Argus the Unmaker"),
+          fight(10, argusId, "Argus the Unmaker"),
           fight(11, 2088, "Kin'garoth"),
           // Killed that night, but not an encounter the character is ranked
           // on in this zone.
@@ -1813,13 +1817,453 @@ describe("reading each ranked report once (#712)", () => {
   });
 
   it("reads a report that ranks nobody once, not once a ranked fight", async () => {
-    // Tomb of Sargeras's reports carry no rankedCharacters, so no kill in
-    // them can be proved; each was read again for every ranked fight (73
-    // reads of 48 reports, crediting nothing).
+    // Tomb of Sargeras's reports carry no rankedCharacters. Each was read
+    // again for every ranked fight (73 reads of 48 reports), and without a
+    // known name in the fight none of it can be proved (#742).
     const { result, reads } = await walk({ rankedCharacters: null });
 
     expect(reads).toEqual(["night"]);
     expect(result).toMatchObject({ kind: "evidence", kills: [] });
     expect(result).not.toHaveProperty("limitation");
+  });
+});
+
+describe("proving a report that ranks nobody by the ranking (#742)", () => {
+  // Tomb of Sargeras's 48 ranked reports all answer `rankedCharacters: null`
+  // (2017 logs). In each of the 73 fights the character is ranked on, one
+  // player carries the character's former name and the ranked spec (measured
+  // 2026-09-28). The ranking is the character's own, by id, and names the
+  // fight, so that player is the character.
+  type Player = Readonly<{ name: string; server: string; spec: string }>;
+  type Boss = "argus" | "kingaroth";
+  const erilla: Player = { name: "Erilla", server: "Neptulon", spec: "Holy" };
+  const ryun: Player = { name: "Ryun", server: "Silvermoon", spec: "Holy" };
+  const stranger: Player = {
+    name: "Someone",
+    server: "Neptulon",
+    spec: "Holy"
+  };
+  const formerName = [{ name: "erilla", realm: "neptulon" }];
+  const walk = async (
+    options: Readonly<{
+      reports: readonly Readonly<{
+        code: string;
+        players?: readonly Player[];
+        /** Names the character by canonical id, as Antorus's reports do. */
+        ranked?: boolean;
+        /** Ranks somebody else only. */
+        ranksOther?: boolean;
+        /** The spec the log gives the first player on Kin'garoth. */
+        kingarothSpec?: string;
+        /** Replaces every fight's `friendlySpecs`; null leaves it out. */
+        specs?: readonly string[] | null;
+        /** The zone partition the report is ranked in; 1 unless set. */
+        partition?: number;
+      }>[];
+      formerNames?: readonly Readonly<{ name: string; realm: string }>[];
+      /**
+       * Walk Kin'garoth's ranking before Argus's. The walk takes encounters
+       * in id order, so this sets which boss has the lower id.
+       */
+      kingarothFirst?: boolean;
+      /** The reports a boss's ranking names under a metric; all unless set. */
+      rankedBy?: (boss: Boss, metric: "hps" | "dps") => readonly string[];
+      /** Through the whole collection, with a tier search, not the walk alone. */
+      collect?: boolean;
+    }>
+  ) => {
+    const reads: string[] = [];
+    const asked: string[] = [];
+    const argusId = options.kingarothFirst ? 2092 : 2080;
+    const kingarothId = 2088;
+    const partitions = [
+      ...new Set(options.reports.map((report) => report.partition ?? 1))
+    ].sort();
+    const client = createWarcraftLogsClient({
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === "string" || input instanceof URL ? input : input.url
+        );
+        if (url.pathname === "/oauth/token")
+          return Response.json({ access_token: "token", expires_in: 3600 });
+        const { query, variables } = JSON.parse(String(init?.body)) as {
+          query: string;
+          variables: Record<string, number | string>;
+        };
+        asked.push(query.match(/query (\w+)/)?.[1] ?? "");
+        if (query.includes("HistoricRaidZones"))
+          return Response.json({
+            data: {
+              worldData: {
+                zones: [
+                  {
+                    id: 17,
+                    name: "Antorus, The Burning Throne",
+                    partitions: partitions.map((id) => ({ id }))
+                  }
+                ]
+              }
+            }
+          });
+        if (query.includes("HistoricZoneRankings"))
+          return Response.json({
+            data: {
+              characterData: {
+                character: {
+                  id: 40989140,
+                  damage: {
+                    rankings: [
+                      { encounterID: argusId, totalKills: 1 },
+                      { encounterID: kingarothId, totalKills: 1 }
+                    ]
+                  },
+                  healing: { rankings: [] }
+                }
+              }
+            }
+          });
+        if (query.includes("HistoricEncounterRankings")) {
+          const boss: Boss =
+            variables.encounterId === argusId ? "argus" : "kingaroth";
+          const metric = query.includes("metric: hps") ? "hps" : "dps";
+          const codes =
+            options.rankedBy?.(boss, metric) ??
+            options.reports.map(({ code }) => code);
+          return Response.json({
+            data: {
+              characterData: {
+                character: {
+                  encounterRankings: {
+                    ranks: options.reports
+                      .filter(
+                        (report) =>
+                          codes.includes(report.code) &&
+                          (report.partition ?? 1) === variables.partition
+                      )
+                      .map(({ code }) => ({
+                        report: { code, fightID: boss === "argus" ? 10 : 11 },
+                        spec: "Holy"
+                      }))
+                  }
+                }
+              }
+            }
+          });
+        }
+        if (!query.includes("HistoricRankedReport"))
+          return Response.json({ data: null });
+        const code = String(variables.code);
+        reads.push(code);
+        const night = options.reports.find((item) => item.code === code)!;
+        const players = night.players ?? [erilla];
+        const actors = players.map((player, index) => ({
+          id: 7 + index,
+          name: player.name,
+          server: player.server,
+          type: "Player"
+        }));
+        const fight = (id: number, encounterID: number, name: string) => ({
+          id,
+          encounterID,
+          name,
+          startTime: id * 1000,
+          endTime: id * 1000 + 500,
+          kill: true,
+          difficulty: 5,
+          friendlyPlayers: actors.map((actor) => actor.id),
+          ...(night.specs === null
+            ? {}
+            : {
+                friendlySpecs:
+                  night.specs ??
+                  players.map((player, index) =>
+                    id === 11 && index === 0 && night.kingarothSpec
+                      ? night.kingarothSpec
+                      : player.spec
+                  )
+              }),
+          gameZone: { id: 999, name: "Antorus, The Burning Throne" }
+        });
+        const identity = (canonicalID: number, name: string) => ({
+          id: canonicalID,
+          canonicalID,
+          name,
+          server: { slug: "neptulon", name: "Neptulon" }
+        });
+        return Response.json({
+          data: {
+            reportData: {
+              report: {
+                code,
+                startTime: Date.UTC(2018, 0, 1),
+                owner: null,
+                guild: null,
+                zone: {
+                  id: 17,
+                  name: "Antorus, The Burning Throne",
+                  encounters: [
+                    { id: argusId, journalID: 2032 },
+                    { id: kingarothId, journalID: 1987 }
+                  ]
+                },
+                rankedCharacters: night.ranked
+                  ? [identity(40989140, "Erilla")]
+                  : night.ranksOther
+                    ? [identity(1, "Someone")]
+                    : null,
+                masterData: { actors },
+                fights: [
+                  fight(10, argusId, "Argus the Unmaker"),
+                  fight(11, kingarothId, "Kin'garoth")
+                ]
+              }
+            }
+          }
+        });
+      },
+      clientId: "id",
+      clientSecret: "secret"
+    });
+    const ranked = {
+      journalRaidId: "946",
+      requestCap: 60,
+      ...(options.formerNames ? { formerNames: options.formerNames } : {})
+    };
+    if (options.collect) {
+      const collected = await client.getFirstKillReports(key, {
+        requestCap: 0,
+        targetedOnly: true,
+        parseRequestCap: 1,
+        rankedBackfill: ranked,
+        tierSearch: {
+          from: "2017-11-28T00:00:00.000Z",
+          to: "2018-07-17T00:00:00.000Z",
+          guilds: [{ name: "Guild", realm: "silvermoon", region: "eu" }],
+          requestCap: 10
+        }
+      });
+      return { collected, asked, reads };
+    }
+    const result = await client.getRankedKillReports(key, ranked);
+    if (result.kind !== "evidence") throw new Error("expected_evidence");
+    return {
+      result,
+      reads,
+      kills: result.kills.map((kill) => kill.fightUrl).sort()
+    };
+  };
+  const both = (code: string) => [
+    `https://www.warcraftlogs.com/reports/${code}#fight=10`,
+    `https://www.warcraftlogs.com/reports/${code}#fight=11`
+  ];
+  const nights = (count: number, players?: readonly Player[]) =>
+    ["one", "two", "three", "four", "five"].slice(0, count).map((code) => ({
+      code,
+      ...(players ? { players } : {})
+    }));
+
+  it("credits every kill of the report under a linked former name", async () => {
+    const { result, reads, kills } = await walk({
+      reports: [{ code: "tomb" }],
+      formerNames: formerName
+    });
+
+    expect(reads).toEqual(["tomb"]);
+    expect(kills).toEqual(both("tomb"));
+    expect(result).not.toHaveProperty("limitation");
+    expect(result).not.toHaveProperty("unreadReports");
+  });
+
+  it("credits the report under the character's current name", async () => {
+    const { kills } = await walk({
+      reports: [{ code: "tomb", players: [ryun] }]
+    });
+
+    expect(kills).toEqual(both("tomb"));
+  });
+
+  it("credits it under a name the walk proved by canonical id", async () => {
+    const { kills } = await walk({
+      reports: [{ code: "antorus", ranked: true }, { code: "tomb" }]
+    });
+
+    expect(kills).toEqual([...both("antorus"), ...both("tomb")]);
+  });
+
+  it("credits it under a name proved after its last ranking, in either order", async () => {
+    // Break caught in review of #744: a report was decoded again only when a
+    // later ranking named it, so one ranked once, before the name was
+    // proved, stayed unproved. Kin'garoth alone is ranked here.
+    for (const tombFirst of [true, false]) {
+      const [hps, dps] = tombFirst ? ["tomb", "antorus"] : ["antorus", "tomb"];
+      const { reads, kills } = await walk({
+        reports: [{ code: "antorus", ranked: true }, { code: "tomb" }],
+        rankedBy: (boss, metric) =>
+          boss === "argus" ? [] : [metric === "hps" ? hps : dps]
+      });
+
+      expect(reads, String(tombFirst)).toEqual([hps, dps]);
+      expect(kills, String(tombFirst)).toEqual([
+        ...both("antorus"),
+        ...both("tomb")
+      ]);
+    }
+  });
+
+  it("credits nothing when the ranked fight's player logs another spec", async () => {
+    const { kills } = await walk({
+      reports: [{ code: "tomb", players: [{ ...erilla, spec: "Shadow" }] }],
+      formerNames: formerName
+    });
+
+    expect(kills).toEqual([]);
+  });
+
+  it("credits nothing, and goes on, when the fight's specs are missing or misaligned", async () => {
+    // Break caught in review of #744: either was schema drift, which ends
+    // the walk and parks every later press on the one report.
+    for (const specs of [null, ["Holy", "Shadow"]]) {
+      const { result, reads, kills } = await walk({
+        reports: [
+          { code: "tomb", specs },
+          { code: "antorus", ranked: true }
+        ],
+        formerNames: formerName
+      });
+
+      expect(reads, String(specs)).toEqual(["tomb", "antorus"]);
+      expect(kills, String(specs)).toEqual(both("antorus"));
+      expect(result, String(specs)).not.toHaveProperty("limitation");
+    }
+  });
+
+  it("is proved by any fight ranked in it, whichever boss comes first", async () => {
+    // Kin'garoth is ranked Holy but logged Shadow, so its ranking alone
+    // proves nothing. Argus's does, and the report is read once either way.
+    for (const kingarothFirst of [false, true]) {
+      const { reads, kills } = await walk({
+        reports: [{ code: "tomb", kingarothSpec: "Shadow" }],
+        formerNames: formerName,
+        kingarothFirst,
+        // One metric, so the second boss is the only other ranking of it.
+        rankedBy: (_boss, metric) => (metric === "hps" ? ["tomb"] : [])
+      });
+
+      expect(reads, String(kingarothFirst)).toEqual(["tomb"]);
+      expect(kills, String(kingarothFirst)).toEqual(both("tomb"));
+    }
+  });
+
+  it("credits nothing when two players in the ranked fight carry known names", async () => {
+    const { kills } = await walk({
+      reports: [{ code: "tomb", players: [erilla, ryun] }],
+      formerNames: formerName
+    });
+
+    expect(kills).toEqual([]);
+  });
+
+  it("matches the known name on its own realm only", async () => {
+    const elsewhere = { ...erilla, server: "Silvermoon" };
+    const alone = await walk({
+      reports: [{ code: "tomb", players: [elsewhere] }],
+      formerNames: formerName
+    });
+    const beside = await walk({
+      reports: [{ code: "tomb", players: [elsewhere, erilla] }],
+      formerNames: formerName
+    });
+
+    expect(alone.kills).toEqual([]);
+    expect(beside.kills).toEqual(both("tomb"));
+  });
+
+  it("matches a realm's display name to its slug", async () => {
+    const { kills } = await walk({
+      reports: [
+        { code: "tomb", players: [{ ...erilla, server: "Twisting Nether" }] }
+      ],
+      formerNames: [{ name: "erilla", realm: "twisting-nether" }]
+    });
+
+    expect(kills).toEqual(both("tomb"));
+  });
+
+  it("stops reading after three reports that rank nobody credit nothing, and says so", async () => {
+    // Without the former name nothing in Tomb can be proved, and reading all
+    // 48 reports cost about 100 points a press for nothing.
+    const { result, reads, kills } = await walk({ reports: nights(5) });
+
+    expect(reads).toEqual(["one", "two", "three"]);
+    expect(kills).toEqual([]);
+    expect(result).not.toHaveProperty("limitation");
+    expect(result).not.toHaveProperty("cursor");
+    expect(result).toMatchObject({ unreadReports: true });
+  });
+
+  it("records the tier search as unprovable, not searched, and walks no attendance", async () => {
+    // Break caught in review of #744: a stopped walk read as a finished one,
+    // so reports never read looked like "searched, nothing there".
+    const { collected, asked } = await walk({
+      reports: nights(5),
+      collect: true
+    });
+
+    expect(collected).toMatchObject({
+      tierSearch: { outcome: "unprovable", requests: 0 }
+    });
+    expect(asked).not.toContain("GuildAttendance");
+    expect(asked).not.toContain("CharacterGuilds");
+  });
+
+  it("counts each partition on its own", async () => {
+    // Break caught in review of #744: partitions run oldest first, and three
+    // unprovable reports in the first stopped the walk before the second,
+    // whose report ranks the character by canonical id. What that report
+    // proves then proves the first partition's reports too.
+    const { reads, kills } = await walk({
+      reports: [
+        ...nights(4).map((night) => ({ ...night, partition: 1 })),
+        { code: "antorus", ranked: true, partition: 2 }
+      ]
+    });
+
+    expect(reads).toEqual(["one", "two", "three", "antorus"]);
+    expect(kills).toEqual(
+      ["antorus", "one", "two", "three"].flatMap(both).sort()
+    );
+  });
+
+  it("keeps reading once a report that ranks nobody is proved", async () => {
+    const { reads, kills } = await walk({
+      reports: [{ code: "tomb" }, ...nights(4, [stranger])],
+      formerNames: formerName
+    });
+
+    expect(reads).toEqual(["tomb", "one", "two", "three", "four"]);
+    expect(kills).toEqual(both("tomb"));
+  });
+
+  it("keeps reading a zone that has credited a kill by canonical id", async () => {
+    const { reads, kills } = await walk({
+      reports: [{ code: "antorus", ranked: true }, ...nights(4, [stranger])]
+    });
+
+    expect(reads).toEqual(["antorus", "one", "two", "three", "four"]);
+    expect(kills).toEqual(both("antorus"));
+  });
+
+  it("keeps reading a tier that has shown a report ranking anyone", async () => {
+    // Its logs are not all from before `rankedCharacters`, so a later report
+    // may still prove the character by canonical id.
+    const { reads, kills } = await walk({
+      reports: [
+        { code: "other", players: [stranger], ranksOther: true },
+        ...nights(4, [stranger])
+      ]
+    });
+
+    expect(reads).toEqual(["other", "one", "two", "three", "four"]);
+    expect(kills).toEqual([]);
   });
 });

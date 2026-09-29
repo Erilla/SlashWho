@@ -546,6 +546,51 @@ nearly all of them duplicate copies. On one tier with no `rankedCharacters`
 at all (2017), a read of each ranked fight became a read of each report: 73
 reads to 48.
 
+### Reports that rank nobody (#742)
+
+Logs from before `rankedCharacters` existed answer it with `null`: all 48
+of one character's Tomb of Sargeras reports did (July to November 2017).
+Nothing in those reports names the character by id. The ranking does. It is
+asked for by the character's Warcraft Logs id and names the report and fight,
+so the character was one of that fight's players. Such a report is proved
+through the ranked fight instead:
+
+- **The actor** is the one player in the ranked fight's `friendlyPlayers`
+  carrying a name the character is known by, whose `friendlySpecs` entry is
+  the spec the ranking gives. Known names are the current one, the linked
+  historic aliases, and any name the walk has already proved by canonical id.
+  Two players with known names, a different spec, no known name at all, or
+  `friendlySpecs` missing or out of line with the players prove nothing, and
+  credit nothing. None of them is drift, which would end the walk and park
+  every later press on that one report.
+- **Any ranked fight can prove it, whenever.** A report that ranks nobody and
+  is not proved yet stays in memory for the rest of the walk, with every
+  ranked fight of it seen so far. It is decoded again, with no second read,
+  when another boss's or the other metric's ranking names it, and whenever
+  the walk proves a new name by canonical id. The kills credited do not
+  depend on which boss or report the walk reached first.
+- **What it credits** once proved is what a proved report always credits:
+  every kill of the zone's ranked encounters that the actor was in.
+- **Stopping:** once three reports that rank nobody have credited nothing in
+  one zone and partition, the walk reads no more of that scope's reports. It
+  does not stop if it has accepted a kill, or if the scope has read a report
+  that ranks anyone. Partitions are walked oldest first, and a later one may
+  rank the character, or teach the walk a former name, so each counts on its
+  own. The count restarts when a capped walk resumes.
+- **A stop is not a search.** The walk reports `unreadReports`, and when it
+  found nothing the tier search is recorded as `unprovable`, not `complete`.
+  Attendance is not walked: it matches by the same names that proved
+  nothing. The stop is meant for a tier wholly from before
+  `rankedCharacters`, as Tomb is. A scope whose first three reports rank
+  nobody, and whose later ones name the character, would leave those unread.
+
+Measured live on 2026-09-28 (one character in Tomb, two partitions, serial
+requests): all 73 ranked fights held exactly one player with the character's
+former name and the ranked spec, and none held the current name. With the
+former name linked, the walk credited 154 kills in all 48 reports, up from
+none. Without it, the walk read 6 reports instead of 48, three a partition:
+about 88 points less a press.
+
 Before #733, a press searched every connected character's guilds whether or
 not they raided the tier. From 25 to 28 September 2026 that was 406 attendance
 pages, about 10,000 points, and not one report hydrated: 13 of the 14
