@@ -1912,6 +1912,37 @@ describe("worker runtime", () => {
     });
   });
 
+  it("logs the SQLSTATE with a failed maintenance recompute, never the message", async () => {
+    // Break caught: every failure logged the same `errorName`, so a lock
+    // timeout behind a rebuild looked like a real fault.
+    const recomputePass = vi.fn(async () => {
+      throw Object.assign(
+        new Error("canceling statement due to lock timeout"),
+        {
+          name: "error",
+          code: "55P03"
+        }
+      );
+    });
+    const { run, logged } = maintenanceHarness({
+      characterConnections: { recomputePass }
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    const failure = logged.find(
+      (record) => record.event === "character_groups_write_failed"
+    );
+    expect(failure).toEqual({
+      event: "character_groups_write_failed",
+      stage: "recompute",
+      errorName: "Error",
+      errorCode: "55P03",
+      durationMs: expect.any(Number)
+    });
+    expect(JSON.stringify(failure)).not.toContain("canceling");
+  });
+
   it("still rejects with the cleanup's own error when the recompute also fails", async () => {
     // Break caught: a recompute failure could mask or replace the cleanup's
     // own error, hiding the failure its retry actually needs to see.

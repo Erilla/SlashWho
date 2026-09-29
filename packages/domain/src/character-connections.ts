@@ -10,6 +10,37 @@ export type ConnectionFamily = "raiderio" | "fingerprint";
 /** A discovery source that names a link: every source but the root's own. */
 export type ObservationSource = Exclude<DiscoverySource, "input">;
 
+/**
+ * The codes the character connections repository throws as its message.
+ * Each is a fixed string, so it is safe to log.
+ */
+export const CHARACTER_CONNECTION_ERROR_CODES = [
+  "character_connections_run_missing",
+  "character_connections_run_root_mismatch",
+  "character_connections_observer_missing",
+  "character_connections_family_mismatch"
+] as const;
+
+export type CharacterConnectionErrorCode =
+  (typeof CHARACTER_CONNECTION_ERROR_CODES)[number];
+
+const knownErrorCodes: ReadonlySet<string> = new Set(
+  CHARACTER_CONNECTION_ERROR_CODES
+);
+
+/**
+ * What a character groups failure may log as `errorCode`: the pg SQLSTATE
+ * (55P03 is a lock timeout), else one of the repository's own codes, else
+ * nothing. Never the message itself, which could carry user data.
+ */
+export function characterGroupsErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return code;
+  if (knownErrorCodes.has(error.message)) return error.message;
+  return undefined;
+}
+
 export type LedgerDecision = "added_only" | "replaced" | "blocked";
 
 export type LedgerReason =

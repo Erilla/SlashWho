@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assignGroupIds,
+  characterGroupsErrorCode,
   components,
   familyOf,
   fingerprintDecision,
@@ -191,5 +192,47 @@ describe("path strengths", () => {
       { a: "x", b: "y", strength: "raiderio" }
     ]);
     expect([...strengths.keys()]).toEqual(["a"]);
+  });
+});
+
+describe("characterGroupsErrorCode", () => {
+  it("names a pg SQLSTATE, such as a lock timeout", () => {
+    const error = Object.assign(
+      new Error("canceling statement due to lock timeout"),
+      {
+        code: "55P03"
+      }
+    );
+    expect(characterGroupsErrorCode(error)).toBe("55P03");
+  });
+
+  it("names a known repository code carried as the message", () => {
+    expect(
+      characterGroupsErrorCode(
+        new Error("character_connections_run_root_mismatch")
+      )
+    ).toBe("character_connections_run_root_mismatch");
+  });
+
+  it("omits anything else, and never returns the message", () => {
+    // Break caught: every failure logged the same `errorName`, so a lock
+    // timeout and a real fault looked alike. The code must never carry a
+    // free-text message, which could hold user data.
+    expect(
+      characterGroupsErrorCode(new Error("duplicate key eu/draenor/ryii"))
+    ).toBeUndefined();
+    expect(
+      characterGroupsErrorCode(new Error("some_other_snake_case_code"))
+    ).toBeUndefined();
+    expect(
+      characterGroupsErrorCode(
+        Object.assign(new Error("x"), { code: "ECONNREFUSED" })
+      )
+    ).toBeUndefined();
+    expect(
+      characterGroupsErrorCode(Object.assign(new Error("x"), { code: 55 }))
+    ).toBeUndefined();
+    expect(characterGroupsErrorCode("55P03")).toBeUndefined();
+    expect(characterGroupsErrorCode(null)).toBeUndefined();
   });
 });

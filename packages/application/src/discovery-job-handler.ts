@@ -11,6 +11,7 @@ import type {
 } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
+  characterGroupsErrorCode,
   deduplicateCharacters,
   discoverCharacter,
   discoverFingerprintMatches,
@@ -473,10 +474,14 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
     // Runs inside the handler's `finally`: a logger that throws here would
     // replace the run's own outcome, so it is swallowed.
     try {
+      const errorCode = characterGroupsErrorCode(error);
       options.logger?.info({
         event: "character_groups_write_failed",
         stage,
-        errorName: error instanceof Error ? error.name : "unknown"
+        errorName: error instanceof Error ? error.name : "unknown",
+        // The SQLSTATE (55P03 is a lock timeout) or the repository's own
+        // code: what tells a transient failure from a real fault.
+        ...(errorCode === undefined ? {} : { errorCode })
       });
     } catch {
       // Best effort only.

@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import {
   assignGroupIds,
   canonicalCharacterId,
+  type CharacterConnectionErrorCode,
   components,
   familyOf,
   type CharacterKey,
@@ -39,6 +40,11 @@ export async function lockGroups(client: PoolClient): Promise<void> {
 }
 
 const LOCK_TIMEOUT = "5s";
+
+/** A thrown code, typed so it stays one `characterGroupsErrorCode` logs. */
+function connectionError(code: CharacterConnectionErrorCode): string {
+  return code;
+}
 
 /**
  * One recompute transaction: the lock timeout, then the rebuild lock shared,
@@ -106,7 +112,8 @@ export function createCharacterConnectionRepositories(
           [input.runId]
         );
         const runRow = run.rows[0];
-        if (!runRow) throw new Error("character_connections_run_missing");
+        if (!runRow)
+          throw new Error(connectionError("character_connections_run_missing"));
         const runStartedAt = runRow.run_started_at;
 
         const runRootId = canonicalCharacterId({
@@ -115,7 +122,9 @@ export function createCharacterConnectionRepositories(
           name: runRow.root_normalized_name
         });
         if (runRootId !== canonicalCharacterId(input.observerKey)) {
-          throw new Error("character_connections_run_root_mismatch");
+          throw new Error(
+            connectionError("character_connections_run_root_mismatch")
+          );
         }
 
         const ids = await characterIds(client, [
@@ -126,7 +135,9 @@ export function createCharacterConnectionRepositories(
         ]);
         const observerId = ids.get(canonicalCharacterId(input.observerKey));
         if (!observerId)
-          throw new Error("character_connections_observer_missing");
+          throw new Error(
+            connectionError("character_connections_observer_missing")
+          );
 
         const changed = new Set<string>();
         let unknownCharacters = 0;
@@ -179,7 +190,9 @@ export function createCharacterConnectionRepositories(
 
           for (const item of family.observed) {
             if (familyOf(item.source) !== family.family)
-              throw new Error("character_connections_family_mismatch");
+              throw new Error(
+                connectionError("character_connections_family_mismatch")
+              );
             const otherId = ids.get(canonicalCharacterId(item.key));
             if (!otherId) {
               unknownCharacters += 1;

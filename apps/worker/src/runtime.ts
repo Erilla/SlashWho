@@ -30,7 +30,10 @@ import {
   type DiscoveryQueue,
   type Repositories
 } from "@slashwho/database";
-import type { RaiderIoGateway as DiscoveryRaiderIoGateway } from "@slashwho/domain";
+import {
+  characterGroupsErrorCode,
+  type RaiderIoGateway as DiscoveryRaiderIoGateway
+} from "@slashwho/domain";
 import {
   createRaiderIoClient,
   type RaiderIoGateway as EvidenceRaiderIoGateway
@@ -1073,12 +1076,14 @@ async function characterGroupsRecompute(context: WorkerContext): Promise<void> {
       durationMs: elapsedMs(clock, startedAt)
     });
   } catch (error) {
+    const errorCode = characterGroupsErrorCode(error);
     logger?.info({
       event: "character_groups_write_failed",
       // Nothing was written here, so no write was lost: the next
       // maintenance cycle recomputes what this one missed.
       stage: "recompute",
       errorName: errorName(error),
+      ...(errorCode === undefined ? {} : { errorCode }),
       durationMs: elapsedMs(clock, startedAt)
     });
   }

@@ -3444,6 +3444,60 @@ describe("observation writes after publication", () => {
     ).resolves.toMatchObject({ state: "complete" });
   });
 
+  it("logs the SQLSTATE or the repository's own code with a failed write or recompute, never the message", async () => {
+    // Break caught: `errorName` is `error` for every pg failure and `Error`
+    // for every repository throw, so a lock timeout looked like a real fault.
+    const repositories = createMemoryRepositories();
+    const logged: Record<string, unknown>[] = [];
+    repositories.characterConnections = {
+      ...recordingConnections().repository,
+      async writeObservations() {
+        throw Object.assign(
+          new Error("canceling statement due to lock timeout"),
+          { name: "error", code: "55P03" }
+        );
+      }
+    };
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    await handlerFor(repositories, new MutableGateway(), {
+      logger: { info: (value) => logged.push(value) }
+    }).execute(run.id, delivery());
+
+    const recomputeRepositories = createMemoryRepositories();
+    recomputeRepositories.characterConnections = {
+      ...recordingConnections().repository,
+      async recomputeGroupsOf() {
+        throw new Error("character_connections_run_root_mismatch");
+      }
+    };
+    const recomputeRun = await recomputeRepositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    await handlerFor(recomputeRepositories, new MutableGateway(), {
+      logger: { info: (value) => logged.push(value) }
+    }).execute(recomputeRun.id, delivery());
+
+    const failures = logged.filter(
+      (record) => record.event === "character_groups_write_failed"
+    );
+    expect(failures).toEqual([
+      {
+        event: "character_groups_write_failed",
+        stage: "write",
+        errorName: "error",
+        errorCode: "55P03"
+      },
+      {
+        event: "character_groups_write_failed",
+        stage: "recompute",
+        errorName: "Error",
+        errorCode: "character_connections_run_root_mismatch"
+      }
+    ]);
+    expect(JSON.stringify(failures)).not.toContain("canceling");
+  });
+
   it("writes a continuation cycle as fingerprint only, with its reservation", async () => {
     const harness = handlerHarness({
       roster: rosterOf(12),
