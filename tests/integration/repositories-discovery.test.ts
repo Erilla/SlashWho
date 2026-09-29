@@ -2062,6 +2062,71 @@ describe("PostgreSQL repositories: discovery runs and snapshots", () => {
     ).resolves.toEqual({ kind: "not_due" });
   });
 
+  it("keeps answering not due for a deferred run until it leaves the queue", async () => {
+    // Break caught: admission settled a deferred run as not due on its first
+    // attempt only. When dispatching it then failed, the retried admission
+    // found no waiting row and answered `settled`, so nothing dispatched the
+    // run and it stayed `queued` with no snapshot for good.
+    await pool.query(`TRUNCATE TABLE
+      fingerprint_sweep_reservations,
+      fingerprint_sweep_admissions,
+      fingerprint_sweep_states
+      CASCADE`);
+    const at = new Date("2026-08-10T12:00:00.000Z");
+    const cadenceCutoff = new Date("2026-08-03T12:00:00.000Z");
+    const sweeper = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const sweep = await repositories.fingerprintSweeps.requestAdmission({
+      runId: sweeper.id,
+      key: rootKey,
+      requestCap: 1,
+      hourlyBudget: 1,
+      cadenceCutoff,
+      at
+    });
+    if (sweep.kind !== "admitted") throw new Error("sweep_not_admitted");
+    await repositories.runs.fail(sweeper.id, "upstream_unavailable");
+
+    const deferred = await repositories.runs.createOrReuse(
+      rootKey,
+      "anonymous"
+    );
+    await repositories.runs.markRunning(deferred.id);
+    await expect(
+      repositories.fingerprintSweeps.requestAdmission({
+        runId: deferred.id,
+        key: rootKey,
+        requestCap: 1,
+        hourlyBudget: 1,
+        cadenceCutoff,
+        at: new Date(at.getTime() + 1_000)
+      })
+    ).resolves.toMatchObject({ kind: "waiting" });
+    // The root is swept while the deferred run waits.
+    await repositories.fingerprintSweeps.finish(sweep.reservationId, {
+      published: true,
+      at: new Date(at.getTime() + 2_000),
+      limitationCode: null
+    });
+
+    const retryAt = new Date(at.getTime() + 3_000);
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(deferred.id, retryAt)
+    ).resolves.toEqual({ kind: "not_due" });
+    // A retry after a failed dispatch still has to dispatch the run.
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(deferred.id, retryAt)
+    ).resolves.toEqual({ kind: "not_due" });
+    await expect(repositories.runs.find(deferred.id)).resolves.toMatchObject({
+      status: "queued"
+    });
+
+    // Once the run has left the queue there is nothing left to dispatch.
+    await repositories.runs.fail(deferred.id, "upstream_unavailable");
+    await expect(
+      repositories.fingerprintSweeps.admitWaiting(deferred.id, retryAt)
+    ).resolves.toEqual({ kind: "settled" });
+  });
+
   it("admits a continuation inside the cadence window", async () => {
     await pool.query(`TRUNCATE TABLE
       fingerprint_sweep_reservations,

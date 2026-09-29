@@ -710,7 +710,11 @@ function fingerprintAdmissionWork(
         }
         throw fingerprintAdmissionRetry(admission.retryAt);
       }
-      if (admission.kind !== "admitted") return;
+      // A not-due run is dispatched too: it already went back to `queued` with
+      // its job id kept, so pending-dispatch recovery never picks it up. Its
+      // discovery job meets the same not-due admission and publishes or
+      // completes it exactly as a run that was never deferred.
+      if (admission.kind === "settled") return;
       await dispatch(runId);
     } catch (error) {
       // A waiting run throws only to ask the queue for a later retry; that
