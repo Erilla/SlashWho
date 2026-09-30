@@ -5,6 +5,12 @@ database figures come from read-only queries against Railway `test` the same
 day, with 222 characters and 1,965 evidence runs. The queries are in
 [Reproducing the figures](#reproducing-the-figures).
 
+**Corrected 2026-09-30, after the post-merge review of #760.** The first
+version measured parse reads on `collected_at`, which is not the read time.
+The settle-window, re-read and retention findings were redone on
+`parses_read_at`. The copy counts are now exact, and the tables the note leaves
+out are listed with the reason.
+
 ## Question
 
 SlashWho stores and fetches a good deal about every character it researches,
@@ -51,30 +57,47 @@ request. On `test`:
 5. **Spec history.** 28% of character-tiers show more than one spec, and 55 of
    118 characters played a different set of specs from one tier to another.
 
-**One open question can already be answered from stored data.**
+**Stored data already goes some way on one open question.**
 `EVIDENCE_KILL_SETTLE_DAYS` is seven days, and the code calls that value "a
 guess and explicitly unverified" (`apps/worker/src/config.ts:490-495`). The
-per-run evidence copies hold 378,377 distinct parse readings over 35,177
-fights. Across readings taken a day or more apart:
+per-run evidence copies record every real rankings read as a distinct
+`parses_read_at`: 30,180 reads over 28,432 fights. Two findings, on `test`:
 
-- **Young kills.** 0 of 446 re-reads of kills under 7 days old moved by a
-  point or more.
-- **Kills 7 to 28 days old.** 5 of 1,666 moved.
-- **Older kills.** 161 of 33,476 moved. The median move was 16.5 points, which
-  looks like a correction rather than drift.
+- **Available percentiles did not move.** 1,506 re-reads found a fight
+  available both times, and none moved by a point or more, at any kill age.
+  1,409 of those were of kills under seven days old.
+- **Young kills often have no ranking yet.** The share with a ranking at first
+  read was:
+  - 13 of 38 fights under a day old;
+  - 83% of fights one to seven days old;
+  - 96% of fights seven to 28 days old;
+  - 93% of older fights.
 
-The sample of young kills is small, but it points towards a shorter settle
-window. It deserves its own issue (see [Recommendations](#recommendations)).
+  Of 238 re-reads that followed an empty read of a kill under a week old, 21
+  found a ranking.
+
+So the settle window protects rankings that are late to appear, not
+percentiles that drift. The data does not support shortening it. It deserves
+its own issue, framed that way (see [Recommendations](#recommendations)).
+
+An earlier version of this note measured the same question on
+`collected_at`, and reported 378,377 readings with some percentiles moving.
+That was wrong. `collected_at` is re-stamped whenever a run finds a fight
+again, even when the run carries the old percentile forward without asking
+Warcraft Logs (`packages/database/src/evidence/merge.ts:214-220`). Only
+`parses_read_at` changes on a real read (`merge.ts:221-226`).
 
 **Three things turned up on the way:**
 
-- **A breach of the storage rules.** Discovery job payloads persist a
+- **A breach of the storage rules** (#761). Discovery job payloads persist a
   Raider.IO owner name (possibly a BattleTag) and a Discord handle in
   `pgboss.job`.
 - **Evidence tables grow fast.** Every publish copies the whole evidence
-  history under the new run: 16 times the current rows for kills and 20 times
-  for wipes.
-- **Parses are re-read about eleven times per fight.**
+  history under the new run. About 91% of kill and wipe rows are copies from
+  superseded full runs.
+- **Rankings are rarely re-read.** The median fight has been asked about once;
+  the most asked, 34 times. An earlier version said about eleven times; see
+  candidate 12.
 
 Details are in [Found on the way](#found-on-the-way).
 
@@ -97,22 +120,30 @@ These are the evidence tables, with their size on `test`:
 | Table                                                             | Rows (all runs) | Rows (current runs) | What it records                                                                             |
 | ----------------------------------------------------------------- | --------------- | ------------------- | ------------------------------------------------------------------------------------------- |
 | `character_mythic_kills` (`packages/database/src/schema.ts:1399`) | 562,914         | 34,905              | One Mythic kill fight: raid, boss, time, guild, uploader, spec, three parses, historic rank |
-| `character_mythic_wipes` (`schema.ts:1551`)                       | 2,223,864       | 108,210             | One Mythic wipe fight: raid, boss, time, guild (no region), uploader                        |
+| `character_mythic_wipes` (`schema.ts:1551`)                       | 2,223,775       | 108,210             | One Mythic wipe fight: raid, boss, time, guild (no region), uploader                        |
 | `character_tier_best_parses` (`schema.ts:1495`)                   | 8,745           | —                   | Best percentile per boss across a whole zone                                                |
 | `character_raiderio_first_kills` (`schema.ts:1666`)               | 7,431           | —                   | Raider.IO first kill per boss, guild, logged encounter id                                   |
 | `raiderio_logged_encounters` (`schema.ts:1583`)                   | 2,716           | shared              | Pull and kill time, duration, item level (average, min, max), deaths, Vantus                |
 | `raiderio_logged_encounter_members` (`schema.ts:1633`)            | 46,429          | shared              | Every raider on a logged kill: name, realm, class, spec, role, item level                   |
 | `character_evidence_cutting_edges` (`schema.ts:1166`)             | 6,489           | —                   | Cutting Edge achievement ids and dates per character                                        |
 
-Row counts are `pg_stat_user_tables` estimates for all runs, and exact counts
-for current runs.
+How the row counts were taken:
+
+- **Kills and wipes.** Exact counts, in both columns.
+- **The other tables.** "All runs" is a `pg_stat_user_tables` estimate.
+- **"Current runs".** Each character's newest completed full-scope run, the
+  run the dossier reads.
+- **Tier searches.** Runs of tier-search scope hold another 17,799 kill rows
+  and 80,617 wipe rows. They appear only in the "all runs" column.
 
 **Identity and relationship tables:**
 
 - `characters`, 222 rows.
-- `snapshot_characters`, 603 rows over 77 snapshots.
-- `character_connections`, 338 rows, and `character_groups`, 34 rows. These
-  are the #738 link graph, which has no application reader yet
+- `snapshots`, 77 rows, and `snapshot_characters`, 603 rows.
+- `character_evidence_runs`, 1,965 rows, the run each evidence row hangs off.
+- `character_connections` (338 rows), `character_groups` (34) and
+  `character_group_members`. These are the #738 link graph, which has no
+  application reader yet
   (`packages/database/src/repositories.ts:1975-2001`).
 - `warcraft_logs_character_ids`.
 - `character_historic_aliases`.
@@ -129,8 +160,46 @@ the new run id (`packages/database/src/evidence/repository.ts:927-972`). So a
 per-run history of every kill, wipe, parse and Cutting Edge exists. The dossier
 reads only the newest run (`packages/database/src/evidence/load.ts:40-97`).
 
-The genuine observations are the distinct `(fight, collected_at)` pairs.
-Carry-forward keeps a skipped fight's `collected_at` (`schema.ts:1437-1447`).
+**Which timestamp marks a real read.**
+
+- **`parses_read_at`.** The genuine rankings observations are the distinct
+  `(character, fight, parses_read_at)` triples. A run re-stamps
+  `parses_read_at` only for fights it asked Warcraft Logs about
+  (`packages/database/src/evidence/merge.ts:221-226`).
+- **`collected_at`.** This is re-stamped whenever a run finds the fight again
+  in its listing, even when the percentile is carried forward
+  (`merge.ts:214-220`). So it marks when a fight was last seen, not when its
+  parses were read. The column comment at `schema.ts:1437-1444` describes it as
+  the read time, which is wrong, and it should be corrected.
+
+**The other tables.** The schema has 52 tables in `public`
+(`tests/integration/migrations.test.ts:40-94`). Those listed above hold
+evidence and identity that a view could present. The rest are machinery for
+running collection and accounts. They hold nothing a reviewer view could use,
+beyond the operational summaries in candidates 13 and 14:
+
+- **Run bookkeeping:** `discovery_runs`, `character_evidence_collections`
+  (staged payloads awaiting publish) and `character_alias_recollections`.
+- **Collection state:** `character_terminal_tiers`,
+  `character_raiderio_tier_reads` and `character_attendance_searches`, which
+  are per-character marks of what need not be read again.
+- **Sweep budget:** `fingerprint_sweep_states`, `_admissions`,
+  `_reservations` and `_request_events`.
+- **Graph maintenance:** `character_connection_writes`,
+  `character_connection_write_log` and `character_groups_maintenance`.
+- **Reviewer state:** `manual_dossier_connections` and
+  `dossier_character_exclusions`. Both are already shown.
+- **Caches and limiters:** `negative_character_cache` and
+  `rate_limit_events`.
+- **Removals:** `suppressed_characters` and `applicant_suppression_history`.
+- **Recent searches:** `dossier_searches`, which is shown on the landing page.
+- **The applicant sheet watcher:** `applicant_source_state`, `_counts` and
+  `_intents`.
+- **Accounts:** `accounts`, `account_sessions`, `account_request_attempts`,
+  `account_mail_tokens`, `account_mail_outbox`, `account_api_credentials` and
+  `account_auth_events`.
+- **Legacy operator tables:** `operators`, `operator_sessions`,
+  `operator_login_attempts` and `operator_auth_events`.
 
 **Not stored at all:**
 
@@ -377,31 +446,51 @@ These decisions are already made. A candidate that crosses one says so below.
 
 ### For operators
 
-| #   | Candidate                                          | Class  | Built from                                    | Support on `test`                                         |
-| --- | -------------------------------------------------- | ------ | --------------------------------------------- | --------------------------------------------------------- |
-| 11  | Replace `EVIDENCE_KILL_SETTLE_DAYS` with data      | Stored | Distinct parse readings per fight across runs | 378,377 readings over 35,177 fights; results under Answer |
-| 12  | Parse re-read attribution                          | Stored | The same readings joined to run `origin`      | About 10.8 readings per fight                             |
-| 13  | Cost and step-time panel in the collection monitor | Stored | `character_evidence_run_costs`, run phases    | 2,139 cost rows over 28 days                              |
-| 14  | Snapshot history                                   | Stored | `snapshots`, `snapshot_characters`            | 77 snapshots; thin                                        |
+| #   | Candidate                                          | Class  | Built from                                   | Support on `test`                                     |
+| --- | -------------------------------------------------- | ------ | -------------------------------------------- | ----------------------------------------------------- |
+| 11  | Replace `EVIDENCE_KILL_SETTLE_DAYS` with data      | Stored | Distinct `parses_read_at` readings per fight | 30,180 reads over 28,432 fights; results under Answer |
+| 12  | Parse re-read attribution                          | Stored | The same readings joined to run `origin`     | Median one read per fight; 1,748 re-reads in all      |
+| 13  | Cost and step-time panel in the collection monitor | Stored | `character_evidence_run_costs`, run phases   | 2,139 cost rows over 28 days                          |
+| 14  | Snapshot history                                   | Stored | `snapshots`, `snapshot_characters`           | 77 snapshots; thin                                    |
 
 **11. Settle window.** The query is under
 [Reproducing the figures](#reproducing-the-figures).
 
-- **What it shows.** Rankings read with `timeframe: Historical` barely move
-  once a kill has been read.
-- **Why it is not conclusive yet.** Only 446 of the genuine re-read pairs were
-  of kills under a week old.
-- **What to do.** Run the same query again after a raid reset has produced
-  more young kills, then decide the window.
+- **Available rankings do not move.** A ranking read with `timeframe:
+Historical` did not move once available: 0 of 1,506 available re-reads
+  moved by a point or more.
+- **The risk is an early empty read.** Only 34% of fights read within a day of
+  the kill had a ranking, against 83% at one to seven days and 96% at seven to
+  28 days.
+- **What the window must protect.** The unavailable-to-available change, not
+  percentile drift.
+- **Why it is not conclusive yet.**
+  - Only 238 empty young reads were followed by another read. 21 of them found
+    a ranking.
+  - Only 11 re-reads exist between seven and 28 days.
+- **What to do.**
+  - After a raid reset has produced more young kills, measure how long an
+    empty read stays empty.
+  - Then set the window from that tail, in days.
+  - A window keyed on availability, such as settling an available fight early
+    and holding an empty one longer, is worth considering.
 
 **12. Re-read attribution.**
 
-- **The finding.** Fights over a year old have 215,885 reading pairs. So old
-  fights are being read again, which costs points.
-- **Plausible causes.** The #390 re-collection and the rebuilds of the last
-  two weeks.
-- **What to do.** Attribute the readings by run `origin` before assuming
-  waste.
+- **The finding.** Reads are not the waste they first appeared.
+  - Of 35,177 stored fights, 28,432 have been asked about at least once.
+  - In all, 30,180 reads were made, so only 1,748 were repeats. The busiest
+    fight was read 34 times.
+  - 6,474 kills in current runs have never been asked about
+    (`parses_read_at` is null).
+- **Why the earlier figure was wrong.** It counted `collected_at` re-stamps,
+  which are not reads.
+- **Attribution.**
+  - 25,822 reads came from runs whose `origin` is `unknown`, because they
+    predate the origin column.
+  - `resume_sweep` made 2,613, `refresh` 731 and `dossier_read` 719.
+- **What remains.** The fights read over and over. Check what keeps them from
+  settling before treating it as a cost lever.
 
 **13. Cost panel.** Points per run, per origin and per step are stored today,
 but they are readable only through SQL and the Discord webhook
@@ -445,19 +534,32 @@ but they are readable only through SQL and the Discord webhook
   - **What `test` holds.** 215 `discover-character` jobs, created from
     2026-09-23 to 2026-09-30. Of these, 8 carried a non-null `ownerId` and 19 a
     non-null `profileGuess`. The count was read without printing any value.
-  - **Status.** Raised separately; it needs a fix and a scrub of the existing
+  - **Status.** Tracked in #761. It needs a fix and a scrub of the existing
     rows.
 - **Evidence copies grow quickly.**
   - **The size now.** The database is 1,319 MB, and the wipe table alone is
     954 MB.
   - **Why.** Superseded runs are never pruned (`schema.ts:1712-1714`).
-  - **Current against total.** Current runs hold 6% of the kill rows and 5% of
-    the wipe rows.
+  - **Current against total.** These are exact counts.
+
+    | Rows                      | Kills   | Wipes     |
+    | ------------------------- | ------- | --------- |
+    | In all                    | 562,914 | 2,223,775 |
+    | Current runs              | 34,905  | 108,210   |
+    | Tier-search runs          | 17,799  | 80,617    |
+    | Copies in superseded runs | 510,210 | 2,034,948 |
+
+    The superseded copies are 91% of kill rows and 92% of wipe rows.
+
   - **The rate.** In the last two weeks a single day wrote up to 118,174 kill
     rows and 643,776 wipe rows.
-  - **What a retention policy could do.** Keep one row per distinct
-    `(fight, collected_at)` reading. That keeps what candidate 11 needs and
-    drops the copies.
+  - **What a retention policy could do.** Keep each character's newest full
+    run, and for older runs only the kill rows that carry a distinct
+    `parses_read_at`. That preserves every real rankings read, which is what
+    candidate 11 measures: 30,180 reads against 562,914 kill rows. Superseded
+    wipe copies carry no reading and could go.
+  - **Why not key it on `collected_at`.** It is re-stamped on every listing,
+    so a policy keyed on it would keep nearly every copy.
 - **Wipes lose the guild region.** `character_mythic_wipes` has no
   `guild_region` column. The decoder reads the region and drops it
   (`schema.ts:1567-1569`).
@@ -477,12 +579,9 @@ but they are readable only through SQL and the Discord webhook
       be excluded.
     - `apps/web/src/components/dossier-character-menu.tsx:34-39` says row
       actions exist only for manual links.
-- **Unthrottled writes.** The connected-characters `PATCH` and `DELETE`
-  handlers run with no rate limit
-  (`apps/web/src/app/api/dossiers/[region]/[realm]/[name]/connected-characters/route.ts:37-112`).
-  The `POST` passes the request headers to the service, and the other two do
-  not. This may be deliberate for an unlisted tool, but it is worth
-  confirming.
+- **Unthrottled writes** (#762). The connected-characters `PATCH` and `DELETE`
+  handlers run with no rate limit. `POST` goes through the rate-limited search
+  path, and the other two do not.
 
 ## Recommendations
 
@@ -496,10 +595,12 @@ In order:
 3. **Keep kill-report wipes and drop the ranked-report `killType` filter**,
    then build candidate 3. The decoder change is free in points and makes the
    pull counts honest.
-4. **Decide the settle window from data** (candidate 11). Re-run the query
-   after the next raid reset.
-5. **Add a retention policy for superseded evidence copies** that keeps
-   distinct readings. Do this before production volumes arrive.
+4. **Decide the settle window from data** (candidate 11). After the next raid
+   reset, measure how long an empty first read stays empty. Stored data
+   already shows that available percentiles do not move.
+5. **Add a retention policy for superseded evidence copies**, keyed on
+   `parses_read_at`, and correct the `collected_at` column comment. Do this
+   before production volumes arrive.
 6. **Put candidate 10 to the maintainer as a decision**, not a build. It
    touches the not-a-directory stance and needs a reference roster.
 
@@ -523,38 +624,47 @@ with latest as (
 )
 ```
 
-**Settle window, candidate 11.** A reading is one `(character, fight,
-collected_at)`; pairs are consecutive readings. The figures quoted count
-available-to-available pairs at least a day apart, grouped by the kill's age at
-the earlier reading:
+**Settle window and re-reads, candidates 11 and 12.**
+
+- **What a reading is.** One `(character, fight, parses_read_at)` with a
+  non-null `parses_read_at`. Pairs are consecutive readings of the same fight.
+- **"Available".** Any of the three metrics is available. Moves are measured
+  on damage.
+- **Origin.** Found by joining each reading to the run whose `completed_at`
+  equals it.
+- **Consistency.** No reading had two different values under the same
+  `parses_read_at`.
 
 ```sql
 with raw as (
   select r.region, r.realm_slug, r.normalized_name, k.source_fight_key,
-    k.killed_at, k.collected_at, k.damage_parse_state::text as ds,
-    k.damage_percentile as dp
+    k.killed_at, k.parses_read_at, k.damage_parse_state::text as ds,
+    k.damage_percentile as dp,
+    k.damage_parse_state::text = 'available'
+      or k.healing_parse_state::text = 'available'
+      or k.boss_damage_parse_state::text = 'available' as any_avail
   from character_mythic_kills k
   join character_evidence_runs r on r.id = k.evidence_run_id
+  where k.parses_read_at is not null
 ), per_reading as (
   select region, realm_slug, normalized_name, source_fight_key, killed_at,
-    collected_at, min(ds) as ds, min(dp) as dp
+    parses_read_at, min(ds) as ds, min(dp) as dp, bool_or(any_avail) as any_avail
   from raw group by 1, 2, 3, 4, 5, 6
 ), seq as (
   select *, lag(ds) over w as prev_ds, lag(dp) over w as prev_dp,
-    lag(collected_at) over w as prev_at
+    lag(any_avail) over w as prev_any, lag(parses_read_at) over w as prev_at,
+    row_number() over w as n
   from per_reading
   window w as (partition by region, realm_slug, normalized_name,
-    source_fight_key order by collected_at)
+    source_fight_key order by parses_read_at)
 )
-select extract(epoch from (prev_at - killed_at)) / 86400 as age_days,
-  abs(dp - prev_dp) as moved
-from seq
-where prev_ds = 'available' and ds = 'available'
-  and collected_at - prev_at >= interval '1 day';
+select extract(epoch from (coalesce(prev_at, parses_read_at) - killed_at))
+    / 86400 as age_days,
+  n, prev_any, any_avail,
+  case when prev_ds = 'available' and ds = 'available'
+    then abs(dp - prev_dp) end as moved
+from seq;
 ```
-
-Only 102 of the 378,377 readings had more than one value under the same
-`collected_at`, so treating a reading as one observation is safe.
 
 **Raid schedule, candidate 1:**
 
