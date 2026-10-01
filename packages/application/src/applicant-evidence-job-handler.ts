@@ -2014,6 +2014,12 @@ export function createApplicantEvidenceJobHandler(
                 observePhase(event.query);
                 observeRequest(scope, event);
               },
+              onLimitation: (query, code) => {
+                if (code === "schema_drift") record.limitationQuery = query;
+                observePhase(query);
+                if (phaseLedger)
+                  phaseLimitations.set(phaseForQuery(query), code);
+              },
               signal: activeContext.signal
             })
           );

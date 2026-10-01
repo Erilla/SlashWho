@@ -612,6 +612,59 @@ describe("PostgreSQL repositories: character evidence", () => {
     ).resolves.toEqual([]);
   });
 
+  it("persists a later identity's limitation on a completed history phase", async () => {
+    const at = new Date("2026-09-22T11:00:00.000Z");
+    const reservation = await repositories.evidence.reserve({
+      origin: "dossier_read",
+      key: rootKey,
+      freshnessCutoff: new Date("2026-09-22T10:00:00.000Z"),
+      at,
+      phasePlan: ["warcraft_logs_history", "publication"]
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    for (const state of ["active", "completed", "limited"] as const) {
+      await repositories.evidence.recordPhaseTransitions!(reservation.run.id, [
+        {
+          id: "warcraft_logs_history",
+          state,
+          startedAt: at,
+          completedAt: state === "active" ? null : at,
+          limitationCode: state === "limited" ? "history_limit" : null
+        }
+      ]);
+    }
+    expect(
+      await repositories.evidence.listPhases!(reservation.run.id)
+    ).toContainEqual(
+      expect.objectContaining({
+        id: "warcraft_logs_history",
+        state: "limited",
+        limitationCode: "history_limit"
+      })
+    );
+    await repositories.evidence.publish(reservation.run.id, {
+      state: "partial",
+      limitationCode: "history_limit",
+      parseLimitationCode: null,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      completedAt: at
+    });
+    await expect(
+      repositories.evidence.recordPhaseTransitions!(reservation.run.id, [
+        {
+          id: "warcraft_logs_history",
+          state: "limited",
+          startedAt: at,
+          completedAt: at,
+          limitationCode: "unavailable"
+        }
+      ])
+    ).rejects.toThrow("character_evidence_phase_not_found");
+  });
+
   it("publishes normalized Blizzard achievements with the evidence run", async () => {
     // Break caught: a provider phase that does not publish its normalized
     // result only recreates the same network call on every dossier read.

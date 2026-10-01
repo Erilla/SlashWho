@@ -231,6 +231,68 @@ describe("applicant evidence job handler", () => {
     };
     const now = () => new Date("2026-09-13T12:01:00.000Z");
 
+    it("records an alias ceiling after current-name history completes", async () => {
+      const evidence = store();
+      evidence.historicAliases = async () => [alias];
+      const phases = fullEvidencePhasePlan().map(
+        (id, ordinal): EvidenceRunPhase => ({
+          id,
+          ordinal,
+          state: "pending",
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        })
+      );
+      evidence.listPhases = async () => phases;
+      evidence.recordPhaseTransitions = async (_runId, updates) => {
+        for (const update of updates)
+          Object.assign(
+            phases.find((phase) => phase.id === update.id)!,
+            update
+          );
+      };
+      await handlerFor({
+        evidence,
+        now,
+        pointsReserve: 0,
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async (requested, options) => {
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            if (requested.name === alias.name)
+              options.onLimitation?.("history_scan", "history_limit");
+            options.onRequest?.({
+              query: "ranking_identities",
+              limited: false,
+              durationMs: 0
+            });
+            return requested.name === alias.name
+              ? {
+                  ...emptyEvidence,
+                  limitation: ceiling,
+                  historyScanLimitReached: true
+                }
+              : emptyEvidence;
+          }
+        }
+      }).execute(run.id);
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "partial",
+        limitationCode: "history_limit"
+      });
+      expect(
+        phases.find((phase) => phase.id === "warcraft_logs_history")
+      ).toMatchObject({ state: "limited", limitationCode: "history_limit" });
+      expect(
+        phases.find((phase) => phase.id === "warcraft_logs_ranking_identities")
+      ).toMatchObject({ state: "completed", limitationCode: null });
+    });
+
     it.each([
       undefined,
       "parse_request_cap" as const,
