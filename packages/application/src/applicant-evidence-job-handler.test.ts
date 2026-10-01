@@ -215,6 +215,272 @@ function store(
 }
 
 describe("applicant evidence job handler", () => {
+  describe("upstream history ceiling publication", () => {
+    const alias = { region: "eu", realm: "old-realm", name: "former" } as const;
+    const emptyEvidence = {
+      kind: "evidence" as const,
+      kills: [],
+      wipes: [],
+      tierBests: [],
+      parsedFightUrls: [],
+      troubledRaidIds: { parses: [], tierBests: [] }
+    };
+    const ceiling = {
+      kind: "limitation" as const,
+      code: "history_limit" as const
+    };
+    const now = () => new Date("2026-09-13T12:01:00.000Z");
+
+    it("records an alias ceiling after current-name history completes", async () => {
+      const evidence = store();
+      evidence.historicAliases = async () => [alias];
+      const phases = fullEvidencePhasePlan().map(
+        (id, ordinal): EvidenceRunPhase => ({
+          id,
+          ordinal,
+          state: "pending",
+          startedAt: null,
+          completedAt: null,
+          limitationCode: null
+        })
+      );
+      evidence.listPhases = async () => phases;
+      evidence.recordPhaseTransitions = async (_runId, updates) => {
+        for (const update of updates)
+          Object.assign(
+            phases.find((phase) => phase.id === update.id)!,
+            update
+          );
+      };
+      await handlerFor({
+        evidence,
+        now,
+        pointsReserve: 0,
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async (requested, options) => {
+            options.onRequest?.({
+              query: "history_scan",
+              limited: false,
+              durationMs: 0
+            });
+            if (requested.name === alias.name)
+              options.onLimitation?.("history_scan", "history_limit");
+            options.onRequest?.({
+              query: "ranking_identities",
+              limited: false,
+              durationMs: 0
+            });
+            return requested.name === alias.name
+              ? {
+                  ...emptyEvidence,
+                  limitation: ceiling,
+                  historyScanLimitReached: true
+                }
+              : emptyEvidence;
+          }
+        }
+      }).execute(run.id);
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "partial",
+        limitationCode: "history_limit"
+      });
+      expect(
+        phases.find((phase) => phase.id === "warcraft_logs_history")
+      ).toMatchObject({ state: "limited", limitationCode: "history_limit" });
+      expect(
+        phases.find((phase) => phase.id === "warcraft_logs_ranking_identities")
+      ).toMatchObject({ state: "completed", limitationCode: null });
+    });
+
+    it.each([
+      undefined,
+      "parse_request_cap" as const,
+      "parse_unavailable" as const
+    ])(
+      "clears a staged bookmark without hiding parse retries (%s)",
+      async (parseCode) => {
+        const evidence = store();
+        evidence.storedEvidenceTiers = async () => ({
+          kills: [],
+          wipes: [],
+          historyScanResumePage: 6,
+          historyScanResumeBoundaryReportCode: "oldBoundary"
+        });
+        await handlerFor({
+          evidence,
+          now,
+          pointsReserve: 0,
+          warcraftLogs: {
+            ...openGate,
+            getFirstKillReports: async () => ({
+              ...emptyEvidence,
+              limitation: ceiling,
+              historyScanLimitReached: true,
+              ...(parseCode
+                ? { parseLimitation: { kind: "limitation", code: parseCode } }
+                : {})
+            })
+          }
+        }).execute(run.id);
+        expect(evidence.staged.get(run.id)).toMatchObject({
+          state: "partial",
+          historyScanResumePage: null,
+          historyScanResumeBoundaryReportCode: null
+        });
+        expect(evidence.published[0]?.result).toMatchObject({
+          state: "partial",
+          limitationCode: "history_limit",
+          historyScanResumePage: null,
+          historyScanResumeBoundaryReportCode: null
+        });
+        expect(evidence.marked).toEqual([]);
+        if (parseCode)
+          expect(evidence.published[0]?.result.retryAfterAt).toBeInstanceOf(
+            Date
+          );
+        else
+          expect(evidence.published[0]?.result).not.toHaveProperty(
+            "retryAfterAt"
+          );
+      }
+    );
+
+    it.each(["request_cap", "unavailable", "rate_limited"] as const)(
+      "retains %s from an alias alongside the current ceiling",
+      async (code) => {
+        for (const rootOnly of [false, true])
+          for (const aliasOnly of [false, true]) {
+            const evidence = store();
+            evidence.historicAliases = async () => [alias];
+            const getFirstKillReports = vi.fn<
+              WarcraftLogsGateway["getFirstKillReports"]
+            >(async (requested) =>
+              requested.name === alias.name
+                ? aliasOnly
+                  ? { kind: "limitation", code, retryAfterMs: 90000 }
+                  : {
+                      ...emptyEvidence,
+                      limitation: {
+                        kind: "limitation",
+                        code,
+                        retryAfterMs: 90000
+                      }
+                    }
+                : rootOnly
+                  ? ceiling
+                  : {
+                      ...emptyEvidence,
+                      limitation: ceiling,
+                      historyScanLimitReached: true
+                    }
+            );
+            await handlerFor({
+              evidence,
+              now,
+              pointsReserve: 0,
+              warcraftLogs: { ...openGate, getFirstKillReports }
+            }).execute(run.id);
+            expect(getFirstKillReports).toHaveBeenCalledTimes(2);
+            expect(evidence.published[0]?.result).toMatchObject({
+              state: "partial",
+              limitationCode: code,
+              retryAfterAt: new Date("2026-09-13T12:02:30.000Z")
+            });
+          }
+      }
+    );
+
+    it("keeps a current transient failure when the alias reaches its ceiling", async () => {
+      const evidence = store();
+      evidence.historicAliases = async () => [alias];
+      await handlerFor({
+        evidence,
+        now,
+        pointsReserve: 0,
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async (requested) =>
+            requested.name === alias.name
+              ? ceiling
+              : {
+                  ...emptyEvidence,
+                  limitation: { kind: "limitation", code: "unavailable" }
+                }
+        }
+      }).execute(run.id);
+      expect(evidence.published[0]?.result).toMatchObject({
+        limitationCode: "unavailable",
+        retryAfterAt: expect.any(Date)
+      });
+    });
+
+    it("clears an alias bookmark at the ceiling and leaves its history partial", async () => {
+      const evidence = store();
+      evidence.historicAliases = async () => [alias];
+      evidence.storedEvidenceTiers = async () => ({
+        kills: [],
+        wipes: [],
+        historicAliasProgress: [
+          {
+            key: alias,
+            historyScanResumePage: 19,
+            historyScanResumeBoundaryReportCode: "oldBoundary",
+            historyComplete: false,
+            parseWorkOutstanding: false,
+            pendingParseFightUrls: []
+          }
+        ]
+      });
+      await handlerFor({
+        evidence,
+        now,
+        pointsReserve: 0,
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async (requested) =>
+            requested.name === alias.name
+              ? {
+                  ...emptyEvidence,
+                  limitation: ceiling,
+                  historyScanLimitReached: true
+                }
+              : emptyEvidence
+        }
+      }).execute(run.id);
+      const progress = evidence.published[0]?.result.historicAliasProgress?.[0];
+      expect(progress).toMatchObject({ key: alias, historyComplete: false });
+      expect(progress).not.toHaveProperty("historyScanResumePage");
+      expect(progress).not.toHaveProperty(
+        "historyScanResumeBoundaryReportCode"
+      );
+    });
+
+    it("schedules deferred alias work despite the current history ceiling", async () => {
+      const evidence = store();
+      evidence.historicAliases = async () => [alias];
+      await handlerFor({
+        evidence,
+        now,
+        pointsReserve: 0,
+        requestCap: 1,
+        parseRequestCap: 0,
+        warcraftLogs: {
+          ...openGate,
+          getFirstKillReports: async () => ({
+            ...emptyEvidence,
+            limitation: ceiling,
+            historyScanLimitReached: true
+          })
+        }
+      }).execute(run.id);
+      expect(evidence.published[0]?.result).toMatchObject({
+        state: "partial",
+        limitationCode: "request_cap",
+        retryAfterAt: expect.any(Date)
+      });
+    });
+  });
   it.each([
     {
       name: "scans after a fresh run that left no parse work",

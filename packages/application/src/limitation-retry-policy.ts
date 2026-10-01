@@ -44,7 +44,7 @@ import type { WarcraftLogsLimitationCode } from "@slashwho/warcraftlogs";
  * and more specific failure. Nothing is discarded either way -- the rest are
  * recorded on the run, which is the point.
  */
-export function drivingParseLimitation<
+export function drivingLimitation<
   T extends Readonly<{
     code: WarcraftLogsLimitationCode;
     retryAfterMs?: number;
@@ -61,6 +61,8 @@ export function drivingParseLimitation<
     ) ?? limitations[0]
   );
 }
+
+export const drivingParseLimitation = drivingLimitation;
 
 export function retryDelayMsFor(
   code: WarcraftLogsLimitationCode,
@@ -86,6 +88,7 @@ export function retryDelayMsFor(
     // A character with no public logs will not acquire them by waiting, and a
     // private one will not be opened by asking again.
     case "not_found":
+    case "history_limit":
     case "private":
     case "parse_private":
       return null;

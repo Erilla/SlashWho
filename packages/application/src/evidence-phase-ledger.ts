@@ -56,6 +56,9 @@ function isLegalTransition(
   if (current === next) return true;
   if (current === "pending") return next === "active" || next === "skipped";
   if (current === "active") return terminalStates.has(next);
+  // A later historic identity can reveal a limit after the current name's
+  // work completed. Refine the aggregate result without reopening that work.
+  if (current === "completed") return next === "limited";
   // A later queue attempt may retry a stage that was limited previously.
   if (current === "limited") return next === "active";
   return false;

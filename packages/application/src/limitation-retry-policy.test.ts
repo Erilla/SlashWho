@@ -16,6 +16,9 @@ function delayFor(code: WarcraftLogsLimitationCode) {
 }
 
 describe("retryDelayMsFor", () => {
+  it("does not retry an upstream history ceiling", () => {
+    expect(delayFor("history_limit")).toBeNull();
+  });
   it("gives an upstream transport failure a retry", () => {
     expect(delayFor("unavailable")).toBe(delays.transientRetryMs);
     expect(delayFor("parse_unavailable")).toBe(delays.transientRetryMs);
@@ -63,6 +66,7 @@ describe("the tier ranked walk's continued limitations", () => {
     rate_limited: true,
     points_budget_low: true,
     request_cap: true,
+    history_limit: true,
     unavailable: true,
     schema_drift: true
   } satisfies Record<

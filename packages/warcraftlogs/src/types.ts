@@ -7,6 +7,8 @@ export type WarcraftLogsLimitationCode =
   /** We declined to start: too little of the hourly allowance was left. */
   | "points_budget_low"
   | "request_cap"
+  /** The upstream recent-report listing cannot expose any further pages. */
+  | "history_limit"
   | "unavailable"
   | "schema_drift"
   | "parse_private"
@@ -314,6 +316,8 @@ export type WarcraftLogsReportResult =
       omittedInvalidTimestampReportCodes?: readonly string[];
       /** True when history was intentionally omitted and only parses ran. */
       scanSkipped?: boolean;
+      /** Clear the history bookmark even if another limitation drives retry. */
+      historyScanLimitReached?: true | undefined;
       /**
        * The next report page after the newest contiguous prefix decoded by a
        * limited scan. It is absent (or undefined) unless a cleanly decoded

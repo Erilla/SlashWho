@@ -105,9 +105,12 @@ export async function collectFirstKillReports(
   if (rankedBackfill?.kind === "evidence") {
     for (const kill of rankedBackfill.kills) run.kills.set(kill.fightUrl, kill);
     if (rankedBackfill.limitation)
-      scan.limitation ??= rankedBackfill.limitation;
+      scan.limitation = drivingHistoryLimitation(
+        scan.limitation,
+        rankedBackfill.limitation
+      );
   } else if (rankedBackfill) {
-    scan.limitation ??= rankedBackfill;
+    scan.limitation = drivingHistoryLimitation(scan.limitation, rankedBackfill);
   }
   const tierSearchOutcome =
     options.tierSearch === undefined
@@ -146,6 +149,9 @@ export async function collectFirstKillReports(
   ) => ({
     kind: "evidence" as const,
     scanSkipped,
+    ...(scan.historyLimitReached
+      ? { historyScanLimitReached: true as const }
+      : {}),
     ...(omittedInvalidTimestamp
       ? { omittedInvalidTimestamp: true as const }
       : {}),
@@ -201,7 +207,7 @@ export async function collectFirstKillReports(
     historyScanResumeBoundaryReportCode?: string;
   }> = restartFromFirstPage
     ? { historyScanResumePage: 1 }
-    : !scanLimitation
+    : scan.historyLimitReached || !scanLimitation
       ? {}
       : scan.lastDecodedPage !== undefined
         ? {
@@ -223,6 +229,7 @@ export async function collectFirstKillReports(
   return sortedKills.length ||
     sortedWipes.length ||
     rankedBackfill !== undefined ||
+    scan.historyLimitReached ||
     omittedInvalidTimestamp
     ? evidenceResult({
         kills: sortedKills,
@@ -251,6 +258,19 @@ export async function collectFirstKillReports(
  */
 export const CONTINUED_RANKED_WALK_LIMITATIONS: ReadonlySet<WarcraftLogsLimitationCode> =
   new Set(["request_cap", "rate_limited", "unavailable"]);
+
+/** A permanent history ceiling must not strand a resumable ranked walk. */
+function drivingHistoryLimitation(
+  current: WarcraftLogsLimitation | undefined,
+  next: WarcraftLogsLimitation
+): WarcraftLogsLimitation {
+  return !current ||
+    (current.code === "history_limit" &&
+      (next.retryAfterMs !== undefined ||
+        CONTINUED_RANKED_WALK_LIMITATIONS.has(next.code)))
+    ? next
+    : current;
+}
 
 const nothingWalked = (
   outcome: "complete" | "deferred" | "unprovable"

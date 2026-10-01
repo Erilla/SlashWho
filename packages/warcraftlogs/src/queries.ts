@@ -15,6 +15,8 @@ export const MYTHIC_DIFFICULTY = 5;
 // number, and make a light refresh's one page dearer. Measured in
 // docs/operations/evidence-run-cost.md.
 export const REPORTS_PER_PAGE = 10;
+/** recentReports rejects page 6 even when page 5 says there are more. */
+export const RECENT_REPORTS_MAX_PAGE = 5;
 /**
  * A guild listing that loads no report part costs about 1 point for up to 100
  * reports (1.83 for a full 100), so its page is as large as Warcraft Logs

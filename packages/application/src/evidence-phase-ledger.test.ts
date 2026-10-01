@@ -6,6 +6,34 @@ import {
 } from "./evidence-phase-ledger";
 
 describe("evidence phase ledger", () => {
+  it("refines a completed phase when a later identity encounters a limitation", async () => {
+    const persist = vi.fn().mockResolvedValue(undefined);
+    const ledger = createEvidencePhaseLedger({
+      plan: evidencePhasePlans.warcraftLogs({
+        scan: true,
+        tierBests: false,
+        fightParses: true
+      }),
+      now: () => new Date("2026-09-22T10:00:00.000Z"),
+      persist
+    });
+    await ledger.transition("warcraft_logs_identity_resolution", "skipped");
+    await ledger.transition("warcraft_logs_history", "active");
+    await ledger.transition("warcraft_logs_history", "completed");
+    await ledger.transition("warcraft_logs_ranking_identities", "active");
+    await ledger.transition(
+      "warcraft_logs_history",
+      "limited",
+      "history_limit"
+    );
+    expect(persist).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        id: "warcraft_logs_history",
+        state: "limited",
+        limitationCode: "history_limit"
+      })
+    ]);
+  });
   it("skips unrequested earlier phases when a later request starts", async () => {
     const persist = vi.fn().mockResolvedValue(undefined);
     const ledger = createEvidencePhaseLedger({

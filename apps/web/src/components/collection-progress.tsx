@@ -48,6 +48,7 @@ const limitationLabel: Record<DossierLimitationCode, string> = {
   points_budget_low: "points budget low",
   collection_failed: "collection failed",
   request_cap: "request cap reached",
+  history_limit: "Warcraft Logs history limit reached",
   unavailable: "unavailable",
   schema_changed: "provider response changed",
   invalid_fight_timestamp: "invalid fight timestamp",

@@ -21,6 +21,7 @@ const CONTRACT_LIMITATION_CODES: Readonly<
   points_budget_low: "points_budget_low",
   collection_failed: "collection_failed",
   request_cap: "request_cap",
+  history_limit: "history_limit",
   unavailable: "unavailable",
   schema_changed: "schema_changed",
   schema_drift: "schema_changed",
@@ -113,6 +114,8 @@ function limitationMessage(
       return `${label} collection was interrupted by an error before it could be stored. Shown evidence is partial and collection is retried automatically; other kills or wipes may exist.`;
     case "request_cap":
       return `${label} history is incomplete because this dossier reached its request cap. Shown evidence is partial; other kills or wipes may exist.`;
+    case "history_limit":
+      return `${label} limits the accessible recent-report history. Shown evidence is partial; older kills or wipes may exist.`;
     case "unavailable":
       if (source === "blizzard")
         return `${label} could not be read; Cutting Edge status is unknown for this character.`;
@@ -165,6 +168,7 @@ export function limitationRecovery(
   switch (code) {
     case "not_found":
     case "private":
+    case "history_limit":
     case "schema_changed":
     case "parse_private":
     case "parse_schema_drift":

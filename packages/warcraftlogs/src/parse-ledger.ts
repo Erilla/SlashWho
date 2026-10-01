@@ -23,6 +23,7 @@ export function toParseLimitation(
       return { kind: "limitation", code: "parse_schema_drift" };
     case "not_found":
     case "points_budget_low":
+    case "history_limit":
     case "request_cap":
     case "unavailable":
     case "parse_private":

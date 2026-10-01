@@ -667,6 +667,7 @@ export function createEvidenceRepositories(
                   state = $3 OR
                   (state = 'pending' AND $3 IN ('active', 'skipped')) OR
                   (state = 'limited' AND $3 = 'active') OR
+                  (state = 'completed' AND $3 = 'limited') OR
                   (state = 'active' AND $3 IN ('completed', 'limited', 'failed', 'cancelled'))
                 )`,
             [
