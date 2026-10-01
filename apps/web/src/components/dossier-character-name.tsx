@@ -101,6 +101,15 @@ function IdentityHint({
 
   useEffect(() => {
     if (!open) return;
+    const positionTooltip = () => {
+      const root = rootRef.current;
+      if (!root) return;
+      root.style.setProperty(
+        "--identity-hint-left",
+        `${root.getBoundingClientRect().left}px`
+      );
+    };
+    positionTooltip();
     const close = (event: Event) => {
       if (
         event.type === "keydown" &&
@@ -118,14 +127,24 @@ function IdentityHint({
     };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", close);
+    window.addEventListener("resize", positionTooltip);
+    window.addEventListener("scroll", positionTooltip, true);
     return () => {
       document.removeEventListener("pointerdown", close);
       document.removeEventListener("keydown", close);
+      window.removeEventListener("resize", positionTooltip);
+      window.removeEventListener("scroll", positionTooltip, true);
     };
   }, [open]);
 
   return (
-    <span className="dossier-identity-hint" ref={rootRef}>
+    <span
+      className="dossier-identity-hint"
+      onPointerLeave={(event) => {
+        if (event.pointerType === "mouse") setOpen(false);
+      }}
+      ref={rootRef}
+    >
       <button
         aria-describedby={tooltipId}
         aria-expanded={open}
@@ -146,9 +165,6 @@ function IdentityHint({
         }}
         onPointerEnter={(event) => {
           if (event.pointerType === "mouse") setOpen(true);
-        }}
-        onPointerLeave={(event) => {
-          if (event.pointerType === "mouse") setOpen(false);
         }}
         type="button"
       >
