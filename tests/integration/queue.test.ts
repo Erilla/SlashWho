@@ -50,12 +50,78 @@ describe("durable discovery queue", () => {
   afterEach(async () => {
     await Promise.allSettled(cleanup.splice(0).map((stop) => stop()));
     await applicationPool.query("DELETE FROM pgboss.job WHERE name = ANY($1)", [
-      [queueName, fingerprintAdmissionQueueName]
+      [queueName, fingerprintAdmissionQueueName, characterEvidenceQueueName]
     ]);
   });
 
   afterAll(async () => {
     await stopPostgres();
+  });
+
+  it("persists only explicit public job fields for every collection delivery", async () => {
+    // Break caught: private identity or wider metadata could survive in job JSON.
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    const widerKey = {
+      ...key,
+      ownerId: "nested-owner",
+      profileGuess: "nested-profile"
+    };
+    const privateFields = {
+      rootCharacter: { ownerId: "root-owner", profileGuess: "root-profile" },
+      ownerId: "private-owner",
+      profileGuess: "private-profile"
+    };
+    const discoveryJobId = await queue.enqueue({
+      ...privateFields,
+      runId: "privacy-discovery",
+      key: widerKey
+    });
+    const continuationJobId = await queue.enqueue({
+      ...privateFields,
+      runId: "privacy-discovery",
+      key: widerKey,
+      continuation: true
+    });
+    const fingerprintJobId = await queue.enqueueFingerprintAdmission(
+      "privacy-fingerprint"
+    );
+    const meta = {
+      ...privateFields,
+      runId: "wrong-run",
+      mode: "full" as const,
+      correlationId: "safe-correlation",
+      enqueuedAt: "2026-10-01T12:00:00.000Z"
+    };
+    const evidenceJobId = await queue.enqueueCharacterEvidence(
+      "privacy-evidence",
+      meta
+    );
+    const { rows } = await applicationPool.query<{ id: string; data: unknown }>(
+      "SELECT id::text, data FROM pgboss.job WHERE id = ANY($1::uuid[])",
+      [[discoveryJobId, continuationJobId, fingerprintJobId, evidenceJobId]]
+    );
+    const payloads = new Map(rows.map(({ id, data }) => [id, data]));
+    expect(payloads.size).toBe(4);
+    expect(payloads.get(discoveryJobId)).toEqual({
+      runId: "privacy-discovery",
+      key
+    });
+    expect(payloads.get(continuationJobId)).toEqual({
+      runId: "privacy-discovery",
+      key,
+      continuation: true
+    });
+    expect(payloads.get(fingerprintJobId)).toEqual({
+      runId: "privacy-fingerprint"
+    });
+    expect(payloads.get(evidenceJobId)).toEqual({
+      runId: "privacy-evidence",
+      mode: "full",
+      correlationId: "safe-correlation",
+      enqueuedAt: "2026-10-01T12:00:00.000Z"
+    });
   });
 
   it("upgrades deployed standard and stately queues to exclusive without losing work", async () => {

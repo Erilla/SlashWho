@@ -250,6 +250,88 @@ describe("character evidence queue", () => {
 });
 
 describe("job telemetry", () => {
+  it.each([false, true])(
+    "strips wider discovery inputs, continuation=%s",
+    async (continuation) => {
+      // Break caught: TypeScript structural typing cannot protect persisted JSON.
+      const queue = createDiscoveryQueue({
+        connectionString: "postgres://worker:secret@database/slashwho"
+      });
+      await queue.start();
+      queueFakes.send.mockClear();
+      const payload = {
+        runId: "private-payload-run",
+        key: {
+          region: "eu" as const,
+          realm: "silvermoon",
+          name: "root",
+          ownerId: "nested-owner",
+          profileGuess: "nested-profile"
+        },
+        rootCharacter: { ownerId: "root-owner", profileGuess: "root-profile" },
+        ownerId: "private-owner",
+        profileGuess: "private-profile",
+        correlationId: "c1",
+        enqueuedAt: "2026-09-15T10:00:00.000Z",
+        ...(continuation ? { continuation: true as const } : {})
+      };
+      await queue.enqueue(payload);
+      expect(queueFakes.send.mock.calls).toEqual([
+        [
+          discoverCharacterQueueName,
+          {
+            runId: "private-payload-run",
+            key: { region: "eu", realm: "silvermoon", name: "root" },
+            correlationId: "c1",
+            enqueuedAt: "2026-09-15T10:00:00.000Z",
+            ...(continuation ? { continuation: true } : {})
+          },
+          {
+            singletonKey: continuation
+              ? "private-payload-run:continuation"
+              : "private-payload-run"
+          }
+        ]
+      ]);
+    }
+  );
+
+  it("strips private fields and a run id override from evidence metadata", async () => {
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    await queue.start();
+    queueFakes.send.mockClear();
+    const meta = {
+      runId: "wrong-run",
+      correlationId: "c2",
+      enqueuedAt: "2026-09-15T10:00:01.000Z",
+      mode: "light" as const,
+      ownerId: "private-owner",
+      profileGuess: "private-profile",
+      rootCharacter: { ownerId: "root-owner" }
+    };
+    await queue.enqueueCharacterEvidence("evidence-run", meta);
+    await queue.enqueueFingerprintAdmission("fingerprint-run");
+    expect(queueFakes.send.mock.calls).toEqual([
+      [
+        collectCharacterEvidenceQueueName,
+        {
+          runId: "evidence-run",
+          correlationId: "c2",
+          enqueuedAt: "2026-09-15T10:00:01.000Z",
+          mode: "light"
+        },
+        { singletonKey: "evidence-run" }
+      ],
+      [
+        fingerprintAdmissionQueueName,
+        { runId: "fingerprint-run" },
+        { singletonKey: "fingerprint-run" }
+      ]
+    ]);
+  });
+
   it("carries correlation and enqueue time on the discovery payload", async () => {
     const queue = createDiscoveryQueue({
       connectionString: "postgres://worker:secret@database/slashwho"
