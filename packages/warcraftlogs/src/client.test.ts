@@ -8,6 +8,196 @@ import { describe, expect, it, vi } from "vitest";
 import { createPlannedWarcraftLogsClient as createWarcraftLogsClient } from "./planned-client.test-support";
 import { reportActorsQuery } from "./queries";
 
+describe("upstream recent-report page ceiling", () => {
+  function historyClient(
+    hasMore: boolean | ((page: number) => boolean) = true,
+    rankedStatus?: number
+  ) {
+    const pages: number[] = [];
+    const source = fixture("character-report-valid") as {
+      pages: Array<{
+        data: {
+          characterData: {
+            character: {
+              recentReports: {
+                data: Array<{ code: string }>;
+                has_more_pages: boolean;
+              };
+            };
+          };
+        };
+      }>;
+    };
+    const page = structuredClone(source.pages[0]!);
+    const { client } = clientFor((url, init) => {
+      if (url.pathname === "/oauth/token") return token();
+      const body = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: { page: number };
+      };
+      if (body.query.includes("Historic") && rankedStatus)
+        return new Response("", { status: rankedStatus });
+      if (body.query.includes("RecentReports")) {
+        page.data.characterData.character.recentReports.has_more_pages =
+          typeof hasMore === "function"
+            ? hasMore(body.variables.page)
+            : hasMore;
+        pages.push(body.variables.page);
+        if (body.variables.page > 5)
+          return jsonResponse({
+            errors: [
+              { message: "The page argument must be a value between 1 and 5." }
+            ]
+          });
+      }
+      return jsonResponse(page);
+    });
+    return {
+      client,
+      pages,
+      boundary:
+        page.data.characterData.character.recentReports.data.at(-1)!.code
+    };
+  }
+
+  it.each([undefined, 6, 19])(
+    "stops at page five and clears an unsupported cursor (%s)",
+    async (start) => {
+      const { client, pages } = historyClient();
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 300,
+        parseRequestCap: 10,
+        ...(start
+          ? {
+              historyScanStartPage: start,
+              historyScanResumeBoundaryReportCode: "oldBoundary"
+            }
+          : {})
+      });
+      expect(pages).toEqual([1, 2, 3, 4, 5]);
+      expect(result).toMatchObject({
+        kind: "evidence",
+        limitation: { code: "history_limit" },
+        historyScanLimitReached: true
+      });
+      expect(result).not.toHaveProperty("historyScanResumePage");
+      expect(result).not.toHaveProperty("historyScanResumeBoundaryReportCode");
+      if (result.kind !== "evidence")
+        throw new Error("Expected retained evidence");
+      expect(result.kills.length).toBeGreaterThan(0);
+    }
+  );
+
+  it("leaves a smaller local cap resumable", async () => {
+    const { client, pages } = historyClient();
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 2,
+      parseRequestCap: 10
+    });
+    expect(pages).toEqual([1, 2]);
+    expect(result).toMatchObject({
+      kind: "evidence",
+      limitation: { code: "request_cap" },
+      historyScanResumePage: 3
+    });
+    expect(result).not.toHaveProperty("historyScanLimitReached");
+  });
+
+  it.each([
+    ["request_cap", undefined, 0],
+    ["unavailable", 503, 4],
+    ["rate_limited", 429, 4]
+  ] as const)(
+    "preserves a ranked-backfill %s retry and cursor at the history ceiling",
+    async (code, status, requestCap) => {
+      const { client } = historyClient(true, status);
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 300,
+        parseRequestCap: 10,
+        characterId: 1,
+        rankedBackfill: { journalRaidId: "946", requestCap }
+      });
+      expect(result).toMatchObject({
+        kind: "evidence",
+        limitation: { code },
+        historyScanLimitReached: true,
+        rankedBackfillCursor: { journalRaidId: "946" }
+      });
+      expect(result).not.toHaveProperty("historyScanResumePage");
+    }
+  );
+
+  it("allows a fresh naturally exhausted history to finish", async () => {
+    const { client, pages } = historyClient(false);
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 300,
+      parseRequestCap: 10
+    });
+    expect(pages).toEqual([1]);
+    expect(result).not.toHaveProperty("limitation");
+  });
+
+  it("allows fresh natural exhaustion on page five to finish", async () => {
+    const { client, pages } = historyClient((page) => page < 5);
+    const result = await client.getFirstKillReports(key, {
+      requestCap: 300,
+      parseRequestCap: 10
+    });
+    expect(pages).toEqual([1, 2, 3, 4, 5]);
+    expect(result).toMatchObject({ kind: "evidence" });
+    expect(result).not.toHaveProperty("limitation");
+    expect(result).not.toHaveProperty("historyScanLimitReached");
+    expect(result).not.toHaveProperty("historyScanResumePage");
+  });
+
+  it.each([false, true])(
+    "validates a page-five resume and preserves partialness (has more: %s)",
+    async (hasMore) => {
+      const { client, pages, boundary } = historyClient(hasMore);
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 300,
+        parseRequestCap: 10,
+        historyScanStartPage: 5,
+        historyScanResumeBoundaryReportCode: boundary
+      });
+      expect(pages).toEqual([4, 5]);
+      expect(result).toMatchObject({
+        kind: "evidence",
+        limitation: { code: hasMore ? "history_limit" : "request_cap" }
+      });
+      if (hasMore) {
+        expect(result).toHaveProperty("historyScanLimitReached", true);
+        expect(result).not.toHaveProperty("historyScanResumePage");
+        expect(result).not.toHaveProperty(
+          "historyScanResumeBoundaryReportCode"
+        );
+      } else {
+        expect(result).toHaveProperty("historyScanResumePage", 1);
+        expect(result).not.toHaveProperty("historyScanLimitReached");
+      }
+    }
+  );
+
+  it.each([false, true])(
+    "keeps a valid resumed end or floor partial (floor: %s)",
+    async (floor) => {
+      const { client, pages } = historyClient(false);
+      const result = await client.getFirstKillReports(key, {
+        requestCap: 300,
+        parseRequestCap: 10,
+        historyScanStartPage: 4,
+        ...(floor ? { killScanFloor: "2099-01-01T00:00:00.000Z" } : {})
+      });
+      expect(pages).toEqual([4]);
+      expect(result).toMatchObject({
+        kind: "evidence",
+        limitation: { code: "request_cap" },
+        historyScanResumePage: 1
+      });
+    }
+  );
+});
+
 type FixtureName =
   | "token-valid"
   | "character-report-valid"
@@ -2198,7 +2388,19 @@ describe("Warcraft Logs gateway", () => {
         zoneId;
       return report;
     });
-    let page = 0;
+    const page = structuredClone(reports[0]!) as {
+      data: {
+        characterData: {
+          character: {
+            recentReports: { data: unknown[]; has_more_pages: boolean };
+          };
+        };
+      };
+    };
+    page.data.characterData.character.recentReports.data = reports.flatMap(
+      (value) => value.data.characterData.character.recentReports.data
+    );
+    page.data.characterData.character.recentReports.has_more_pages = false;
     const { client } = clientFor((url, init) => {
       if (url.pathname === "/oauth/token") return token();
       const body = JSON.parse(String(init?.body)) as {
@@ -2211,9 +2413,7 @@ describe("Warcraft Logs gateway", () => {
       if (body.query.includes("ReportFightParses")) {
         return emptyRankingsResponse(body.variables?.code ?? "report");
       }
-      const report = reports[page++];
-      if (!report) throw new Error("unexpected_report_page");
-      return jsonResponse(report);
+      return jsonResponse(page);
     });
 
     // floor((5 - 1) / 2) = 2 zones affordable, so five of the seven are missed.
@@ -4459,7 +4659,7 @@ describe("Warcraft Logs gateway", () => {
               last.data.characterData.character.recentReports.has_more_pages = false;
               return jsonResponse(last);
             }
-            return body.variables.page === 18 ? jsonResponse(page) : history();
+            return body.variables.page === 2 ? jsonResponse(page) : history();
           }
           if (body.query.includes("ReportByCode")) {
             hydrated.push(body.variables.code!);
@@ -4476,7 +4676,7 @@ describe("Warcraft Logs gateway", () => {
             : ["lateReport", "storedRecovery"],
           ...(resumed
             ? {
-                historyScanStartPage: 19,
+                historyScanStartPage: 3,
                 historyScanResumeBoundaryReportCode: "lateReport"
               }
             : {})
@@ -4887,7 +5087,7 @@ describe("Warcraft Logs gateway", () => {
       };
       if (body.query.includes("RecentReports")) {
         return jsonResponse(
-          body.variables.page === 18
+          body.variables.page === 2
             ? page
             : {
                 data: {
@@ -4920,7 +5120,7 @@ describe("Warcraft Logs gateway", () => {
       requestCap: 10,
       parseRequestCap: 1,
       verifiedKills: verifiedIn("Guild"),
-      historyScanStartPage: 19,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
@@ -6088,17 +6288,17 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 2,
       parseRequestCap: 10,
-      historyScanStartPage: 19,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
     // The proved boundary page is the validation request. It counts toward
     // the same physical-request budget as the page that advances the scan.
-    expect(historyPages).toEqual([18, 19]);
+    expect(historyPages).toEqual([2, 3]);
     expect(result).toMatchObject({
       kind: "evidence",
       limitation: { code: "request_cap" },
-      historyScanResumePage: 20
+      historyScanResumePage: 4
     });
   });
 
@@ -6148,7 +6348,7 @@ describe("Warcraft Logs gateway", () => {
           const requestedPage = body.variables.page ?? 0;
           historyPages.push(requestedPage);
           return jsonResponse(
-            requestedPage === 66
+            requestedPage === 2
               ? page
               : {
                   data: {
@@ -6168,13 +6368,13 @@ describe("Warcraft Logs gateway", () => {
       const result = await client.getFirstKillReports(key, {
         requestCap: 300,
         parseRequestCap: 10,
-        historyScanStartPage: 67,
+        historyScanStartPage: 3,
         historyScanResumeBoundaryReportCode: "lateReport"
       });
 
       // The whole budget was not needed, and the history below the cursor ran
       // out -- which is exactly the case that must not read as finished.
-      expect(historyPages).toEqual([66, 67]);
+      expect(historyPages).toEqual([2, 3]);
       expect(result).toMatchObject({
         kind: "evidence",
         limitation: { code: "request_cap" },
@@ -6243,9 +6443,9 @@ describe("Warcraft Logs gateway", () => {
         const requestedPage = body.variables.page ?? 0;
         historyPages.push(requestedPage);
         return jsonResponse(
-          requestedPage === 66
+          requestedPage === 2
             ? page
-            : requestedPage === 67
+            : requestedPage === 3
               ? emptyPage
               : fixture("schema-drift")
         );
@@ -6256,15 +6456,15 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 10,
       parseRequestCap: 10,
-      historyScanStartPage: 67,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
-    expect(historyPages).toEqual([66, 67, 68]);
+    expect(historyPages).toEqual([2, 3, 4]);
     expect(result).toMatchObject({
       kind: "evidence",
       limitation: { code: "schema_drift" },
-      historyScanResumePage: 67,
+      historyScanResumePage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
   });
@@ -6290,7 +6490,7 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 0,
       parseRequestCap: 10,
-      historyScanStartPage: 19,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
@@ -6310,13 +6510,13 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
       parseRequestCap: 10,
-      historyScanStartPage: 19,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
     expect(result).toMatchObject({
       limitation: { code: "request_cap" },
-      historyScanResumePage: 19,
+      historyScanResumePage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
   });
@@ -6333,7 +6533,7 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
       parseRequestCap: 10,
-      historyScanStartPage: 19
+      historyScanStartPage: 3
     });
 
     expect(result).toEqual({ kind: "limitation", code: "schema_drift" });
@@ -6361,11 +6561,11 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 1,
       parseRequestCap: 10,
-      historyScanStartPage: 19,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "report-that-was-replaced"
     });
 
-    expect(historyPages).toEqual([18]);
+    expect(historyPages).toEqual([2]);
     expect(result).toMatchObject({
       kind: "evidence",
       limitation: { code: "request_cap" },
@@ -6398,7 +6598,7 @@ describe("Warcraft Logs gateway", () => {
       if (body.query.includes("RecentReports")) {
         const requestedPage = body.variables.page ?? 0;
         historyPages.push(requestedPage);
-        return jsonResponse(requestedPage === 18 ? shiftedBoundary : page);
+        return jsonResponse(requestedPage === 2 ? shiftedBoundary : page);
       }
       return jsonResponse(page);
     });
@@ -6406,11 +6606,11 @@ describe("Warcraft Logs gateway", () => {
     const result = await client.getFirstKillReports(key, {
       requestCap: 2,
       parseRequestCap: 10,
-      historyScanStartPage: 19,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "lateReport"
     });
 
-    expect(historyPages).toEqual([18, 1]);
+    expect(historyPages).toEqual([2, 1]);
     expect(result).toMatchObject({
       kind: "evidence",
       limitation: { code: "request_cap" },
@@ -7321,7 +7521,7 @@ describe("searching one tier's guild attendance", () => {
       requestCap: 0,
       targetedOnly: true,
       parseRequestCap: 1,
-      historyScanStartPage: 19,
+      historyScanStartPage: 3,
       historyScanResumeBoundaryReportCode: "lateReport",
       tierSearch: {
         from: tierFrom,

@@ -48,6 +48,7 @@ export const dossierLimitationCodeSchema = z.enum([
   "points_budget_low",
   "collection_failed",
   "request_cap",
+  "history_limit",
   "unavailable",
   "schema_changed",
   "invalid_fight_timestamp",

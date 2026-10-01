@@ -13,6 +13,7 @@ import type {
 } from "../types";
 import type { CollectionRun } from "./context";
 import { readHistoryPage } from "./history-page";
+import { RECENT_REPORTS_MAX_PAGE } from "../queries";
 
 /** What the character's own report history yielded, and where it stopped. */
 export type HistoryScan = {
@@ -38,6 +39,7 @@ export type HistoryScan = {
   readonly lastDecodedPage: number | undefined;
   readonly resumeBoundaryReportCode: string | undefined;
   readonly invalidatedStoredBoundary: boolean;
+  readonly historyLimitReached: boolean;
 };
 
 /**
@@ -62,12 +64,18 @@ export async function scanHistory(
   let resumeBoundaryReportCode = options.targetedOnly
     ? undefined
     : options.historyScanResumeBoundaryReportCode;
+  const unsupportedCursor = startPage > RECENT_REPORTS_MAX_PAGE;
+  if (unsupportedCursor) {
+    startPage = 1;
+    resumeBoundaryReportCode = undefined;
+    invalidatedStoredBoundary = true;
+  }
   // A run with no history budget -- a parse-only resume -- has no request to
   // spend proving a boundary it will not scan from.
   if (
     options.requestCap > 0 &&
     startPage > 1 &&
-    options.historyScanResumeBoundaryReportCode !== undefined
+    resumeBoundaryReportCode !== undefined
   ) {
     // Page offsets are not stable when a report is uploaded (including a
     // backdated one). The final report code on the last proved page is an
@@ -108,7 +116,8 @@ export async function scanHistory(
       lastDecodedPage = startPage - 1;
     }
   }
-  const resumedFromCursor = startPage > 1;
+  const resumedFromCursor = startPage > 1 || unsupportedCursor;
+  let historyLimitReached = false;
   let finished = false;
   for (let page = startPage; run.historyRequests < options.requestCap; page++) {
     const result = await readHistoryPage(run, lookup, page, true);
@@ -185,6 +194,12 @@ export async function scanHistory(
       finished = true;
       break;
     }
+    if (page === RECENT_REPORTS_MAX_PAGE) {
+      historyLimitReached = true;
+      limitation = { kind: "limitation", code: "history_limit" };
+      options.onLimitation?.("history_scan", limitation.code);
+      break;
+    }
     if (run.historyRequests === options.requestCap) {
       limitation = { kind: "limitation", code: "request_cap" };
     }
@@ -206,6 +221,7 @@ export async function scanHistory(
     finished,
     lastDecodedPage,
     resumeBoundaryReportCode,
-    invalidatedStoredBoundary
+    invalidatedStoredBoundary,
+    historyLimitReached
   };
 }

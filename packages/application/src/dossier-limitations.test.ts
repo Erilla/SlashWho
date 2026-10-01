@@ -28,6 +28,20 @@ describe("contractLimitationCode", () => {
 });
 
 describe("contractLimitation", () => {
+  it("explains the upstream history ceiling without promising a retry", () => {
+    const result = contractLimitation({
+      source: "warcraft_logs",
+      character,
+      code: "history_limit"
+    });
+    expect(result).toMatchObject({
+      code: "history_limit",
+      affects: "kill_history",
+      recovery: "none"
+    });
+    expect(result.message).toMatch(/Warcraft Logs.*limits.*recent.*history/i);
+    expect(result.message).toMatch(/partial.*older kills or wipes/i);
+  });
   it("fails on an unknown code by name, before the dossier schema sees it", () => {
     expect(() =>
       contractLimitation({

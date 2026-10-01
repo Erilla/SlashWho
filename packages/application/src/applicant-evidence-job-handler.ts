@@ -59,6 +59,7 @@ import {
 } from "./evidence-run-budget";
 import {
   drivingParseLimitation,
+  drivingLimitation,
   retryDelayMsFor
 } from "./limitation-retry-policy";
 import { measuredRepositories } from "./measured-repositories";
@@ -84,19 +85,32 @@ import { killScanFloorFrom, terminalTiersFrom } from "./terminal-tiers";
 /** Keep one publication under the connected key while scanning former names. */
 function mergeHistoricAliasResponse(
   current: WarcraftLogsReportResult,
-  historic: WarcraftLogsReportResult
+  historic: WarcraftLogsReportResult,
+  delays: Readonly<{ transientRetryMs: number; capRetryMs: number }>
 ): WarcraftLogsReportResult {
+  const currentLimitation =
+    current.kind === "limitation" ? current : current.limitation;
+  const historicLimitation =
+    historic.kind === "limitation" ? historic : historic.limitation;
+  const limitation = drivingLimitation(
+    [currentLimitation, historicLimitation].filter(
+      (item) => item !== undefined
+    ),
+    delays
+  );
   if (current.kind === "limitation") {
-    if (historic.kind === "limitation") return current;
+    if (historic.kind === "limitation") return limitation ?? current;
     return {
       ...historic,
       historyScanResumePage: undefined,
       historyScanResumeBoundaryReportCode: undefined,
-      limitation: current
+      historyScanLimitReached:
+        current.code === "history_limit" ? true : undefined,
+      limitation: limitation ?? current
     };
   }
   if (historic.kind === "limitation") {
-    return { ...current, limitation: historic };
+    return { ...current, limitation: limitation ?? historic };
   }
   const distinct = <T>(
     values: readonly T[],
@@ -137,9 +151,7 @@ function mergeHistoricAliasResponse(
         ])
       ]
     },
-    ...(current.limitation || historic.limitation
-      ? { limitation: current.limitation ?? historic.limitation }
-      : {}),
+    ...(limitation ? { limitation } : {}),
     ...(current.parseLimitation || historic.parseLimitation
       ? { parseLimitation: current.parseLimitation ?? historic.parseLimitation }
       : {}),
@@ -2032,7 +2044,7 @@ export function createApplicantEvidenceJobHandler(
                         }
                       : {})
                   }
-                : historic.limitation
+                : historic.limitation && !historic.historyScanLimitReached
                   ? {
                       ...(previous?.historyScanResumePage
                         ? {
@@ -2055,15 +2067,18 @@ export function createApplicantEvidenceJobHandler(
             };
             aliasProgress.set(canonicalCharacterId(alias), next);
           }
-          response = mergeHistoricAliasResponse(response, historic);
+          response = mergeHistoricAliasResponse(response, historic, options);
         }
         if (deferred && response.kind === "evidence") {
           response = {
             ...response,
-            limitation: response.limitation ?? {
-              kind: "limitation",
-              code: "request_cap"
-            }
+            limitation: drivingLimitation(
+              [
+                ...(response.limitation ? [response.limitation] : []),
+                { kind: "limitation" as const, code: "request_cap" as const }
+              ],
+              options
+            )!
           };
         }
         const historicAliasProgress = historicAliases
@@ -2523,30 +2538,35 @@ export function createApplicantEvidenceJobHandler(
             // resume: it carries the stored bookmark forward unchanged.
             ...(targeted || response.scanSkipped
               ? {}
-              : !movesHistoryBookmark
-                ? carriedHistoryBookmark
-                : response.historyScanResumePage !== undefined
-                  ? {
-                      historyScanResumePage: response.historyScanResumePage,
-                      historyScanResumeBoundaryReportCode:
-                        response.historyScanResumeBoundaryReportCode ?? null
-                    }
-                  : response.limitation === undefined
-                    ? storedEvidence.historyScanResumePage !== undefined
-                      ? {
-                          historyScanResumePage: null,
-                          historyScanResumeBoundaryReportCode: null
-                        }
-                      : {}
-                    : storedEvidence.historyScanResumePage !== undefined
-                      ? {
-                          historyScanResumePage:
-                            storedEvidence.historyScanResumePage,
-                          historyScanResumeBoundaryReportCode:
-                            storedEvidence.historyScanResumeBoundaryReportCode ??
-                            null
-                        }
-                      : {}),
+              : response.historyScanLimitReached
+                ? {
+                    historyScanResumePage: null,
+                    historyScanResumeBoundaryReportCode: null
+                  }
+                : !movesHistoryBookmark
+                  ? carriedHistoryBookmark
+                  : response.historyScanResumePage !== undefined
+                    ? {
+                        historyScanResumePage: response.historyScanResumePage,
+                        historyScanResumeBoundaryReportCode:
+                          response.historyScanResumeBoundaryReportCode ?? null
+                      }
+                    : response.limitation === undefined
+                      ? storedEvidence.historyScanResumePage !== undefined
+                        ? {
+                            historyScanResumePage: null,
+                            historyScanResumeBoundaryReportCode: null
+                          }
+                        : {}
+                      : storedEvidence.historyScanResumePage !== undefined
+                        ? {
+                            historyScanResumePage:
+                              storedEvidence.historyScanResumePage,
+                            historyScanResumeBoundaryReportCode:
+                              storedEvidence.historyScanResumeBoundaryReportCode ??
+                              null
+                          }
+                        : {}),
             limitationCode: response.limitation?.code ?? null,
             parseLimitationCode: drivingParse?.code ?? null,
             parseLimitationCodesSeen: parseLimitationsSeen.map(

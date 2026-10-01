@@ -9,7 +9,15 @@ import {
   type CharacterMythicKillInput
 } from "../../packages/database/src";
 import type { WarcraftLogsGateway } from "../../packages/warcraftlogs/src";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi
+} from "vitest";
 import {
   rootKey,
   altKey,
@@ -44,6 +52,135 @@ describe("PostgreSQL repositories: character evidence", () => {
   afterAll(async () => {
     await stop();
   });
+
+  it.each(["history_limit", "unavailable"] as const)(
+    "persists cleared root and alias history bookmarks while retaining evidence (%s)",
+    async (drivingCode) => {
+      const alias = {
+        region: "eu",
+        realm: "old-realm",
+        name: "former"
+      } as const;
+      await seedCompleteSnapshot(repositories);
+      const at = new Date("2026-09-20T12:00:00.000Z");
+      const first = await repositories.evidence.reserve({
+        origin: "dossier_read",
+        key: rootKey,
+        freshnessCutoff: at,
+        at
+      });
+      if (first.kind !== "reserved") throw new Error("run_not_reserved");
+      const kill = mythicKill({
+        performance: {
+          damage: { state: "available", percentile: 98 },
+          healing: { state: "not_applicable" },
+          bossDamage: { state: "available", percentile: 95 }
+        }
+      });
+      const wipe = mythicWipe();
+      await repositories.evidence.publish(first.run.id, {
+        state: "partial",
+        limitationCode: "unavailable",
+        parseLimitationCode: null,
+        historyScanResumePage: 6,
+        historyScanResumeBoundaryReportCode: "oldBoundary",
+        historicAliasProgress: [
+          {
+            key: alias,
+            historyScanResumePage: 19,
+            historyScanResumeBoundaryReportCode: "oldAliasBoundary",
+            historyComplete: false,
+            parseWorkOutstanding: false,
+            pendingParseFightUrls: []
+          }
+        ],
+        kills: [kill],
+        wipes: [wipe],
+        tierBests: [],
+        completedAt: at
+      });
+      const nextAt = new Date("2026-09-20T13:00:00.000Z");
+      const next = await repositories.evidence.reserve({
+        origin: "dossier_read",
+        key: rootKey,
+        freshnessCutoff: nextAt,
+        at: nextAt
+      });
+      if (next.kind !== "reserved") throw new Error("run_not_reserved");
+      const stage = vi.spyOn(repositories.evidence, "stageCollection");
+      const evidence = {
+        ...repositories.evidence,
+        historicAliases: async () => [alias]
+      };
+      await createApplicantEvidenceJobHandler({
+        evidence,
+        warcraftLogs: {
+          getRateLimit: async () => ({
+            kind: "rate_limit",
+            limitPerHour: 18000,
+            pointsSpentThisHour: 0,
+            pointsResetInSeconds: 949
+          }),
+          getFirstKillReports: async (requested) => ({
+            kind: "evidence",
+            kills: [],
+            wipes: [],
+            tierBests: [],
+            parsedFightUrls: [],
+            troubledRaidIds: { parses: [], tierBests: [] },
+            historyScanLimitReached: true,
+            limitation: {
+              kind: "limitation",
+              code:
+                requested.name === alias.name ? "history_limit" : drivingCode
+            }
+          })
+        },
+        requestCap: 500,
+        parseRequestCap: 24,
+        capRetryMs: 1800000,
+        transientRetryMs: 900000,
+        pointsReserve: 0,
+        retryCostCeiling: 250,
+        failureCooldownMs: 1800000,
+        killSettleMs: 7 * 24 * 60 * 60 * 1000,
+        now: () => nextAt
+      }).execute(next.run.id);
+      expect(stage).toHaveBeenCalledWith(
+        next.run.id,
+        expect.objectContaining({
+          state: "partial",
+          historyScanResumePage: null,
+          historyScanResumeBoundaryReportCode: null
+        })
+      );
+      const stored = await repositories.evidence.storedEvidenceTiers(rootKey);
+      expect(stored).not.toHaveProperty("historyScanResumePage");
+      expect(stored).not.toHaveProperty("historyScanResumeBoundaryReportCode");
+      expect(stored.historicAliasProgress).toEqual([
+        expect.objectContaining({ key: alias, historyComplete: false })
+      ]);
+      expect(stored.historicAliasProgress?.[0]).not.toHaveProperty(
+        "historyScanResumePage"
+      );
+      expect(stored.historicAliasProgress?.[0]).not.toHaveProperty(
+        "historyScanResumeBoundaryReportCode"
+      );
+      const published = await repositories.evidence.getCompleted(rootKey);
+      expect(published).toMatchObject({
+        run: { status: "partial", limitationCode: drivingCode },
+        kills: [kill],
+        wipes: [wipe]
+      });
+      expect(published?.run.retryAfterAt).toEqual(
+        drivingCode === "history_limit"
+          ? null
+          : new Date(nextAt.getTime() + 900000)
+      );
+      expect(await repositories.evidence.terminalTiers(rootKey)).toEqual([]);
+      stage.mockRestore();
+    }
+  );
 
   it("round-trips a Mythic kill's Warcraft Logs guild region", async () => {
     // Historical-guild traversal can only safely call Blizzard when the
