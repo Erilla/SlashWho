@@ -703,9 +703,9 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                 requestCap: options.requestCap,
                 isSuppressed: (key) => repositories.suppressions.isActive(key),
                 knownReverseDeclaredCharacters,
-                ...(job?.rootCharacter
-                  ? { rootCharacter: job.rootCharacter }
-                  : {}),
+                // Legacy job JSON can still contain a rootCharacter. Always
+                // read the root through the gateway; upstream identity stays
+                // ephemeral and never becomes an input from durable storage.
                 signal: context.signal
               }
             );

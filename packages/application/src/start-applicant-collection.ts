@@ -33,9 +33,8 @@ export async function startApplicantCollection(input: {
   if (discovery.kind === "rate_limited" || discovery.kind === "negative")
     return "unavailable";
   if (discovery.kind === "reserved") {
-    let rootCharacter;
     try {
-      rootCharacter = await input.raiderio.getCharacter(key);
+      await input.raiderio.getCharacter(key);
     } catch {
       await repositories.searchReservations.cancel(discovery.run.id);
       return "unavailable";
@@ -44,7 +43,6 @@ export async function startApplicantCollection(input: {
       const queueJobId = await queue.enqueue({
         runId: discovery.run.id,
         key,
-        rootCharacter,
         enqueuedAt: new Date().toISOString()
       });
       await repositories.searchReservations.markEnqueued(

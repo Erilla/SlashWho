@@ -1,4 +1,4 @@
-import type { CharacterKey, RaiderIoCharacter } from "@slashwho/domain";
+import type { CharacterKey } from "@slashwho/domain";
 import { PgBoss } from "pg-boss";
 
 export const discoverCharacterQueueName = "discover-character";
@@ -17,8 +17,6 @@ export type JobTelemetry = {
 export type DiscoverCharacterJob = {
   runId: string;
   key: CharacterKey;
-  /** Normalized root response validated before this run was admitted. */
-  rootCharacter?: RaiderIoCharacter;
   /**
    * Set when this job resumes a fingerprint sweep that capped. It skips
    * Raider.IO re-discovery and the completed-run guard.
@@ -298,7 +296,22 @@ export function createDiscoveryQueue(
       const singletonKey = payload.continuation
         ? `${payload.runId}:continuation`
         : payload.runId;
-      const id = await boss.send(discoverCharacterQueueName, payload, {
+      // Caller objects can be structurally wider than the type, including the
+      // nested key. Only explicit queue fields may reach durable job storage.
+      const data: DiscoverCharacterJob = {
+        runId: payload.runId,
+        key: {
+          region: payload.key.region,
+          realm: payload.key.realm,
+          name: payload.key.name
+        }
+      };
+      if (payload.correlationId !== undefined)
+        data.correlationId = payload.correlationId;
+      if (payload.enqueuedAt !== undefined)
+        data.enqueuedAt = payload.enqueuedAt;
+      if (payload.continuation === true) data.continuation = true;
+      const id = await boss.send(discoverCharacterQueueName, data, {
         singletonKey
       });
       return (
@@ -333,11 +346,14 @@ export function createDiscoveryQueue(
 
     async enqueueCharacterEvidence(runId, meta) {
       if (!ready) throw new Error("discovery_queue_not_ready");
-      const id = await boss.send(
-        collectCharacterEvidenceQueueName,
-        { runId, ...(meta ?? {}) },
-        { singletonKey: runId }
-      );
+      const data: CollectCharacterEvidenceJob = { runId };
+      if (meta?.correlationId !== undefined)
+        data.correlationId = meta.correlationId;
+      if (meta?.enqueuedAt !== undefined) data.enqueuedAt = meta.enqueuedAt;
+      if (meta?.mode !== undefined) data.mode = meta.mode;
+      const id = await boss.send(collectCharacterEvidenceQueueName, data, {
+        singletonKey: runId
+      });
       return (
         id ??
         (await existingSingletonJobId(

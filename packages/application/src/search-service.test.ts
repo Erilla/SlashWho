@@ -71,7 +71,7 @@ function policyFixture(
     level: 80,
     guild: null,
     ownerId: "fixture-owner",
-    profileGuess: null,
+    profileGuess: "fixture-discord-profile",
     declaredMain: null
   } as const;
   const getCharacter = vi.fn(async () => {
@@ -649,14 +649,14 @@ describe("search freshness policy", () => {
     });
     expect(fixture.enqueued).toHaveLength(1);
     expect(fixture.getCharacter).toHaveBeenCalledTimes(1);
-    expect(fixture.enqueuedPayloads[0]).toMatchObject({
-      rootCharacter: {
+    expect(fixture.enqueuedPayloads).toEqual([
+      {
+        runId: fixture.enqueued[0],
         key,
-        displayName: "Ryii",
-        className: "Mage",
-        level: 80
+        correlationId: undefined,
+        enqueuedAt: "2026-08-04T12:00:00.000Z"
       }
-    });
+    ]);
   });
 
   it("returns and caches a missing root before reserving discovery work", async () => {
