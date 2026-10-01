@@ -655,6 +655,9 @@ function fingerprintRunDispatcher(
   return async (runId) => {
     const run = await repositories.runs.find(runId);
     if (!run) return;
+    const delivery =
+      await repositories.fingerprintDeliveries?.descriptor(runId);
+    if (repositories.fingerprintDeliveries && !delivery) return;
     const resume = await repositories.fingerprintSweeps.getResumeState(
       run.rootKey
     );
@@ -663,7 +666,9 @@ function fingerprintRunDispatcher(
     // root is a different run, and dispatching it as a continuation would
     // skip its own discovery entirely and amend someone else's snapshot
     // without ever completing itself. It goes out as an ordinary job.
-    const continues = resume !== null && resume.runId === runId;
+    const continues = delivery
+      ? delivery.continuation
+      : resume !== null && resume.runId === runId;
     // No correlationId is available here: this dispatch is a background
     // fingerprint-admission follow-up, not the continuation of an HTTP
     // request, so it stays absent rather than being invented.
@@ -671,9 +676,20 @@ function fingerprintRunDispatcher(
       runId,
       key: run.rootKey,
       enqueuedAt: new Date().toISOString(),
+      ...(delivery
+        ? {
+            admissionId: delivery.admissionId,
+            attemptBase: delivery.attemptBase
+          }
+        : {}),
       ...(continues ? { continuation: true as const } : {})
     });
-    await repositories.fingerprintSweeps.markDispatched(runId, new Date());
+    if (delivery)
+      await repositories.fingerprintDeliveries!.markDispatched(
+        delivery.admissionId,
+        new Date()
+      );
+    else await repositories.fingerprintSweeps.markDispatched(runId, new Date());
   };
 }
 
@@ -775,6 +791,17 @@ function fingerprintAdmissionWork(
  */
 async function evidenceResumeSweep(context: WorkerContext): Promise<void> {
   const { config, pool, repositories, queue, clock, logger } = context;
+  if (repositories.fingerprintDeliveries) {
+    try {
+      await repositories.fingerprintDeliveries.recoverTerminal();
+      await drainFingerprintBacklog(context, fingerprintRunDispatcher(context));
+    } catch (error) {
+      logger?.info({
+        event: "fingerprint_delivery_recovery_failed",
+        errorName: errorName(error)
+      });
+    }
+  }
   const sweepStartedAt = clock();
   // The backlog over time (#509). It rides this five-minute tick because
   // the cadence is modest and the tick already runs on every worker, and
@@ -1193,6 +1220,8 @@ export async function createWorkerRuntime(
       : null;
 
     await initializedQueue.start();
+    await repositories.fingerprintDeliveries?.recoverLegacy();
+    await repositories.fingerprintDeliveries?.recoverTerminal();
     await recoverPendingSearches(repositories, initializedQueue);
     const dispatchAdmittedFingerprintRun = fingerprintRunDispatcher(context);
     await drainFingerprintBacklog(context, dispatchAdmittedFingerprintRun);

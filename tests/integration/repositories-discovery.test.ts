@@ -1741,7 +1741,7 @@ describe("PostgreSQL repositories: discovery runs and snapshots", () => {
     ).resolves.toMatchObject({ kind: "admitted", requestCap: 3 });
   });
 
-  it("atomically returns a budget-waiting discovery run to its unconsumed delivery", async () => {
+  it("preserves durable claim history when deferring a budget-waiting run", async () => {
     // Break caught: a crash after persisting private admission could leave the
     // run running, or its redispatch could start past the original retry count.
     await pool.query(`TRUNCATE TABLE
@@ -1782,7 +1782,7 @@ describe("PostgreSQL repositories: discovery runs and snapshots", () => {
 
     await expect(repositories.runs.find(waitingRun.id)).resolves.toMatchObject({
       status: "queued",
-      attempt: 0
+      attempt: 1
     });
   });
 

@@ -32,6 +32,17 @@ Steps 3 and 4 have no Railway CLI flag. Set the config-as-code path from each se
 
 Neither Dockerfile uses a BuildKit cache mount. Railway's Metal builder accepts one only when its id is literally `s/<service id>-<target path>`, and [its Dockerfile guide](https://docs.railway.com/builds/dockerfiles) notes that environment variables are invalid inside a cache mount id — so keeping the mount would mean hardcoding this project's Railway service UUIDs, differently per service, into files that CI and local builds also use. Docker layer caching already covers the install step unless the lockfile changes, so the mount was dropped instead. Do not reintroduce one without that literal id; local Docker accepts ids Railway rejects, so the failure appears only on deploy.
 
+## Fingerprint delivery transition (0072)
+
+Drain and stop every old worker before starting a worker with migration 0072
+and admission-bound fingerprint deliveries. The migration adds metadata; new
+workers initialise actionable legacy admissions and cancel their old queue
+jobs before registering discovery work. An old binary does not enforce these
+admission fences, so cancelling its active job cannot stop its in-flight
+publication. This transition requires a stop-old/start-new worker deployment;
+keep old workers stopped after the new worker starts. Mixed-version rolling
+workers are unsupported. Existing dossiers remain readable during the drain.
+
 ## Variables
 
 Set different values in staging and production. Secrets must be Railway secret variables, never checked into the repository.

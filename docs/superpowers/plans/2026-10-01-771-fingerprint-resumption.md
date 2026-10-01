@@ -1,6 +1,7 @@
 # Issue #771: fingerprint resumption delivery and claim sequencing
 
-Status: reproduction stage approved; migration/compatibility checkpoint proposed.
+Status: metadata/backfill checkpoint approved by the manager at b5701ee9;
+implementation and regression coverage complete, full gate and review in progress.
 
 Issue: https://github.com/Erilla/SlashWho/issues/771
 

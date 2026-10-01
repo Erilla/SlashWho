@@ -1,4 +1,5 @@
 export { runMigrations } from "./migrate";
+export { StaleFingerprintDeliveryError } from "./fingerprint-delivery-error";
 export { createPostgresRepositories } from "./postgres-repositories";
 export { mergeRaiderIoFirstKills } from "./evidence/merge";
 export { loadCharacterGroupsAudit } from "./character-groups-audit";

@@ -427,24 +427,56 @@ describe("fingerprint continuation retry", () => {
     ).resolves.toBe(0);
   });
 
-  it("rejects a terminal continuation replay after the next cycle is admitted", async () => {
-    // Break caught: the completed-run bypass lets stale A borrow B's live
-    // reservation and move its cursor. Run/snapshot ownership alone agrees.
+  it("upgrades a legacy continuation without reopening its completed run or losing the cursor", async () => {
     const chain = await admittedContinuation();
+    const beforeRun = await chain.repositories.runs.find(chain.run.id);
+    const beforeSnapshot =
+      await chain.repositories.snapshots.getCurrent(rootKey);
+    const beforeCursor =
+      await chain.repositories.fingerprintSweeps.getResumeState(rootKey);
     const queue = createDiscoveryQueue({
       connectionString: postgres.pool.options.connectionString!
     });
     await queue.start();
     try {
-      const first = await postgres.pool.query<{ id: string }>(
-        `SELECT id FROM fingerprint_sweep_admissions
-         WHERE discovery_run_id = $1 AND status = 'admitted'`,
+      const legacyId = await queue.enqueue(continuation(chain.run.id));
+      await postgres.pool.query(
+        "UPDATE pgboss.job SET state = 'active' WHERE id = $1",
+        [legacyId]
+      );
+      await postgres.pool.query(
+        `UPDATE fingerprint_sweep_admissions SET attempt_base = NULL,
+        dispatch_kind = NULL, execution_max_attempts = NULL
+        WHERE discovery_run_id = $1 AND status = 'admitted'`,
         [chain.run.id]
       );
-      const payload = {
-        ...continuation(chain.run.id),
-        admissionId: first.rows[0]!.id
-      };
+      await chain.repositories.fingerprintDeliveries!.recoverLegacy();
+      expect(
+        (
+          await postgres.pool.query(
+            "SELECT state FROM pgboss.job WHERE id = $1",
+            [legacyId]
+          )
+        ).rows[0]?.state
+      ).toBe("cancelled");
+      await expect(chain.repositories.runs.find(chain.run.id)).resolves.toEqual(
+        beforeRun
+      );
+      await expect(
+        chain.repositories.snapshots.getCurrent(rootKey)
+      ).resolves.toEqual(beforeSnapshot);
+      await expect(
+        chain.repositories.fingerprintSweeps.getResumeState(rootKey)
+      ).resolves.toEqual(beforeCursor);
+      const descriptor =
+        (await chain.repositories.fingerprintDeliveries!.descriptor(
+          chain.run.id
+        ))!;
+      expect(descriptor.continuation).toBe(true);
+      await chain.repositories.fingerprintDeliveries!.recoverLegacy();
+      await expect(
+        chain.repositories.fingerprintDeliveries!.descriptor(chain.run.id)
+      ).resolves.toEqual(descriptor);
       await queue.work((job, context) =>
         handler(
           chain.repositories,
@@ -452,55 +484,292 @@ describe("fingerprint continuation retry", () => {
           chain.outcomes
         ).execute(job.runId, context, job)
       );
-      const originalId = await queue.enqueue(payload);
-      const completed = async (id: string) => {
-        await expect
-          .poll(
-            async () => {
-              const result = await postgres.pool.query(
+      const resumedId = await queue.enqueue({
+        ...continuation(chain.run.id),
+        admissionId: descriptor.admissionId
+      });
+      await expect
+        .poll(
+          async () =>
+            (
+              await postgres.pool.query(
                 "SELECT state FROM pgboss.job WHERE id = $1",
-                [id]
-              );
-              return result.rows[0]?.state;
-            },
-            { timeout: 5_000 }
-          )
-          .toBe("completed");
-      };
-      await completed(originalId);
-      await expect(
-        chain.repositories.fingerprintSweeps.admitWaiting(
-          chain.run.id,
-          new Date()
+                [resumedId]
+              )
+            ).rows[0]?.state,
+          { timeout: 5_000 }
         )
-      ).resolves.toEqual({ kind: "admitted" });
-      const beforeCursor =
-        await chain.repositories.fingerprintSweeps.getResumeState(rootKey);
-      const beforeReads = [...chain.upstream.state.reads];
-      const beforeBudget = await postgres.pool.query(
-        "SELECT count(*)::int AS requests FROM fingerprint_sweep_request_events"
-      );
-      // pg-boss deduplication ends at completion: this is a genuinely new job
-      // carrying the old cycle's payload, not a repeated send of active work.
-      const replayId = await queue.enqueue(payload);
-      expect(replayId).not.toBe(originalId);
-      await completed(replayId);
-      expect(chain.upstream.state.reads).toEqual(beforeReads);
-      await expect(
-        chain.repositories.fingerprintSweeps.getResumeState(rootKey)
-      ).resolves.toEqual(beforeCursor);
-      expect(
-        (
-          await postgres.pool.query(
-            "SELECT count(*)::int AS requests FROM fingerprint_sweep_request_events"
-          )
-        ).rows
-      ).toEqual(beforeBudget.rows);
+        .toBe("completed");
       expect((await chain.repositories.runs.find(chain.run.id))?.status).toBe(
         "complete"
       );
+      expect((await chain.repositories.runs.find(chain.run.id))?.attempt).toBe(
+        beforeRun?.attempt
+      );
+      expect(
+        (await chain.repositories.fingerprintSweeps.getResumeState(rootKey))
+          ?.resumeAfter
+      ).not.toBe(beforeCursor?.resumeAfter);
     } finally {
       await queue.stop({ graceful: true, timeoutMs: 1_000 });
     }
   });
+
+  it("delays an identified capped continuation without advancing its cursor", async () => {
+    const chain = await admittedContinuation();
+    const descriptor =
+      (await chain.repositories.fingerprintDeliveries!.descriptor(
+        chain.run.id
+      ))!;
+    const queue = createDiscoveryQueue({
+      connectionString: postgres.pool.options.connectionString!
+    });
+    await queue.start();
+    try {
+      const capped: BlizzardGateway = {
+        ...chain.upstream.gateway,
+        async getGuildRoster() {
+          throw { kind: "fingerprint_cap_reached" };
+        }
+      };
+      await queue.work((job, context) =>
+        handler(chain.repositories, capped, chain.outcomes).execute(
+          job.runId,
+          context,
+          job
+        )
+      );
+      const failedAt = Date.now();
+      const jobId = await queue.enqueue({
+        ...continuation(chain.run.id),
+        admissionId: descriptor.admissionId
+      });
+      await expect
+        .poll(
+          async () =>
+            (
+              await postgres.pool.query(
+                "SELECT state FROM pgboss.job WHERE id = $1",
+                [jobId]
+              )
+            ).rows[0]?.state,
+          { timeout: 5_000 }
+        )
+        .toBe("completed");
+      await expect(
+        chain.repositories.fingerprintSweeps.getResumeState(rootKey)
+      ).resolves.toEqual(chain.cursor);
+      const state = await postgres.pool.query(
+        "SELECT continuation_failures FROM fingerprint_sweep_states"
+      );
+      expect(state.rows[0]?.continuation_failures).toBe(1);
+      await expectAdmittedOnlyAfter(chain, failedAt, 2 * minutes);
+    } finally {
+      await queue.stop({ graceful: true, timeoutMs: 1_000 });
+    }
+  });
+
+  it("retires a crashed continuation and queues its bounded delayed successor", async () => {
+    const chain = await admittedContinuation();
+    const descriptor =
+      (await chain.repositories.fingerprintDeliveries!.descriptor(
+        chain.run.id
+      ))!;
+    const beforeSnapshot =
+      await chain.repositories.snapshots.getCurrent(rootKey);
+    const queue = createDiscoveryQueue({
+      connectionString: postgres.pool.options.connectionString!
+    });
+    await queue.start();
+    try {
+      const payload = {
+        ...continuation(chain.run.id),
+        admissionId: descriptor.admissionId
+      };
+      const originalId = await queue.enqueue(payload);
+      await postgres.pool.query(
+        "UPDATE pgboss.job SET retry_count = 4 WHERE id = $1",
+        [originalId]
+      );
+      await queue.work(async (job, context) => {
+        await chain.repositories.fingerprintDeliveries!.execute(
+          {
+            runId: job.runId,
+            admissionId: job.admissionId!,
+            jobId: context.jobId!,
+            attempt: context.attempt,
+            maxAttempts: context.maxAttempts
+          },
+          async () => {
+            throw new Error("crash_before_continuation_publication");
+          }
+        );
+      });
+      await expect
+        .poll(
+          async () =>
+            (
+              await postgres.pool.query(
+                "SELECT state FROM pgboss.job WHERE id = $1",
+                [originalId]
+              )
+            ).rows[0]?.state,
+          { timeout: 5_000 }
+        )
+        .toBe("failed");
+      await chain.repositories.fingerprintDeliveries!.recoverTerminal();
+      const next = await chain.repositories.fingerprintSweeps.admitWaiting(
+        chain.run.id,
+        new Date()
+      );
+      expect(next.kind).toBe("waiting");
+      if (next.kind === "waiting")
+        expect(next.retryAt.getTime()).toBeGreaterThan(Date.now() + 110_000);
+      await expect(
+        chain.repositories.snapshots.getCurrent(rootKey)
+      ).resolves.toEqual(beforeSnapshot);
+      expect((await chain.repositories.runs.find(chain.run.id))?.status).toBe(
+        "complete"
+      );
+      const waiting =
+        await chain.repositories.fingerprintSweeps.listWaiting(100);
+      expect(waiting).toEqual([chain.run.id]);
+      await chain.repositories.fingerprintDeliveries!.recoverTerminal();
+      const replayId = await queue.enqueue(payload);
+      await expect
+        .poll(
+          async () =>
+            (
+              await postgres.pool.query(
+                "SELECT state FROM pgboss.job WHERE id = $1",
+                [replayId]
+              )
+            ).rows[0]?.state,
+          { timeout: 5_000 }
+        )
+        .toBe("completed");
+      await expect(
+        chain.repositories.fingerprintSweeps.listWaiting(100)
+      ).resolves.toEqual(waiting);
+      expect(chain.upstream.state.reads).toEqual([]);
+    } finally {
+      await queue.stop({ graceful: true, timeoutMs: 1_000 });
+    }
+  });
+
+  it.each(["next_cycle", "sealed"])(
+    "rejects a terminal continuation replay with %s",
+    async (scenario) => {
+      // Break caught: the completed-run bypass lets stale A borrow B's live
+      // reservation and move its cursor. Run/snapshot ownership alone agrees.
+      const chain = await admittedContinuation();
+      const queue = createDiscoveryQueue({
+        connectionString: postgres.pool.options.connectionString!
+      });
+      await queue.start();
+      try {
+        const first = await postgres.pool.query<{ id: string }>(
+          `SELECT id FROM fingerprint_sweep_admissions
+         WHERE discovery_run_id = $1 AND status = 'admitted'`,
+          [chain.run.id]
+        );
+        const payload = {
+          ...continuation(chain.run.id),
+          admissionId: first.rows[0]!.id
+        };
+        await queue.work((job, context) =>
+          handler(
+            chain.repositories,
+            chain.upstream.gateway,
+            chain.outcomes
+          ).execute(job.runId, context, job)
+        );
+        const originalId = await queue.enqueue(payload);
+        const completed = async (id: string) => {
+          await expect
+            .poll(
+              async () => {
+                const result = await postgres.pool.query(
+                  "SELECT state FROM pgboss.job WHERE id = $1",
+                  [id]
+                );
+                return result.rows[0]?.state;
+              },
+              { timeout: 5_000 }
+            )
+            .toBe("completed");
+        };
+        await completed(originalId);
+        let replayPayload = payload;
+        let replayOriginal = originalId;
+        if (scenario === "next_cycle") {
+          await expect(
+            chain.repositories.fingerprintSweeps.admitWaiting(
+              chain.run.id,
+              new Date()
+            )
+          ).resolves.toEqual({ kind: "admitted" });
+        } else {
+          for (
+            let cycle = 0;
+            cycle < 8 &&
+            (await chain.repositories.fingerprintSweeps.getResumeState(
+              rootKey
+            ));
+            cycle++
+          ) {
+            await chain.repositories.fingerprintSweeps.admitWaiting(
+              chain.run.id,
+              new Date()
+            );
+            const descriptor =
+              (await chain.repositories.fingerprintDeliveries!.descriptor(
+                chain.run.id
+              ))!;
+            replayPayload = {
+              ...continuation(chain.run.id),
+              admissionId: descriptor.admissionId
+            };
+            replayOriginal = await queue.enqueue(replayPayload);
+            await completed(replayOriginal);
+          }
+          await expect(
+            chain.repositories.fingerprintSweeps.getResumeState(rootKey)
+          ).resolves.toBeNull();
+        }
+        const beforeCursor =
+          await chain.repositories.fingerprintSweeps.getResumeState(rootKey);
+        const beforeReads = [...chain.upstream.state.reads];
+        const beforeSnapshot =
+          await chain.repositories.snapshots.getCurrent(rootKey);
+        const beforeBudget = await postgres.pool.query(
+          "SELECT count(*)::int AS requests FROM fingerprint_sweep_request_events"
+        );
+        // pg-boss deduplication ends at completion: this is a genuinely new job
+        // carrying the old cycle's payload, not a repeated send of active work.
+        const replayId = await queue.enqueue(replayPayload);
+        expect(replayId).not.toBe(replayOriginal);
+        await completed(replayId);
+        expect(chain.upstream.state.reads).toEqual(beforeReads);
+        await expect(
+          chain.repositories.fingerprintSweeps.getResumeState(rootKey)
+        ).resolves.toEqual(beforeCursor);
+        await expect(
+          chain.repositories.snapshots.getCurrent(rootKey)
+        ).resolves.toEqual(beforeSnapshot);
+        expect(
+          (
+            await postgres.pool.query(
+              "SELECT count(*)::int AS requests FROM fingerprint_sweep_request_events"
+            )
+          ).rows
+        ).toEqual(beforeBudget.rows);
+        expect((await chain.repositories.runs.find(chain.run.id))?.status).toBe(
+          "complete"
+        );
+      } finally {
+        await queue.stop({ graceful: true, timeoutMs: 1_000 });
+      }
+    }
+  );
 });

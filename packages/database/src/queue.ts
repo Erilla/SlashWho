@@ -15,6 +15,9 @@ export type JobTelemetry = {
 };
 
 export type DiscoverCharacterJob = {
+  /** Stable fingerprint cycle identity; never derived from delivery time. */
+  admissionId?: string;
+  attemptBase?: number;
   runId: string;
   key: CharacterKey;
   /**
@@ -38,6 +41,10 @@ export type CollectCharacterEvidenceJob = {
 } & JobTelemetry;
 
 export type DiscoveryWorkContext = {
+  jobId?: string;
+  /** Per-delivery count, separate from the durable discovery claim attempt. */
+  deliveryAttempt?: number;
+  fingerprintValidated?: boolean;
   attempt: number;
   maxAttempts: number;
   signal: AbortSignal;
@@ -293,9 +300,11 @@ export function createDiscoveryQueue(
 
     async enqueue(payload) {
       if (!ready) throw new Error("discovery_queue_not_ready");
-      const singletonKey = payload.continuation
-        ? `${payload.runId}:continuation`
-        : payload.runId;
+      const singletonKey = payload.admissionId
+        ? `${payload.runId}:admission:${payload.admissionId}`
+        : payload.continuation
+          ? `${payload.runId}:continuation`
+          : payload.runId;
       // Caller objects can be structurally wider than the type, including the
       // nested key. Only explicit queue fields may reach durable job storage.
       const data: DiscoverCharacterJob = {
@@ -311,6 +320,10 @@ export function createDiscoveryQueue(
       if (payload.enqueuedAt !== undefined)
         data.enqueuedAt = payload.enqueuedAt;
       if (payload.continuation === true) data.continuation = true;
+      if (payload.admissionId !== undefined)
+        data.admissionId = payload.admissionId;
+      if (payload.attemptBase !== undefined)
+        data.attemptBase = payload.attemptBase;
       const id = await boss.send(discoverCharacterQueueName, data, {
         singletonKey
       });
@@ -380,6 +393,7 @@ export function createDiscoveryQueue(
           const execution = (async () => {
             try {
               await handler(job.data, {
+                jobId: job.id,
                 attempt: job.retryCount + 1,
                 maxAttempts: job.retryLimit + 1,
                 signal: AbortSignal.any([job.signal, shutdown.signal])

@@ -907,6 +907,13 @@ export const fingerprintSweepAdmissions = pgTable(
     }).notNull(),
     status: text("status").default("waiting").notNull(),
     dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+    attemptBase: integer("attempt_base"),
+    dispatchKind: text("dispatch_kind"),
+    executionJobId: uuid("execution_job_id"),
+    executionAttempt: integer("execution_attempt").default(0).notNull(),
+    executionMaxAttempts: integer("execution_max_attempts"),
+    executionToken: uuid("execution_token"),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
     requestedAt: timestamp("requested_at", { withTimezone: true })
       .defaultNow()
       .notNull()
@@ -927,6 +934,22 @@ export const fingerprintSweepAdmissions = pgTable(
       table.dispatchedAt,
       table.requestedAt,
       table.queueOrder
+    ),
+    check(
+      "fingerprint_sweep_admissions_attempt_base_check",
+      sql`${table.attemptBase} >= 0`
+    ),
+    check(
+      "fingerprint_sweep_admissions_dispatch_kind_check",
+      sql`${table.dispatchKind} IN ('ordinary', 'continuation')`
+    ),
+    check(
+      "fingerprint_sweep_admissions_execution_attempt_check",
+      sql`${table.executionAttempt} >= 0`
+    ),
+    check(
+      "fingerprint_sweep_admissions_execution_max_attempts_check",
+      sql`${table.executionMaxAttempts} > 0`
     ),
     check(
       "fingerprint_sweep_admissions_request_cap_check",

@@ -1,3 +1,4 @@
+import { StaleFingerprintDeliveryError } from "@slashwho/database/fingerprint-delivery-error";
 import type {
   DiscoverCharacterJob,
   DiscoveryWorkContext,
@@ -517,6 +518,48 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       // payload type lets the worker hand the job straight through.
       job?: Partial<DiscoverCharacterJob>
     ): Promise<void> {
+      const deliveries = options.repositories.fingerprintDeliveries;
+      if (job?.admissionId && !workContext?.fingerprintValidated) {
+        if (!deliveries || !workContext?.jobId) return;
+        return deliveries.execute(
+          {
+            runId,
+            admissionId: job.admissionId,
+            jobId: workContext.jobId,
+            attempt: workContext.attempt,
+            maxAttempts: workContext.maxAttempts
+          },
+          async (execution) => {
+            const validatedJob = { ...job };
+            delete validatedJob.continuation;
+            if (execution.continuation) validatedJob.continuation = true;
+            await createDiscoveryJobHandler({
+              ...options,
+              repositories: {
+                ...options.repositories,
+                ...execution.repositories
+              }
+            }).execute(
+              runId,
+              {
+                ...workContext,
+                attempt: execution.attempt,
+                maxAttempts: execution.maxAttempts,
+                deliveryAttempt: workContext.attempt,
+                fingerprintValidated: true
+              },
+              validatedJob
+            );
+          }
+        );
+      }
+      if (
+        !job?.admissionId &&
+        workContext?.jobId &&
+        deliveries &&
+        (await deliveries.isIdentifiedRun(runId))
+      )
+        return;
       // Created before the first query so the run lookup and claim reach
       // `dbCalls` too; nothing else about the run depends on its lifetime.
       // `observedAt` moves up with it so `durationMs` still spans every
@@ -986,6 +1029,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                     advanced: stillSweeping || sweep.kind === "matched"
                   };
 
+                  if (resume && sweep.kind === "capped" && !stillSweeping) {
+                    // No cursor progress means there is no amendment to publish.
+                    // Record the bounded retry while this cycle still owns its
+                    // admission, before publication could consume it.
+                    await releaseReservation();
+                    record.outcome = (await continueWithoutProgress())
+                      ? "continuation_retrying"
+                      : "continuation_abandoned";
+                    return;
+                  }
+
                   // A fingerprint-derived relationship is only observable
                   // after its evidence work has been admitted. This also
                   // applies to continuations, which amend their already
@@ -1117,6 +1171,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
                   return;
                 }
               } catch (error) {
+                if (error instanceof StaleFingerprintDeliveryError) throw error;
                 try {
                   await releaseReservation();
                 } catch (releaseError) {
@@ -1199,7 +1254,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         const failureTime = now();
         const exponentialDelay =
           baseRetryDelayMs *
-          2 ** Math.max(0, context.attempt - 1) *
+          2 ** Math.max(0, (context.deliveryAttempt ?? context.attempt) - 1) *
           (0.5 + random() / 2);
         const schedule = retrySchedule(
           run.createdAt,
@@ -1222,6 +1277,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         );
         throw retryableError(schedule.retryAfterMs);
       } catch (error) {
+        if (error instanceof StaleFingerprintDeliveryError) throw error;
         if (
           context.signal.aborted &&
           !isFingerprintReleaseRetryableError(error)
@@ -1254,7 +1310,8 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
           failureTime,
           context.attempt,
           context.maxAttempts,
-          baseRetryDelayMs * 2 ** Math.max(0, context.attempt - 1)
+          baseRetryDelayMs *
+            2 ** Math.max(0, (context.deliveryAttempt ?? context.attempt) - 1)
         );
         if (!schedule) {
           record.outcome = "search_failed";

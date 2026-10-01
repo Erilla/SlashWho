@@ -1,7 +1,10 @@
 {
   "name": "@slashwho/database",
   "private": true,
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fingerprint-delivery-error": "./src/fingerprint-delivery-error.ts"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "migrate": "tsx src/cli-migrate.ts",
