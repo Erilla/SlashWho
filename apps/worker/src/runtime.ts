@@ -529,6 +529,37 @@ function buildHandlers(
     ...(discoveryRunNotifier ? { discoveryRunNotifier } : {}),
     enqueueFingerprintAdmission: (runId) =>
       queue.enqueueFingerprintAdmission(runId),
+    enqueueLinkedEvidence: async (key, root) => {
+      const at = new Date();
+      if (await repositories.suppressions.isActive(key, at)) return;
+      const reservation = await repositories.evidence.reserve({
+        key,
+        root,
+        origin: "discovery",
+        at,
+        freshnessCutoff: new Date(
+          at.getTime() - config.evidenceFreshnessHours * 60 * 60_000
+        ),
+        phasePlan: fullEvidencePhasePlan()
+      });
+      // A queue failure leaves its reservation durable. Fresh completed
+      // evidence can coexist with that active run, so inspect both results.
+      const run =
+        reservation.kind === "fresh" ? reservation.active : reservation.run;
+      if (
+        !run ||
+        (reservation.kind !== "reserved" &&
+          (run.status !== "queued" || run.queueJobId !== null))
+      ) {
+        return;
+      }
+      const queueJobId = await queue.enqueueCharacterEvidence(run.id, {
+        enqueuedAt: at.toISOString(),
+        // Repair another caller's run with its original collection policy.
+        mode: run.lightRefresh ? "light" : "full"
+      });
+      await repositories.evidence.markEnqueued(run.id, queueJobId);
+    },
     enqueueFullEvidence: async (key, root) => {
       const at = new Date();
       // A fingerprint admission is a genuinely new dossier connection, so

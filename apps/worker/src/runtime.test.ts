@@ -367,7 +367,11 @@ function runtimeFakes(
   const evidenceReserve = vi.fn(
     async (
       input: Record<string, unknown>
-    ): Promise<{ kind: string; run: { id: string } | null }> => {
+    ): Promise<{
+      kind: string;
+      run: { id: string; status?: string; queueJobId?: string | null } | null;
+      active?: { id: string; status: string; queueJobId: string | null } | null;
+    }> => {
       void input;
       return { kind: "existing", run: null };
     }
@@ -436,7 +440,10 @@ function runtimeFakes(
     },
     rateLimits: { cleanupExpired: cleanup.rateLimits },
     negativeCache: { cleanupExpired: cleanup.negativeCache },
-    suppressions: { cleanupExpired: cleanup.suppressions },
+    suppressions: {
+      cleanupExpired: cleanup.suppressions,
+      isActive: vi.fn(async () => false)
+    },
     fingerprintSweeps: {
       async admitWaiting(runId: string) {
         return admittedFingerprintRuns.has(runId)
@@ -1320,6 +1327,235 @@ describe("worker runtime", () => {
       "evidence-run"
     );
     await runtime.stop();
+  });
+
+  it("wires Raider.IO linked evidence with the ordinary freshness cutoff and discovery origin", async () => {
+    const fakes = runtimeFakes();
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    fakes.dependencies.createHandler = (options) => {
+      handlerOptions = options;
+      return fakes.handler;
+    };
+    fakes.evidenceReserve.mockResolvedValueOnce({
+      kind: "reserved",
+      run: { id: "linked-run" }
+    });
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    try {
+      const root = {
+        region: "eu",
+        realm: "draenor",
+        name: "skymthree"
+      } as const;
+      const linked = { ...root, name: "skywarlock" };
+      const before = Date.now();
+      expect(handlerOptions?.enqueueLinkedEvidence).toBeTypeOf("function");
+      await handlerOptions!.enqueueLinkedEvidence!(linked, root);
+      const reservation = fakes.evidenceReserve.mock.calls.at(-1)![0];
+      expect(reservation).toMatchObject({
+        key: linked,
+        root,
+        origin: "discovery"
+      });
+      expect((reservation.at as Date).getTime()).toBeGreaterThanOrEqual(before);
+      expect((reservation.freshnessCutoff as Date).getTime()).toBe(
+        (reservation.at as Date).getTime() -
+          config.evidenceFreshnessHours * 60 * 60_000
+      );
+      expect(fakes.evidenceEnqueues).toEqual([
+        { runId: "linked-run", meta: expect.objectContaining({ mode: "full" }) }
+      ]);
+      expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
+        "linked-run",
+        "linked-run"
+      );
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  it.each(["active", "fresh"] as const)(
+    "recovers a queued undispatched linked run returned as %s",
+    async (kind) => {
+      const fakes = runtimeFakes();
+      let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+      fakes.dependencies.createHandler = (options) => {
+        handlerOptions = options;
+        return fakes.handler;
+      };
+      const active = {
+        id: "undispatched-run",
+        status: "queued",
+        queueJobId: null
+      };
+      fakes.evidenceReserve.mockResolvedValueOnce({
+        kind: "reserved",
+        run: active
+      });
+      fakes.evidenceReserve.mockResolvedValueOnce({
+        kind,
+        run:
+          kind === "fresh"
+            ? { id: "completed-run", status: "complete" }
+            : active,
+        active
+      });
+      vi.spyOn(fakes.queue, "enqueueCharacterEvidence").mockRejectedValueOnce(
+        new Error("queue_unavailable")
+      );
+      const runtime = await createWorkerRuntime(config, fakes.dependencies);
+      try {
+        const root = {
+          region: "eu",
+          realm: "draenor",
+          name: "skymthree"
+        } as const;
+        expect(handlerOptions?.enqueueLinkedEvidence).toBeTypeOf("function");
+        await expect(
+          handlerOptions!.enqueueLinkedEvidence!(
+            { ...root, name: "skywarlock" },
+            root
+          )
+        ).rejects.toThrow("queue_unavailable");
+        expect(fakes.evidenceMarkEnqueued).not.toHaveBeenCalled();
+        await handlerOptions!.enqueueLinkedEvidence!(
+          { ...root, name: "skywarlock" },
+          root
+        );
+        expect(fakes.evidenceEnqueues).toEqual([
+          {
+            runId: "undispatched-run",
+            meta: expect.objectContaining({ mode: "full" })
+          }
+        ]);
+        expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
+          "undispatched-run",
+          "undispatched-run"
+        );
+      } finally {
+        await runtime.stop();
+      }
+    }
+  );
+
+  it.each(["active", "fresh"] as const)(
+    "preserves an undispatched linked light refresh returned as %s",
+    async (kind) => {
+      const fakes = runtimeFakes();
+      let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+      fakes.dependencies.createHandler = (options) => {
+        handlerOptions = options;
+        return fakes.handler;
+      };
+      // A dossier read reserved a cheap light run, then failed to dispatch it.
+      // Discovery must repair that same run without widening its collection.
+      const active = {
+        id: "light-run",
+        status: "queued",
+        queueJobId: null,
+        lightRefresh: true
+      };
+      fakes.evidenceReserve.mockResolvedValueOnce({
+        kind,
+        run: kind === "fresh" ? { id: "completed-run" } : active,
+        active
+      });
+      const runtime = await createWorkerRuntime(config, fakes.dependencies);
+      try {
+        const root = {
+          region: "eu",
+          realm: "draenor",
+          name: "skymthree"
+        } as const;
+        await handlerOptions!.enqueueLinkedEvidence!(
+          { ...root, name: "skywarlock" },
+          root
+        );
+        expect(fakes.evidenceEnqueues).toEqual([
+          {
+            runId: "light-run",
+            meta: expect.objectContaining({ mode: "light" })
+          }
+        ]);
+        expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
+          "light-run",
+          "light-run"
+        );
+      } finally {
+        await runtime.stop();
+      }
+    }
+  );
+
+  it.each([
+    {
+      kind: "fresh",
+      run: { id: "completed-run", status: "complete", queueJobId: "old-job" },
+      active: null
+    },
+    {
+      kind: "active",
+      run: { id: "live-run", status: "queued", queueJobId: "live-job" }
+    },
+    {
+      kind: "active",
+      run: { id: "live-run", status: "running", queueJobId: null }
+    }
+  ])(
+    "reuses linked evidence without dispatching $kind/$run.status",
+    async (reservation) => {
+      const fakes = runtimeFakes();
+      let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+      fakes.dependencies.createHandler = (options) => {
+        handlerOptions = options;
+        return fakes.handler;
+      };
+      fakes.evidenceReserve.mockResolvedValueOnce(reservation);
+      const runtime = await createWorkerRuntime(config, fakes.dependencies);
+      try {
+        const root = {
+          region: "eu",
+          realm: "draenor",
+          name: "skymthree"
+        } as const;
+        expect(handlerOptions?.enqueueLinkedEvidence).toBeTypeOf("function");
+        await handlerOptions!.enqueueLinkedEvidence!(
+          { ...root, name: "skywarlock" },
+          root
+        );
+        expect(fakes.evidenceEnqueues).toEqual([]);
+        expect(fakes.evidenceMarkEnqueued).not.toHaveBeenCalled();
+      } finally {
+        await runtime.stop();
+      }
+    }
+  );
+
+  it("rechecks linked-character suppression before reserving evidence", async () => {
+    const fakes = runtimeFakes();
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    fakes.dependencies.createHandler = (options) => {
+      handlerOptions = options;
+      return fakes.handler;
+    };
+    fakes.repositories.suppressions.isActive = vi.fn(async () => true);
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    try {
+      const root = {
+        region: "eu",
+        realm: "draenor",
+        name: "skymthree"
+      } as const;
+      expect(handlerOptions?.enqueueLinkedEvidence).toBeTypeOf("function");
+      await handlerOptions!.enqueueLinkedEvidence!(
+        { ...root, name: "skywarlock" },
+        root
+      );
+      expect(fakes.evidenceReserve).not.toHaveBeenCalled();
+      expect(fakes.evidenceEnqueues).toEqual([]);
+    } finally {
+      await runtime.stop();
+    }
   });
 
   it("registers worker-owned Warcraft Logs evidence collection", async () => {

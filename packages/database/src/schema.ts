@@ -1110,7 +1110,7 @@ export const characterEvidenceRuns = pgTable(
     ),
     check(
       "character_evidence_runs_origin_check",
-      sql`${table.origin} IN ('dossier_initial', 'dossier_read', 'refresh', 'rebuild', 'historic_alias', 'tier_search', 'resume_sweep', 'applicant_sheet', 'fingerprint_admission', 'unknown')`
+      sql`${table.origin} IN ('dossier_initial', 'dossier_read', 'refresh', 'rebuild', 'historic_alias', 'tier_search', 'resume_sweep', 'applicant_sheet', 'discovery', 'fingerprint_admission', 'unknown')`
     ),
     check(
       "character_evidence_runs_root_check",

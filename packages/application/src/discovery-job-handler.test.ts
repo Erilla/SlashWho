@@ -978,6 +978,95 @@ function delivery(attempt = 1, maxAttempts = 5) {
 }
 
 describe("discovery job handler", () => {
+  it.each(["ordinary", "disabled", "deferred"] as const)(
+    "queues Raider.IO linked evidence without a dossier read (%s fingerprint discovery)",
+    async (mode) => {
+      // Break caught: the applicant collected overnight, but its Raider.IO
+      // links got their first evidence runs only when a reviewer read the page.
+      const repositories = createMemoryRepositories();
+      const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+      const enqueueLinkedEvidence = vi.fn(async () => {});
+      const gateway = new MutableGateway();
+      if (mode === "deferred") {
+        repositories.fingerprintSweeps.requestAdmission = async () => ({
+          kind: "waiting",
+          retryAt: new Date("2026-08-05T09:00:00.000Z")
+        });
+      }
+      const handler =
+        mode === "disabled"
+          ? createDiscoveryJobHandler({
+              repositories,
+              gateway,
+              enqueueLinkedEvidence,
+              requestCap: 12,
+              now: () => new Date("2026-08-05T08:00:00.000Z")
+            })
+          : handlerFor(repositories, gateway, { enqueueLinkedEvidence });
+
+      await handler.execute(run.id, delivery());
+
+      expect(enqueueLinkedEvidence.mock.calls).toEqual([
+        [secondKey, rootKey],
+        [thirdKey, rootKey]
+      ]);
+      if (mode !== "deferred") {
+        await expect(
+          repositories.snapshots.getCurrent(rootKey)
+        ).resolves.toMatchObject({
+          characters: expect.arrayContaining([
+            expect.objectContaining({ key: secondKey }),
+            expect.objectContaining({ key: thirdKey })
+          ])
+        });
+      }
+    }
+  );
+
+  it("admits linked evidence before publishing and retries a failed dispatch", async () => {
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const publish = vi.spyOn(repositories.snapshots, "create");
+    const enqueueLinkedEvidence = vi
+      .fn(async () => {
+        expect(publish).not.toHaveBeenCalled();
+      })
+      .mockRejectedValueOnce(new Error("queue_unavailable"));
+    const handler = handlerFor(repositories, new MutableGateway(), {
+      enqueueLinkedEvidence
+    });
+
+    await expect(handler.execute(run.id, delivery())).rejects.toMatchObject({
+      retryable: true
+    });
+    expect(publish).not.toHaveBeenCalled();
+    await handler.execute(run.id, { ...delivery(), attempt: 2 });
+    expect(enqueueLinkedEvidence).toHaveBeenCalledWith(thirdKey, rootKey);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues each canonical linked character once and leaves filtered tournament profiles out", async () => {
+    const repositories = createMemoryRepositories();
+    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+    const gateway = new MutableGateway();
+    gateway.getClaimedCharacters = async () => ({
+      characters: [
+        character(secondKey),
+        character(secondKey),
+        {
+          ...character(thirdKey),
+          isTournamentProfile: true
+        }
+      ]
+    });
+    const enqueueLinkedEvidence = vi.fn(async () => {});
+    await handlerFor(repositories, gateway, { enqueueLinkedEvidence }).execute(
+      run.id,
+      delivery()
+    );
+    expect(enqueueLinkedEvidence.mock.calls).toEqual([[secondKey, rootKey]]);
+  });
+
   it("hands the admitted root observation to discovery without rereading it", async () => {
     // Break caught: the web admission read could be discarded at the queue
     // boundary, making the worker issue a second, potentially inconsistent read.
