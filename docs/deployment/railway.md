@@ -209,6 +209,21 @@ worker-only `APPLICANT_*` variables are described in
 
 Railway currently documents `X-Real-IP` as the single remote-client header supplied by its public proxy. SlashWho intentionally accepts only that header for anonymous rate-limit identity and fails closed when it is absent or invalid; it does not trust an arbitrary forwarded chain or a runtime-selectable header name. Verify this exact contract against Railway's public-networking documentation before first launch and after any proxy change.
 
+## Connected-character caller admission
+
+Connected-character PATCH (exclude/include) and DELETE (remove a manual
+connection) remain available to anonymous callers. Both methods share one
+caller allowance across every dossier and target, in a separate
+`connection-mutation` bucket. They reuse `ANONYMOUS_SEARCHES_PER_HOUR` (10 by
+default) and `BOT_SEARCHES_PER_HOUR` (60 by default), without consuming discovery
+search allowances. Buckets persist only the keyed HMAC of the caller identity.
+Canonical route and body-schema validation precede admission; admitted attempts
+consume an allowance even if the target URL subsequently returns 400 or the
+connection returns 404. A refusal returns HTTP 429 with `Retry-After` and
+`Cache-Control: no-store` before any connection mutation. POST continues to use
+its existing search admission. These controls edit shared dossier state;
+throttling does not establish character ownership.
+
 ## Health, readiness, and restarts
 
 - Web `/health` is process-only. Web `/ready` runs the shared migrations during container initialization and then verifies PostgreSQL connectivity.

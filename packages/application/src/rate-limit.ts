@@ -77,6 +77,21 @@ export function createRateLimiter(options: {
       return decision(reservation, at);
     },
 
+    async reserveConnectionMutation(
+      caller: CallerIdentity
+    ): Promise<RateLimitDecision> {
+      const at = now();
+      const reservation = await options.repository.reserve(
+        `connection-mutation:${caller.bucketHash}`,
+        caller.callerClass === "bot"
+          ? options.config.BOT_SEARCHES_PER_HOUR
+          : options.config.ANONYMOUS_SEARCHES_PER_HOUR,
+        new Date(at.getTime() + 60 * 60 * 1_000),
+        at
+      );
+      return decision(reservation, at);
+    },
+
     retryDecision(
       reservation: { allowed: boolean; retryAt: Date | null },
       at: Date

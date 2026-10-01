@@ -56,6 +56,7 @@ function policyFixture(
       kind: "not_found" | "transient";
       status?: number;
     }>;
+    now?: () => Date;
   } = {}
 ) {
   let activeRun: DiscoveryRun | null = null;
@@ -508,7 +509,7 @@ function policyFixture(
     repositories,
     queue,
     config,
-    now: () => now,
+    now: options.now ?? (() => now),
     raiderio: { getCharacter }
   });
   const command = {
@@ -563,16 +564,125 @@ describe("search freshness policy", () => {
     const fixture = policyFixture();
     const read = createMeasurementScope();
     const tier = createMeasurementScope();
+    const mutation = createMeasurementScope();
 
     await fixture.service.authorizePublicRead(fixture.command.headers, read);
     await fixture.service.authorizeTierSearch(fixture.command.headers, tier);
+    await fixture.service.authorizeConnectionMutation(
+      fixture.command.headers,
+      mutation
+    );
 
-    for (const scope of [read, tier]) {
+    for (const scope of [read, tier, mutation]) {
       expect(scope.totals()).toMatchObject({
         dbCalls: 1,
         dbMaxCallName: "rateLimits.reserve"
       });
     }
+  });
+
+  it("exhausts the caller's mutation allowance without spending read or search allowance", async () => {
+    const fixture = policyFixture();
+    for (let i = 0; i < 10; i++) {
+      await expect(
+        fixture.service.authorizeConnectionMutation(fixture.command.headers)
+      ).resolves.toEqual({ allowed: true });
+    }
+    await expect(
+      fixture.service.authorizeConnectionMutation(fixture.command.headers)
+    ).resolves.toEqual({ allowed: false, retryAfterSeconds: 3600 });
+    await expect(
+      fixture.service.authorizePublicRead(fixture.command.headers)
+    ).resolves.toEqual({ allowed: true });
+    await expect(
+      fixture.service.create(fixture.command)
+    ).resolves.toMatchObject({ kind: "job" });
+    await expect(
+      fixture.service.authorizeConnectionMutation(
+        new Headers({ "x-real-ip": "203.0.113.9" })
+      )
+    ).resolves.toEqual({ allowed: true });
+    expect(
+      [...fixture.events.keys()].filter((bucket) =>
+        bucket.startsWith("connection-mutation:")
+      )
+    ).toHaveLength(2);
+    for (const bucket of fixture.events.keys()) {
+      expect(bucket).toMatch(
+        /^(connection-mutation|read|search):[a-f0-9]{64}$/
+      );
+      expect(bucket).not.toContain("203.0.113.");
+    }
+  });
+
+  it("expires mutation reservations at the hourly boundary", async () => {
+    let at = now;
+    const fixture = policyFixture({ readLimit: 1, now: () => at });
+    await fixture.service.authorizeConnectionMutation(fixture.command.headers);
+    at = new Date("2026-08-04T12:59:59.000Z");
+    await expect(
+      fixture.service.authorizeConnectionMutation(fixture.command.headers)
+    ).resolves.toEqual({ allowed: false, retryAfterSeconds: 1 });
+    at = new Date("2026-08-04T13:00:00.000Z");
+    await expect(
+      fixture.service.authorizeConnectionMutation(fixture.command.headers)
+    ).resolves.toEqual({ allowed: true });
+  });
+
+  it("gives authenticated bots their configured mutation allowance", async () => {
+    const fixture = policyFixture();
+    const headers = new Headers({
+      authorization: `Bearer ${config.BOT_API_KEY}`
+    });
+    for (let i = 0; i < 60; i++) {
+      await expect(
+        fixture.service.authorizeConnectionMutation(headers)
+      ).resolves.toEqual({ allowed: true });
+    }
+    await expect(
+      fixture.service.authorizeConnectionMutation(headers)
+    ).resolves.toEqual({ allowed: false, retryAfterSeconds: 3600 });
+    await expect(
+      fixture.service.authorizeConnectionMutation(fixture.command.headers)
+    ).resolves.toEqual({ allowed: true });
+  });
+
+  it.each([
+    { headers: new Headers(), code: "trusted_client_ip_unavailable" },
+    {
+      headers: new Headers({ "x-real-ip": "invalid" }),
+      code: "trusted_client_ip_unavailable"
+    },
+    {
+      headers: new Headers({ "x-forwarded-for": "203.0.113.8" }),
+      code: "trusted_client_ip_unavailable"
+    },
+    {
+      headers: new Headers({
+        "x-real-ip": "203.0.113.8",
+        authorization: "Bearer wrong-key"
+      }),
+      code: "unauthorized"
+    }
+  ])(
+    "refuses mutation admission with $code before reserving",
+    async ({ headers, code }) => {
+      const fixture = policyFixture();
+      await expect(
+        fixture.service.authorizeConnectionMutation(headers)
+      ).resolves.toEqual({ allowed: false, code });
+      expect(fixture.events.size).toBe(0);
+    }
+  );
+
+  it("propagates a mutation reservation failure rather than admitting a write", async () => {
+    const fixture = policyFixture();
+    fixture.repositories.rateLimits.reserve = async () => {
+      throw new Error("reservation_failed");
+    };
+    await expect(
+      fixture.service.authorizeConnectionMutation(fixture.command.headers)
+    ).rejects.toThrow("reservation_failed");
   });
 
   it("returns contract-mappable auth failures without touching persistence", async () => {
