@@ -1067,35 +1067,78 @@ describe("discovery job handler", () => {
     expect(enqueueLinkedEvidence.mock.calls).toEqual([[secondKey, rootKey]]);
   });
 
-  it("hands the admitted root observation to discovery without rereading it", async () => {
-    // Break caught: the web admission read could be discarded at the queue
-    // boundary, making the worker issue a second, potentially inconsistent read.
-    const repositories = createMemoryRepositories();
-    const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
-    const getCharacter = vi.fn(async () => {
-      throw new Error("duplicate_root_read");
-    });
-    const gateway: RaiderIoGateway = {
-      getCharacter,
-      async getClaimedCharacters() {
-        return { characters: [] };
-      },
-      async resolveProfileGuess() {
-        return null;
+  it.each(["claimed", "profile_guess"] as const)(
+    "ignores a legacy root and discovers fresh %s relationships",
+    async (source) => {
+      // Break caught: pre-deployment jobs could still use stale private identity
+      // instead of reading the root and traversing fresh upstream relationships.
+      const repositories = createMemoryRepositories();
+      const run = await repositories.runs.createOrReuse(rootKey, "anonymous");
+      const getCharacter = vi.fn(async (key: CharacterKey) => {
+        return {
+          ...character(key),
+          ownerId: source === "claimed" ? "fresh-owner" : null,
+          profileGuess: source === "profile_guess" ? "fresh-profile" : null
+        };
+      });
+      const getClaimedCharacters = vi.fn(async (ownerId: string) => {
+        if (ownerId !== "fresh-owner") throw new Error("stale_owner_used");
+        return { characters: [character(secondKey)] };
+      });
+      const resolveProfileGuess = vi.fn(async (guess: string) => {
+        if (guess === "root") return null;
+        if (guess !== "fresh-profile") throw new Error("stale_profile_used");
+        return { characters: [character(thirdKey)] };
+      });
+      const gateway: RaiderIoGateway = {
+        getCharacter,
+        getClaimedCharacters,
+        resolveProfileGuess
+      };
+
+      const legacyJob = {
+        runId: run.id,
+        key: rootKey,
+        rootCharacter: {
+          ...character(rootKey),
+          ownerId: "stale-owner",
+          profileGuess: "stale-profile"
+        }
+      };
+      await handlerFor(repositories, gateway).execute(
+        run.id,
+        delivery(),
+        legacyJob
+      );
+
+      expect(
+        getCharacter.mock.calls.filter(([key]) => keyId(key) === keyId(rootKey))
+      ).toHaveLength(1);
+      await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
+        status: "complete"
+      });
+      const snapshot = await repositories.snapshots.getCurrent(rootKey);
+      expect(
+        snapshot?.characters.map(({ key, source }) => ({ key, source }))
+      ).toEqual([
+        { key: rootKey, source: "input" },
+        { key: source === "claimed" ? secondKey : thirdKey, source }
+      ]);
+      if (source === "claimed") {
+        expect(getClaimedCharacters).toHaveBeenCalledExactlyOnceWith(
+          "fresh-owner",
+          expect.any(AbortSignal)
+        );
+        expect(resolveProfileGuess).not.toHaveBeenCalled();
+      } else {
+        expect(resolveProfileGuess.mock.calls).toEqual([
+          ["fresh-profile", expect.any(AbortSignal)],
+          ["root", expect.any(AbortSignal)]
+        ]);
+        expect(getClaimedCharacters).not.toHaveBeenCalled();
       }
-    };
-
-    await handlerFor(repositories, gateway).execute(run.id, delivery(), {
-      runId: run.id,
-      key: rootKey,
-      rootCharacter: character(rootKey)
-    });
-
-    expect(getCharacter).not.toHaveBeenCalled();
-    await expect(repositories.runs.find(run.id)).resolves.toMatchObject({
-      status: "complete"
-    });
-  });
+    }
+  );
 
   it("sweeps every region-qualified guild from completed Mythic kill evidence", async () => {
     // Break caught: historical raid guilds used to enrich only the dossier,
@@ -1227,9 +1270,10 @@ describe("discovery job handler", () => {
         source: "declared_main" as const
       }
     ]);
-    const getCharacter = vi.fn(async () => {
-      throw new Error("unexpected_character_read");
-    });
+    const getCharacter = vi.fn(async () => ({
+      ...character(rootKey),
+      guild: rosterGuild
+    }));
     const gateway: RaiderIoGateway = {
       getCharacter,
       async getClaimedCharacters() {
@@ -1242,14 +1286,16 @@ describe("discovery job handler", () => {
 
     await handlerFor(repositories, gateway).execute(run.id, delivery(), {
       runId: run.id,
-      key: rootKey,
-      rootCharacter: { ...character(rootKey), guild: rosterGuild }
+      key: rootKey
     });
 
     expect(
       repositories.snapshots.listReverseDeclaredCharacters
     ).toHaveBeenCalledWith(rootKey);
-    expect(getCharacter).not.toHaveBeenCalled();
+    expect(getCharacter).toHaveBeenCalledExactlyOnceWith(
+      rootKey,
+      expect.any(AbortSignal)
+    );
     await expect(
       repositories.snapshots.getCurrent(rootKey)
     ).resolves.toMatchObject({

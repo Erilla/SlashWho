@@ -325,9 +325,8 @@ export function createSearchService(options: {
         });
       }
 
-      let rootCharacter;
       try {
-        rootCharacter = await readRootCharacter(key, scope);
+        await readRootCharacter(key, scope);
       } catch (error) {
         if (isUpstreamFailure(error) && error.kind === "not_found") {
           await repositories.negativeCache.put(
@@ -409,7 +408,6 @@ export function createSearchService(options: {
         queueJobId = await options.queue.enqueue({
           runId: reservation.run.id,
           key,
-          rootCharacter,
           correlationId: input.correlationId,
           enqueuedAt: now().toISOString()
         });
