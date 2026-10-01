@@ -39,7 +39,7 @@ Files: `packages/application/src/discovery-job-handler.ts` and its tests; `apps/
 
 ## Task 2: Validate, review and monitor the PR
 
-- [x] Start Docker if needed. Run `corepack pnpm format:check`, `lint`, `typecheck`, `test:unit`, `test:integration`, `build` and `test:e2e`; inspect results and fix failures (2,948 unit, 421 integration and 60 browser tests).
-- [ ] Review against `origin/main`, address findings, fetch/merge `origin/main` and rerun required checks.
+- [x] Start Docker if needed. Run `corepack pnpm format:check`, `lint`, `typecheck`, `test:unit`, `test:integration`, `build` and `test:e2e`; inspect results and fix failures (2,954 unit, 421 integration and 60 browser tests after review and trunk integration).
+- [x] Review against `origin/main`, address findings, fetch/merge `origin/main` and rerun required checks. Preserve an existing light refresh's mode when repairing its undispatched reservation; both `active` and `fresh` cases were reproduced red and verified green.
 - [ ] Update the PR title/body to the final fix, include `Closes #766`, mark ready and retain no auto-merge.
 - [ ] Watch CI and read both PR discussion and inline review comments. Diagnose/fix findings, run the affected gates, push and resolve addressed review threads.
