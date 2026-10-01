@@ -1,6 +1,6 @@
 # Issue #771: fingerprint resumption delivery and claim sequencing
 
-Status: proposed; awaiting manager review before implementation.
+Status: revised after manager review; awaiting approval before implementation.
 
 Issue: https://github.com/Erilla/SlashWho/issues/771
 
@@ -38,6 +38,16 @@ the real PostgreSQL repositories, pg-boss queue and discovery handler:
 3. Restart between settlement and enqueue, and between enqueue and recording
    dispatch. Recover both settlement outcomes without a dossier read. Check
    completed continuation dispatch separately, including successive cycles.
+4. Lose dispatch recording for admission A, allow A's delivery to execute,
+   advance the durable attempt, defer into admission B and become terminal.
+   Recover/recreate A after B exists. Assert A cannot claim B's run, consume B's
+   reservation, change either baseline or reset its delivery retry allowance.
+   Include replay while B is waiting and after B is admitted.
+5. For a completed sweep chain, let continuation A finish and become terminal,
+   admit B, then replay A through a fresh queue job. Assert no extra provider
+   reads, request events, budget consumption, cursor writes or snapshot changes.
+   Also replay a terminal delivery for an admission with no successor yet, to
+   ensure the execution fence does not depend solely on finding a newer row.
 
 Capture the expected failing assertions before selecting the final fix. If the
 regressions disprove the reported cause, revise this plan before implementation.
@@ -46,29 +56,74 @@ regressions disprove the reported cause, revise this plan before implementation.
 
 Use the durable admission row ID as the identity of a resumption delivery.
 Expose the settled admission's dispatch descriptor from the repository, with
-its ID and the run's durable attempt baseline. Send resumed jobs under a
+its ID and an immutable admission-bound attempt baseline. Send resumed jobs under a
 singleton key specific to that admission. The original delivery and its
 successor then have different keys, while repeated dispatches for the same
 admission still deduplicate, including after restart. Keep ordinary discovery
 enqueue keys and evidence queue semantics unchanged. Avoid random keys and
 timestamp keys, which cannot support repeatable recovery.
 
-Stop decrementing the durable attempt on ordinary discovery deferral. Carry
-an optional attempt baseline on resumed discovery payloads and translate queue
-retry count into a strictly increasing durable claim attempt. Keep the queue's
-retry allowance separate from the accumulated durable claim sequence: resumed
-jobs must not accidentally exhaust their retries because earlier deliveries
-already consumed attempt numbers. Payloads without the field retain existing
-behaviour, so deployed jobs remain valid. Completed continuations retain their
-existing claim bypass and snapshot ownership checks.
+### Immutable sequencing and execution fence
+
+Stop decrementing the durable attempt on ordinary discovery deferral. Persist
+the baseline once when the waiting admission is created, in the same transaction
+as deferral; settlement and recovery read that stored value and never derive a
+replacement from the run's current attempt. Each new admission captures its own
+baseline. Dispatch descriptors and job payloads carry admission identity;
+execution validates their values against the database rather than trusting an
+arbitrary payload baseline.
+
+Add durable admission execution metadata: immutable baseline, first executing
+queue job ID, highest accepted delivery attempt, and consumption state. Pass the
+real pg-boss job ID through the delivery context. At execution entry, atomically
+validate that this is the current admission for the run, it is settled and still
+executable, and its reservation (if admitted) is the exact live reservation for
+that admission. Bind the first executing job ID once. Retries must carry that
+same job ID with a higher delivery attempt within the original retry limit;
+a recreated terminal job cannot bind again or restart its retry allowance.
+
+For ordinary resumptions, combine this fence and the durable run claim in one
+transaction under the existing fingerprint lock and a consistent run/admission
+lock order. The durable attempt is stored baseline plus delivery attempt. Queue
+retry allowance and back-off use delivery attempt, while claim sequencing and
+run persistence use durable attempt. Duplicate deliveries or obsolete admission
+IDs return without provider calls or durable state changes.
+
+For completed continuations, use the same admission execution fence before any
+provider work while preserving the completed-run claim bypass. Pass the admitted
+reservation identity through the handler instead of looking up whichever latest
+reservation happens to exist. Publication, release and successor creation must
+validate admission identity and execution ownership atomically; publication or
+deferral consumes A before B becomes current. Existing run/snapshot ownership
+guards remain additional checks, not substitutes for cycle ownership. These
+checks prevent a delayed A from publishing into B even if A passed an earlier
+read-only check. A stale job must not release B's reservation in its cleanup path.
+
+Payloads without admission identity retain the legacy delivery path for jobs
+already in flight. They cannot act as newly identified admission deliveries or
+borrow a newer cycle's reservation: legacy continuation handling must bind to
+its own unconsumed admission through the same atomic entry fence. If historical
+state cannot identify that cycle safely, reject the legacy continuation and let
+durable backlog/stranded-chain recovery enqueue an identified successor. Cover
+this deployment transition in integration tests rather than assuming old jobs
+can safely skip the new fence.
 
 Extend pending admission dispatch selection and dispatch recording to include
 not-due settlements, with appropriate run-state filtering so historical rows
 and completed ordinary runs are not revived. Record dispatch for the specific
 admission, not every row for a run. On restart, the same admission ID identifies
-the same resumed job, closing the enqueue/record crash window without weakening
-singleton deduplication. Reuse existing admission IDs and `dispatched_at` if
-possible; no schema migration is currently expected.
+the same resumed job while it remains runnable. Once terminal, the durable
+execution fence prevents a recreated job from executing again; singleton keys
+alone do not provide that guarantee. Exclude consumed/superseded admissions
+from recovery and mark dispatch only for the matching descriptor, without
+modifying a successor admission.
+
+A schema migration is expected for immutable baselines and durable execution
+metadata. Backfill undispatched historical admissions conservatively under the
+same locks before issuing identified jobs; do not invent a baseline for an
+already consumed cycle. Specify the exact backfill from the reproduced fixtures
+and review its compatibility before implementation. Preserve the existing
+admission IDs and dispatch timestamps where their semantics remain valid.
 
 Alternative: refuse deduplication onto active predecessor jobs and retry
 admission dispatch until they settle. This avoids a new queue key but requires
@@ -90,8 +145,10 @@ the manager decides.
 
 ## Manager decisions requested
 
-- Approve admission-specific singleton identity versus retrying dispatch until
-  the predecessor settles.
-- Check the split between durable claim sequencing and per-delivery retry
-  allowance, including compatibility with jobs already in flight.
-- Check recovery of not-due rows and the crash windows around dispatch recording.
+- Admission-specific singleton identity was preferred in the first review.
+  Confirm the immutable baseline and first-executing-job binding close terminal
+  replay without resetting retry allowance.
+- Check atomic current-admission/consumption fencing for both ordinary runs and
+  completed continuation cycles, including guarded cleanup and publication.
+- Check both added terminal replay regressions, the schema migration/backfill
+  requirement and the conservative legacy payload transition.
