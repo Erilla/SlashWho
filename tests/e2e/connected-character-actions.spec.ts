@@ -197,17 +197,53 @@ test("links and removes a historic alias with a two-field modal and tooltip", as
   const aliasIcon = page
     .getByRole("region", { name: "Connected characters" })
     .getByRole("button", { name: "Also known as" });
-  // The tooltip is CSS :hover, and Chromium does not re-evaluate hover for a
-  // stationary pointer when the alias renders beneath it. Hover only once the
-  // re-read dossier has given the name its icon.
+  // Hover only once the re-read dossier has given the name its icon.
   await expect(aliasIcon).toHaveCount(1);
   await aliasIcon.hover();
   await expect(page.getByRole("tooltip")).toHaveText(
     "Also known as: Erilla-Neptulon"
   );
+  const tooltip = page.getByRole("tooltip");
+  const iconBox = (await aliasIcon.boundingBox())!;
+  const tooltipBox = (await tooltip.boundingBox())!;
+  const crossingX = iconBox.x + iconBox.width / 2;
+  const gapY = (iconBox.y + iconBox.height + tooltipBox.y) / 2;
+  await page.mouse.move(crossingX, gapY);
+  await expect(tooltip).toBeVisible();
+  await page.mouse.move(crossingX, tooltipBox.y + tooltipBox.height / 2);
+  await expect(tooltip).toBeVisible();
+  // The text extends beyond the icon's hit area.
+  await tooltip.hover({
+    position: { x: tooltipBox.width - 10, y: tooltipBox.height / 2 }
+  });
+  await expect(tooltip).toBeVisible();
+  await aliasIcon.hover();
+  await expect(tooltip).toBeVisible();
+  await page.mouse.move(
+    tooltipBox.x + tooltipBox.width + 20,
+    tooltipBox.y + tooltipBox.height + 20
+  );
+  await expect(tooltip).toBeHidden();
+  await aliasIcon.hover();
+  await expect(tooltip).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 844 });
+  await aliasIcon.hover();
+  const narrowTooltipBox = (await tooltip.boundingBox())!;
+  expect(narrowTooltipBox.x).toBeGreaterThanOrEqual(0);
+  expect(narrowTooltipBox.x + narrowTooltipBox.width).toBeLessThanOrEqual(320);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await aliasIcon.hover();
   // Escape closes it although the pointer is still over the icon.
   await page.keyboard.press("Escape");
   await expect(page.getByRole("tooltip")).toBeHidden();
+  // Returning by keyboard opens it, and tabbing away dismisses it.
+  await aliasIcon.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(aliasIcon).toBeFocused();
+  await expect(tooltip).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(tooltip).toBeHidden();
   await page.reload();
   await expect(aliasIcon).toHaveCount(1);
   await aliasIcon.hover();
