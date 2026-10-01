@@ -3449,16 +3449,9 @@ td > .collection-progress {
     min-height: 6.5rem;
   }
 }
-/* The icon after a name that carries what the name cannot (#721). It is not
-   itself positioned: the tooltip hangs off the row, so it is bounded by the
-   row's width rather than by wherever the icon happens to sit, which keeps it
-   inside the viewport at phone width. */
-.dossier-character-row,
-.dossier-parse-list li {
-  position: relative;
-}
-
+/* Anchor the tooltip to its icon so the hover bridge spans the whole gap. */
 .dossier-identity-hint {
+  position: relative;
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -3496,7 +3489,7 @@ td > .collection-progress {
   top: calc(100% + 0.25rem);
   left: 0;
   width: max-content;
-  max-width: min(24rem, 100%);
+  max-width: min(24rem, calc(100vw - var(--identity-hint-left, 0px) - 1rem));
   padding: 0.4rem 0.6rem;
   border-radius: 0.35rem;
   background: #17202b;
@@ -3508,6 +3501,16 @@ td > .collection-progress {
 
 .dossier-identity-hint-tooltip[data-open="true"] {
   visibility: visible;
+}
+
+.dossier-identity-hint-tooltip::before {
+  /* Keep the pointer inside the hint while crossing the visual gap. */
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 0.25rem;
+  content: "";
 }
 
 .dossier-parse-identity {
