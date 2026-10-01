@@ -102,6 +102,11 @@ export interface SearchService {
     headers: Pick<Headers, "get">,
     scope?: MeasurementScope
   ): Promise<PublicReadAuthorizationResult>;
+  /** Shared caller allowance for excluding, including and removing connections. */
+  authorizeConnectionMutation(
+    headers: Pick<Headers, "get">,
+    scope?: MeasurementScope
+  ): Promise<PublicReadAuthorizationResult>;
   getRun(jobId: string): Promise<JobStatusResponse | null>;
   getCurrent(key: CharacterKey): Promise<CharacterResource | null>;
   getHistory(key: CharacterKey, cursor?: string): Promise<HistoryPage | null>;
@@ -453,6 +458,26 @@ export function createSearchService(options: {
         throw error;
       }
       const decision = await admissionLimiter(scope).reserveTierSearch(caller);
+      return decision.allowed
+        ? { allowed: true }
+        : {
+            allowed: false,
+            retryAfterSeconds: decision.retryAfterSeconds ?? 1
+          };
+    },
+
+    async authorizeConnectionMutation(headers, scope) {
+      let caller: CallerIdentity;
+      try {
+        caller = classifyCaller(headers, options.config);
+      } catch (error) {
+        if (error instanceof AuthenticationError) {
+          return { allowed: false, code: error.code };
+        }
+        throw error;
+      }
+      const decision =
+        await admissionLimiter(scope).reserveConnectionMutation(caller);
       return decision.allowed
         ? { allowed: true }
         : {

@@ -1,4 +1,8 @@
 import { safeApiErrorSchema } from "@slashwho/contracts";
+import type {
+  PublicReadAuthorizationResult,
+  MeasurementScope
+} from "@slashwho/application";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const characterUrl = "https://raider.io/characters/eu/silvermoon/manual";
@@ -7,6 +11,20 @@ let exclusion: unknown;
 let removal: unknown;
 const exclusionCalls: unknown[] = [];
 const removalCalls: unknown[] = [];
+let admission: PublicReadAuthorizationResult;
+const admissionCalls: {
+  headers: Pick<Headers, "get">;
+  scope?: MeasurementScope | undefined;
+}[] = [];
+const searches = {
+  async authorizeConnectionMutation(
+    headers: Pick<Headers, "get">,
+    scope?: MeasurementScope
+  ) {
+    admissionCalls.push({ headers, scope });
+    return admission;
+  }
+};
 
 const dossiers = {
   async addConnectedCharacter() {
@@ -23,7 +41,7 @@ const dossiers = {
 };
 
 vi.mock("../../../../../../../server/container", () => ({
-  getContainer: async () => ({ dossiers })
+  getContainer: async () => ({ dossiers, searches })
 }));
 
 import { DELETE, PATCH } from "./route";
@@ -51,7 +69,74 @@ beforeEach(() => {
   removal = { kind: "removed" };
   exclusionCalls.length = 0;
   removalCalls.length = 0;
+  admission = { allowed: true };
+  admissionCalls.length = 0;
 });
+
+describe.each(["PATCH", "DELETE"] as const)(
+  "%s connection mutation admission",
+  (method) => {
+    const handler = method === "PATCH" ? PATCH : DELETE;
+    const body =
+      method === "PATCH" ? { characterUrl, excluded: true } : { characterUrl };
+
+    it("forwards caller headers and the request scope before mutation", async () => {
+      const input = request(method, body);
+      const response = await handler(input, characterContext);
+      expect(response.status).toBe(200);
+      expect(admissionCalls).toHaveLength(1);
+      expect(admissionCalls[0]?.headers).toBe(input.headers);
+      expect(admissionCalls[0]?.scope).toEqual(
+        expect.objectContaining({ totals: expect.any(Function) })
+      );
+    });
+
+    it("returns a safe 429 with Retry-After and leaves both mutations untouched", async () => {
+      admission = { allowed: false, retryAfterSeconds: 19 };
+      const response = await handler(request(method, body), characterContext);
+      expect(response.status).toBe(429);
+      expect(response.headers.get("retry-after")).toBe("19");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
+        "rate_limited"
+      );
+      expect(exclusionCalls).toEqual([]);
+      expect(removalCalls).toEqual([]);
+    });
+
+    it.each(["unauthorized", "trusted_client_ip_unavailable"] as const)(
+      "refuses %s without mutation",
+      async (code) => {
+        admission = { allowed: false, code };
+        const response = await handler(request(method, body), characterContext);
+        expect(safeApiErrorSchema.parse(await response.json()).error.code).toBe(
+          code
+        );
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(exclusionCalls).toEqual([]);
+        expect(removalCalls).toEqual([]);
+      }
+    );
+
+    it("rejects an invalid body without reserving", async () => {
+      const response = await handler(request(method, {}), characterContext);
+      expect(response.status).toBe(400);
+      expect(admissionCalls).toEqual([]);
+    });
+
+    it("rejects a non-canonical root without reserving", async () => {
+      const response = await handler(request(method, body), {
+        params: Promise.resolve({
+          region: "EU",
+          realm: "Silvermoon",
+          name: "Ryii"
+        })
+      });
+      expect(response.status).toBe(400);
+      expect(admissionCalls).toEqual([]);
+    });
+  }
+);
 
 describe("PATCH /api/dossiers/:region/:realm/:name/connected-characters", () => {
   it("excludes the named character from the dossier evidence", async () => {

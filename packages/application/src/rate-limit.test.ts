@@ -94,4 +94,57 @@ describe("rate limiting policy", () => {
       limiter.reservePublicRead({ callerClass: "bot", bucketHash: "bot-hmac" })
     ).resolves.toEqual({ allowed: false, retryAfterSeconds: 2 });
   });
+
+  it.each([
+    { callerClass: "anonymous" as const, limit: 2 },
+    { callerClass: "bot" as const, limit: 7 }
+  ])(
+    "reserves connection mutations in their own hourly $callerClass bucket",
+    async ({ callerClass, limit }) => {
+      const fake = fakeRepository({ allowed: true, retryAt: null });
+      const limiter = createRateLimiter({
+        repository: fake.repository,
+        config: {
+          ...config,
+          ANONYMOUS_SEARCHES_PER_HOUR: 2,
+          BOT_SEARCHES_PER_HOUR: 7
+        },
+        now: () => now
+      });
+
+      await expect(
+        limiter.reserveConnectionMutation({
+          callerClass,
+          bucketHash: "private-hmac"
+        })
+      ).resolves.toEqual({ allowed: true, retryAfterSeconds: null });
+      expect(fake.calls).toEqual([
+        [
+          "connection-mutation:private-hmac",
+          limit,
+          new Date("2026-08-04T13:00:00.000Z"),
+          now
+        ]
+      ]);
+    }
+  );
+
+  it("rounds a connection mutation refusal up to a positive retry delay", async () => {
+    const fake = fakeRepository({
+      allowed: false,
+      retryAt: new Date("2026-08-04T12:00:01.001Z")
+    });
+    const limiter = createRateLimiter({
+      repository: fake.repository,
+      config,
+      now: () => now
+    });
+
+    await expect(
+      limiter.reserveConnectionMutation({
+        callerClass: "anonymous",
+        bucketHash: "private-hmac"
+      })
+    ).resolves.toEqual({ allowed: false, retryAfterSeconds: 2 });
+  });
 });
