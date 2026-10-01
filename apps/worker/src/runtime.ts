@@ -555,7 +555,8 @@ function buildHandlers(
       }
       const queueJobId = await queue.enqueueCharacterEvidence(run.id, {
         enqueuedAt: at.toISOString(),
-        mode: "full"
+        // Repair another caller's run with its original collection policy.
+        mode: run.lightRefresh ? "light" : "full"
       });
       await repositories.evidence.markEnqueued(run.id, queueJobId);
     },

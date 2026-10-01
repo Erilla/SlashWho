@@ -1438,6 +1438,55 @@ describe("worker runtime", () => {
     }
   );
 
+  it.each(["active", "fresh"] as const)(
+    "preserves an undispatched linked light refresh returned as %s",
+    async (kind) => {
+      const fakes = runtimeFakes();
+      let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+      fakes.dependencies.createHandler = (options) => {
+        handlerOptions = options;
+        return fakes.handler;
+      };
+      // A dossier read reserved a cheap light run, then failed to dispatch it.
+      // Discovery must repair that same run without widening its collection.
+      const active = {
+        id: "light-run",
+        status: "queued",
+        queueJobId: null,
+        lightRefresh: true
+      };
+      fakes.evidenceReserve.mockResolvedValueOnce({
+        kind,
+        run: kind === "fresh" ? { id: "completed-run" } : active,
+        active
+      });
+      const runtime = await createWorkerRuntime(config, fakes.dependencies);
+      try {
+        const root = {
+          region: "eu",
+          realm: "draenor",
+          name: "skymthree"
+        } as const;
+        await handlerOptions!.enqueueLinkedEvidence!(
+          { ...root, name: "skywarlock" },
+          root
+        );
+        expect(fakes.evidenceEnqueues).toEqual([
+          {
+            runId: "light-run",
+            meta: expect.objectContaining({ mode: "light" })
+          }
+        ]);
+        expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
+          "light-run",
+          "light-run"
+        );
+      } finally {
+        await runtime.stop();
+      }
+    }
+  );
+
   it.each([
     {
       kind: "fresh",
