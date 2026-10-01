@@ -106,6 +106,42 @@ describe("PostgreSQL repositories: evidence run origin", () => {
     ).resolves.toMatchObject({ origin: "applicant_sheet" });
   });
 
+  it("persists discovery origin and the applicant root on unattended linked collection", async () => {
+    const at = new Date("2026-10-01T00:00:00.000Z");
+    const reservation = await repositories.evidence.reserve({
+      key: altKey,
+      root: rootKey,
+      origin: "discovery",
+      freshnessCutoff: new Date(at.getTime() - 24 * 60 * 60_000),
+      at
+    });
+    if (reservation.kind !== "reserved")
+      throw new Error("evidence_not_reserved");
+    await repositories.evidence.markEnqueued(reservation.run.id, "linked-job");
+    await expect(
+      repositories.evidence.claim(reservation.run.id, 1)
+    ).resolves.toMatchObject({
+      origin: "discovery"
+    });
+    await expect(
+      repositories.evidence.listForMonitor({ completedLimit: 10 })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        key: altKey,
+        origin: "discovery",
+        root: rootKey
+      })
+    ]);
+    await repositories.evidence.recordRunCost(
+      cost(reservation.run.id, 1, "discovery")
+    );
+    const rows = await pool.query<{ origin: string }>(
+      "SELECT origin FROM character_evidence_run_costs WHERE run_id = $1",
+      [reservation.run.id]
+    );
+    expect(rows.rows).toEqual([{ origin: "discovery" }]);
+  });
+
   it("answers why the queue is long without another join", async () => {
     const at = new Date("2026-09-27T12:00:00.000Z");
     for (const [key, origin] of [

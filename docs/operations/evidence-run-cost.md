@@ -813,6 +813,7 @@ not change it.
 | `tier_search`           | an explicit tier search                                                |
 | `resume_sweep`          | the worker's sweep of runs whose retry is due                          |
 | `applicant_sheet`       | an applicant sheet submission                                          |
+| `discovery`             | a Raider.IO linked character found by ordinary discovery               |
 | `fingerprint_admission` | a character newly connected by the fingerprint sweep                   |
 | `unknown`               | a run reserved before #708; never a guess at which path it was         |
 
@@ -855,14 +856,15 @@ being collected. An alt's run names the main that was searched. Like `origin`,
 it is set once at reservation, and a caller that joins a run in flight does not
 change it. The collection monitor links it in the Started by column.
 
-| `origin`                                      | Root                                           |
-| --------------------------------------------- | ---------------------------------------------- |
-| `dossier_initial`, `dossier_read`             | the dossier being read                         |
-| `historic_alias`                              | the dossier the alias was edited in            |
-| `tier_search`                                 | the dossier the search was pressed on          |
-| `applicant_sheet`                             | the applicant, the root of its own discovery   |
-| `fingerprint_admission`                       | the root of the discovery that admitted it     |
-| `refresh`, `rebuild`, `resume_sweep`, unknown | none: these reach one character, not a dossier |
+| `origin`                                      | Root                                                |
+| --------------------------------------------- | --------------------------------------------------- |
+| `dossier_initial`, `dossier_read`             | the dossier being read                              |
+| `historic_alias`                              | the dossier the alias was edited in                 |
+| `tier_search`                                 | the dossier the search was pressed on               |
+| `applicant_sheet`                             | the applicant, the root of its own discovery        |
+| `discovery`                                   | the root whose discovery found the linked character |
+| `fingerprint_admission`                       | the root of the discovery that admitted it          |
+| `refresh`, `rebuild`, `resume_sweep`, unknown | none: these reach one character, not a dossier      |
 
 A missing root is null in all three columns, never the run's own key. A check
 constraint keeps the three columns all set or all null.

@@ -1,5 +1,13 @@
 # Applicant Sheet watcher
 
+Intake starts evidence for the submitted character. Its discovery also queues
+full evidence for each Raider.IO linked character before fingerprint admission
+or snapshot publication, without requiring a dossier read. These linked runs
+record origin `discovery` and the submitted character as their root. Fresh
+evidence is reused and active collections coalesce; newly admitted fingerprint
+matches keep their existing `fingerprint_admission` policy. The evidence queue
+remains serial and applies its normal points gate and retry policy.
+
 The worker reads Battletag, Discord ID, and Character Name from columns B:D, plus the configured character-link column of the `Form Responses` tab, starting at row 2. It uses separate Sheets values ranges so unrelated form answers between D and the link column are not read. It starts discovery plus evidence for new supported character links and never writes to the Sheet. The first successful read after activation establishes a baseline; existing responses produce no intents. Occurrence counts, not row positions, track later changes. Reorders are inert; an increased count creates a new intent, including after a deletion observed by a prior poll. A deletion and replacement by another response with the same character count entirely between polls cannot be distinguished from no change. This snapshot limit also applies to deleting and re-adding the same response between polls.
 
 The watcher is disabled by default. Configure either `APPLICANT_SHEET_URL` (a `https://docs.google.com/spreadsheets/d/...` URL) or `APPLICANT_SHEET_ID`. Do not set both URL and ID. For a Sheet intentionally shared with anyone who has the link, set `APPLICANT_GOOGLE_API_KEY` to a key restricted to the Google Sheets API. The worker sends it in an `x-goog-api-key` header, not in the request URL. For a private Sheet, arrange **viewer** access to the specific file for a dedicated Google service account and set `APPLICANT_GOOGLE_SERVICE_ACCOUNT_EMAIL` plus `APPLICANT_GOOGLE_PRIVATE_KEY`. Do not combine API-key and service-account credentials. The credential owner must retain the ability to rotate or revoke credentials and remove sharing. The private key uses `\n` for line breaks. Set `APPLICANT_SHEET_COLUMN` to the column containing character links if it is not `F`; the worker validates the column name. Check the chosen column before enabling, since adjacent applicant answers may be private. Set `APPLICANT_DOSSIER_BASE_URL` to the HTTPS origin of the matching web environment (for example, `https://web-test-7765.up.railway.app`) so the alert links to its dossier. The service-account OAuth scope is `spreadsheets.readonly`; the configured ranges are narrow data reads, not a permission boundary for the Sheet.

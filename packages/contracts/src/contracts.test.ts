@@ -7,6 +7,7 @@ import {
   createSearchResponseSchema,
   collectionMonitorResponseSchema,
   dossierFirstKillSchema,
+  evidenceRunOriginSchema,
   historyPageSchema,
   historicalSnapshotSchema,
   jobStatusResponseSchema,
@@ -17,6 +18,10 @@ import {
 } from "./index";
 
 const applicantCharacter = { region: "eu", realm: "silvermoon", name: "ryii" };
+
+it("accepts background discovery as an evidence run origin", () => {
+  expect(evidenceRunOriginSchema.safeParse("discovery").success).toBe(true);
+});
 const validDossier = {
   root: applicantCharacter,
   research: {
