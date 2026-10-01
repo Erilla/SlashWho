@@ -335,7 +335,7 @@ export async function finishFingerprintSweep(
  * set to the admission time, so the row passes the cadence filter everywhere
  * -- a continuation finishes a sweep in progress and was never cadence-gated.
  */
-async function requeueContinuations(
+export async function requeueContinuations(
   client: Queryable,
   input: {
     at: Date;

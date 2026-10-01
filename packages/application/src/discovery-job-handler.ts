@@ -519,6 +519,14 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
       job?: Partial<DiscoverCharacterJob>
     ): Promise<void> {
       const deliveries = options.repositories.fingerprintDeliveries;
+      if (
+        deliveries &&
+        workContext?.jobId &&
+        !workContext.fingerprintValidated
+      ) {
+        const bound = await deliveries.boundAdmission(runId, workContext.jobId);
+        if (bound) job = { ...job, admissionId: bound };
+      }
       if (job?.admissionId && !workContext?.fingerprintValidated) {
         if (!deliveries || !workContext?.jobId) return;
         return deliveries.execute(
@@ -560,6 +568,30 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         (await deliveries.isIdentifiedRun(runId))
       )
         return;
+      if (
+        deliveries &&
+        workContext?.jobId &&
+        !workContext.fingerprintValidated
+      ) {
+        return deliveries.executeOriginal(
+          {
+            runId,
+            jobId: workContext.jobId,
+            attempt: workContext.attempt,
+            maxAttempts: workContext.maxAttempts
+          },
+          async (repositories) => {
+            await createDiscoveryJobHandler({
+              ...options,
+              repositories: { ...options.repositories, ...repositories }
+            }).execute(
+              runId,
+              { ...workContext, fingerprintValidated: true },
+              job
+            );
+          }
+        );
+      }
       // Created before the first query so the run lookup and claim reach
       // `dbCalls` too; nothing else about the run depends on its lifetime.
       // `observedAt` moves up with it so `durationMs` still spans every

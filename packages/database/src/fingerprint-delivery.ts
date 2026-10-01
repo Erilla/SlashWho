@@ -6,7 +6,10 @@ import { lockFingerprintSweeps, lockRoot } from "./locks";
 import { withTransaction } from "./sql";
 import { createDiscoveryRunRepositories } from "./discovery-runs";
 import { createSnapshotRepositories } from "./snapshots";
-import { createFingerprintSweepRepositories } from "./fingerprint-sweeps";
+import {
+  requeueContinuations,
+  createFingerprintSweepRepositories
+} from "./fingerprint-sweeps";
 import { createSmallStoreRepositories } from "./small-stores";
 import type { Repositories } from "./repositories";
 
@@ -17,6 +20,21 @@ export type FingerprintDeliveryDescriptor = {
 };
 
 export interface FingerprintDeliveryRepository {
+  boundAdmission(runId: string, jobId: string): Promise<string | null>;
+  executeOriginal(
+    input: {
+      runId: string;
+      jobId: string;
+      attempt: number;
+      maxAttempts: number;
+    },
+    work: (
+      repositories: Pick<
+        Repositories,
+        "runs" | "snapshots" | "fingerprintSweeps" | "negativeCache"
+      >
+    ) => Promise<void>
+  ): Promise<void>;
   descriptor(runId: string): Promise<FingerprintDeliveryDescriptor | null>;
   markDispatched(admissionId: string, at: Date): Promise<void>;
   recoverLegacy(): Promise<void>;
@@ -73,8 +91,31 @@ async function lockAndCheck(client: PoolClient, fence: Fence): Promise<void> {
  * the same locks as publication; single-statement writes receive that same
  * transaction boundary. Provider calls never hold these locks.
  */
-function fencedPool(pool: Pool, fence: Fence): Pool {
+function fencedPool(
+  pool: Pool,
+  key: CharacterKey,
+  currentFence: () => Fence | null,
+  initialExecution: { runId: string; attempt: number },
+  bindAdmission: (client: PoolClient) => Promise<void>
+): Pool {
+  const check = async (client: PoolClient) => {
+    const fence = currentFence();
+    if (fence) await lockAndCheck(client, fence);
+    else {
+      await lockRoot(client, key);
+      await lockFingerprintSweeps(client);
+      const run = await client.query<{ attempt: number }>(
+        "SELECT attempt FROM discovery_runs WHERE id = $1",
+        [initialExecution.runId]
+      );
+      if ((run.rows[0]?.attempt ?? 0) > initialExecution.attempt)
+        throw new StaleFingerprintDeliveryError();
+    }
+  };
   const finish = async (client: PoolClient) => {
+    await bindAdmission(client);
+    const fence = currentFence();
+    if (!fence) return;
     await client.query(
       `UPDATE fingerprint_sweep_admissions a SET consumed_at = now()
       FROM discovery_runs r WHERE a.id = $1 AND r.id = a.discovery_run_id
@@ -111,7 +152,7 @@ function fencedPool(pool: Pool, fence: Fence): Pool {
                     sql,
                     args[1] as unknown[] | undefined
                   );
-                  if (sql === "BEGIN") await lockAndCheck(connection, fence);
+                  if (sql === "BEGIN") await check(connection);
                   return result;
                 };
               const value: unknown = Reflect.get(connection, name);
@@ -130,7 +171,7 @@ function fencedPool(pool: Pool, fence: Fence): Pool {
               args[1] as unknown[] | undefined
             );
           return withTransaction(target, async (client) => {
-            await lockAndCheck(client, fence);
+            await check(client);
             const result = await client.query(
               args[0] as string,
               args[1] as unknown[] | undefined
@@ -147,10 +188,99 @@ function fencedPool(pool: Pool, fence: Fence): Pool {
   });
 }
 
+function executionRepositories(
+  pool: Pool,
+  key: CharacterKey,
+  input: { runId: string; jobId: string; attempt: number; maxAttempts: number },
+  baseline: number,
+  initialFence: Fence | null
+) {
+  let fence = initialFence;
+  let admitting = false;
+  const scoped = fencedPool(
+    pool,
+    key,
+    () => fence,
+    input,
+    async (client) => {
+      if (!admitting) return;
+      // An immediate admission remains on the already executing physical job.
+      // Bind it before commit so backlog recovery cannot dispatch a competitor.
+      // A budget deferral stays unbound and captures its durable resumption base.
+      const bound = await client.query<{ id: string; execution_token: string }>(
+        `UPDATE fingerprint_sweep_admissions a
+      SET attempt_base = $4, execution_job_id = $2, execution_attempt = $3,
+        execution_max_attempts = $5, execution_token = $6, dispatched_at = now()
+      WHERE a.discovery_run_id = $1 AND a.status = 'admitted' AND a.consumed_at IS NULL
+        AND a.execution_job_id IS NULL AND a.dispatched_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM fingerprint_sweep_admissions n
+          WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)
+      RETURNING id, execution_token`,
+        [
+          input.runId,
+          input.jobId,
+          input.attempt,
+          baseline,
+          input.maxAttempts,
+          randomUUID()
+        ]
+      );
+      const row = bound.rows[0];
+      if (row)
+        fence = {
+          admissionId: row.id,
+          runId: input.runId,
+          key,
+          token: row.execution_token
+        };
+    }
+  );
+  const sweeps = createFingerprintSweepRepositories(scoped).fingerprintSweeps;
+  return {
+    ...createDiscoveryRunRepositories(scoped),
+    ...createSnapshotRepositories(scoped),
+    fingerprintSweeps: {
+      ...sweeps,
+      async requestAdmission(
+        input: Parameters<typeof sweeps.requestAdmission>[0]
+      ) {
+        admitting = true;
+        try {
+          return await sweeps.requestAdmission(input);
+        } finally {
+          admitting = false;
+        }
+      }
+    },
+    negativeCache: createSmallStoreRepositories(scoped).negativeCache
+  };
+}
+
 export function createFingerprintDeliveryRepository(
   pool: Pool
 ): FingerprintDeliveryRepository {
   return {
+    async boundAdmission(runId, jobId) {
+      const result = await pool.query<{ id: string }>(
+        `SELECT a.id FROM fingerprint_sweep_admissions a
+        WHERE a.discovery_run_id = $1 AND a.execution_job_id = $2 AND a.consumed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM fingerprint_sweep_admissions n
+            WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)`,
+        [runId, jobId]
+      );
+      return result.rows[0]?.id ?? null;
+    },
+    async executeOriginal(input, work) {
+      const run = await createDiscoveryRunRepositories(pool).runs.find(
+        input.runId
+      );
+      if (!run) return;
+      try {
+        await work(executionRepositories(pool, run.rootKey, input, 0, null));
+      } catch (error) {
+        if (!(error instanceof StaleFingerprintDeliveryError)) throw error;
+      }
+    },
     async recoverTerminal() {
       const candidates = await pool.query<{
         id: string;
@@ -169,68 +299,61 @@ export function createFingerprintDeliveryRepository(
              WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)`
       );
       for (const candidate of candidates.rows) {
-        const retryContinuation = await withTransaction(
-          pool,
-          async (client) => {
-            await lockRoot(client, candidate);
-            await lockFingerprintSweeps(client);
-            const retired = await client.query<{ dispatch_kind: string }>(
-              `UPDATE fingerprint_sweep_admissions a
+        await withTransaction(pool, async (client) => {
+          await lockRoot(client, candidate);
+          await lockFingerprintSweeps(client);
+          const retired = await client.query<{ dispatch_kind: string }>(
+            `UPDATE fingerprint_sweep_admissions a
             SET consumed_at = now(), status = 'released' WHERE a.id = $1 AND consumed_at IS NULL
               AND NOT EXISTS (SELECT 1 FROM fingerprint_sweep_admissions n
                 WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)
               AND NOT EXISTS (SELECT 1 FROM pgboss.job j WHERE j.id = a.execution_job_id
                 AND j.state IN ('created','retry','active')) RETURNING dispatch_kind`,
-              [candidate.id]
-            );
-            if (!retired.rows[0]) return null;
-            await client.query(
-              `UPDATE fingerprint_sweep_reservations SET released_at = coalesce(released_at, now())
+            [candidate.id]
+          );
+          if (!retired.rows[0]) return;
+          await client.query(
+            `UPDATE fingerprint_sweep_reservations SET released_at = coalesce(released_at, now())
             WHERE admission_id = $1`,
-              [candidate.id]
-            );
-            if (retired.rows[0].dispatch_kind === "ordinary") {
-              await client.query(
-                `UPDATE discovery_runs SET status = 'failed', error_code = 'upstream_unavailable',
+            [candidate.id]
+          );
+          if (retired.rows[0].dispatch_kind === "ordinary") {
+            await client.query(
+              `UPDATE discovery_runs SET status = 'failed', error_code = 'upstream_unavailable',
               completed_at = now(), next_retry_at = NULL WHERE id = $1 AND status IN ('running','queued','retrying')`,
-                [candidate.run_id]
-              );
-              return null;
-            }
-            const failures = await client.query<{
-              continuation_failures: number;
-            }>(
-              `UPDATE fingerprint_sweep_states
+              [candidate.run_id]
+            );
+            return;
+          }
+          const failures = await client.query<{
+            continuation_failures: number;
+          }>(
+            `UPDATE fingerprint_sweep_states
             SET continuation_failures = continuation_failures + 1 WHERE region = $1 AND realm_slug = $2
               AND normalized_name = $3 AND EXISTS (SELECT 1 FROM snapshots snap
                 WHERE snap.id = fingerprint_sweep_states.resume_snapshot_id AND snap.discovery_run_id = $4)
               RETURNING continuation_failures`,
-              [
-                candidate.region,
-                candidate.realm,
-                candidate.name,
-                candidate.run_id
-              ]
-            );
-            const count = failures.rows[0]?.continuation_failures ?? 5;
-            return count < 5 ? count : null;
-          }
-        );
-        if (retryContinuation !== null) {
+            [
+              candidate.region,
+              candidate.realm,
+              candidate.name,
+              candidate.run_id
+            ]
+          );
+          const count = failures.rows[0]?.continuation_failures ?? 5;
+          if (count >= 5) return;
           const at = new Date();
-          await createFingerprintSweepRepositories(
-            pool
-          ).fingerprintSweeps.requeueContinuation(candidate.run_id, {
+          await requeueContinuations(client, {
             at,
             notBefore: new Date(
               at.getTime() +
-                Math.min(
-                  60 * 60_000,
-                  2 * 60_000 * 2 ** Math.max(0, retryContinuation - 1)
-                )
-            )
+                Math.min(60 * 60_000, 2 * 60_000 * 2 ** Math.max(0, count - 1))
+            ),
+            runId: candidate.run_id,
+            maxFailures: 5,
+            limit: 1
           });
-        }
+        });
       }
     },
     async isIdentifiedRun(runId) {
@@ -250,7 +373,7 @@ export function createFingerprintDeliveryRepository(
         `SELECT a.id, a.attempt_base, a.dispatch_kind
         FROM fingerprint_sweep_admissions a JOIN discovery_runs r ON r.id = a.discovery_run_id
         WHERE a.discovery_run_id = $1 AND a.consumed_at IS NULL
-          AND a.status IN ('admitted', 'not_due') AND a.attempt_base IS NOT NULL
+          AND a.status IN ('admitted', 'not_due') AND a.attempt_base IS NOT NULL AND a.execution_job_id IS NULL
           AND (r.status IN ('queued','running','retrying') OR a.dispatch_kind = 'continuation')
           AND NOT EXISTS (SELECT 1 FROM fingerprint_sweep_admissions n
             WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)
@@ -363,7 +486,7 @@ export function createFingerprintDeliveryRepository(
           `UPDATE fingerprint_sweep_admissions a SET execution_job_id = $3,
             execution_attempt = $4, execution_token = $6
            WHERE id = $1 AND discovery_run_id = $2 AND consumed_at IS NULL
-             AND attempt_base IS NOT NULL AND status IN ('admitted','not_due','released')
+             AND attempt_base IS NOT NULL AND status IN ('admitted','not_due','released','finished')
              AND (execution_job_id IS NULL OR execution_job_id = $3)
              AND execution_attempt < $4 AND $4 <= execution_max_attempts
              AND execution_max_attempts = $5
@@ -410,20 +533,26 @@ export function createFingerprintDeliveryRepository(
         throw error;
       });
       if (!accepted) return;
-      const scoped = fencedPool(pool, {
-        admissionId: input.admissionId,
-        runId: input.runId,
-        key: run.rootKey,
-        token
-      });
-      const runs = createDiscoveryRunRepositories(scoped).runs;
+      const repositories = executionRepositories(
+        pool,
+        run.rootKey,
+        input,
+        accepted.attempt_base,
+        {
+          admissionId: input.admissionId,
+          runId: input.runId,
+          key: run.rootKey,
+          token
+        }
+      );
+      const runs = repositories.runs;
       try {
         await work({
           repositories: {
             runs: { ...runs, claim: async () => runs.find(input.runId) },
-            ...createSnapshotRepositories(scoped),
-            ...createFingerprintSweepRepositories(scoped),
-            negativeCache: createSmallStoreRepositories(scoped).negativeCache
+            snapshots: repositories.snapshots,
+            fingerprintSweeps: repositories.fingerprintSweeps,
+            negativeCache: repositories.negativeCache
           },
           attempt: accepted.attempt_base + input.attempt,
           maxAttempts: accepted.attempt_base + accepted.execution_max_attempts,
