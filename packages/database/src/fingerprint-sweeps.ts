@@ -758,6 +758,7 @@ export function createFingerprintSweepRepositories(
           `SELECT a.discovery_run_id
            FROM fingerprint_sweep_admissions a JOIN discovery_runs r ON r.id = a.discovery_run_id
            WHERE a.status IN ('admitted','not_due') AND a.dispatched_at IS NULL AND a.consumed_at IS NULL
+             AND a.execution_job_id IS NULL AND a.attempt_base IS NOT NULL
              AND (r.status IN ('queued','running','retrying') OR a.dispatch_kind = 'continuation')
              AND NOT EXISTS (SELECT 1 FROM fingerprint_sweep_admissions n
                WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)

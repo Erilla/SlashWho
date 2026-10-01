@@ -581,14 +581,18 @@ describe("fingerprint continuation retry", () => {
         .toBe("complete");
       expect((await repositories.runs.find(run.id))?.attempt).toBe(2);
       expect(reads).toBe(2);
-      expect(
-        (
-          await postgres.pool.query(
-            "SELECT state FROM pgboss.job WHERE id = $1",
-            [jobId]
-          )
-        ).rows[0]?.state
-      ).toBe("completed");
+      await expect
+        .poll(
+          async () =>
+            (
+              await postgres.pool.query(
+                "SELECT state FROM pgboss.job WHERE id = $1",
+                [jobId]
+              )
+            ).rows[0]?.state,
+          { timeout: 5_000 }
+        )
+        .toBe("completed");
       expect(
         (
           await postgres.pool.query(

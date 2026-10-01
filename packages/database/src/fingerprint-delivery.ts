@@ -484,7 +484,7 @@ export function createFingerprintDeliveryRepository(
           execution_max_attempts: number;
         }>(
           `UPDATE fingerprint_sweep_admissions a SET execution_job_id = $3,
-            execution_attempt = $4, execution_token = $6
+            execution_attempt = $4, execution_token = $6, dispatched_at = coalesce(dispatched_at, now())
            WHERE id = $1 AND discovery_run_id = $2 AND consumed_at IS NULL
              AND attempt_base IS NOT NULL AND status IN ('admitted','not_due','released','finished')
              AND (execution_job_id IS NULL OR execution_job_id = $3)

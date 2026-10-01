@@ -542,6 +542,109 @@ describe("fingerprint resumption through the worker dispatcher", () => {
     ).toBe(0);
   });
 
+  it.each(["active", "retry"] as const)(
+    "starts after lost dispatch recording with the bound job %s",
+    async (state) => {
+      const queue = createDiscoveryQueue({
+        connectionString: postgres.pool.options.connectionString!
+      });
+      await queue.start();
+      cleanup.push(() => queue.stop({ graceful: true, timeoutMs: 1_000 }));
+      const run = await repositories.runs.createOrReuse(root, "anonymous");
+      await repositories.runs.claim(run.id, 1);
+      await repositories.fingerprintSweeps.requestAdmission({
+        runId: run.id,
+        key: root,
+        requestCap: 5,
+        hourlyBudget: 5,
+        cadenceCutoff: new Date(0),
+        at: new Date()
+      });
+      const descriptor = (await repositories.fingerprintDeliveries!.descriptor(
+        run.id
+      ))!;
+      const jobId = await queue.enqueue({
+        runId: run.id,
+        key: root,
+        admissionId: descriptor.admissionId,
+        attemptBase: descriptor.attemptBase
+      });
+      await repositories.searchReservations.markEnqueued(run.id, jobId);
+      // A process died after accepting this delivery but before publication.
+      await repositories.fingerprintDeliveries!.execute(
+        {
+          runId: run.id,
+          admissionId: descriptor.admissionId,
+          jobId,
+          attempt: 1,
+          maxAttempts: 5
+        },
+        async () => {}
+      );
+      await postgres.pool.query(
+        "UPDATE pgboss.job SET state = $2, retry_count = 1, start_after = now() + interval '1 hour' WHERE id = $1",
+        [jobId, state]
+      );
+      expect(
+        (
+          await postgres.pool.query(
+            "SELECT dispatched_at FROM fingerprint_sweep_admissions WHERE id = $1",
+            [descriptor.admissionId]
+          )
+        ).rows[0]?.dispatched_at
+      ).toBeInstanceOf(Date);
+      // Retain the pre-fix lost-marker state even if binding now acknowledges it.
+      await postgres.pool.query(
+        "UPDATE fingerprint_sweep_admissions SET dispatched_at = NULL WHERE id = $1",
+        [descriptor.admissionId]
+      );
+      await queue.stop({ graceful: true, timeoutMs: 1_000 });
+      await repositories.fingerprintDeliveries!.recoverTerminal();
+      await expect(
+        repositories.fingerprintDeliveries!.descriptor(run.id)
+      ).resolves.toBeNull();
+      await expect(
+        repositories.fingerprintSweeps.listAdmittedUndispatched(100)
+      ).resolves.not.toContain(run.id);
+      const metadata = (
+        await postgres.pool.query(
+          "SELECT attempt_base, execution_attempt, execution_job_id, execution_token, consumed_at FROM fingerprint_sweep_admissions WHERE id = $1",
+          [descriptor.admissionId]
+        )
+      ).rows[0];
+      const restarted = await startRuntime();
+      expect(
+        (
+          await postgres.pool.query(
+            "SELECT attempt_base, execution_attempt, execution_job_id, execution_token, consumed_at FROM fingerprint_sweep_admissions WHERE id = $1",
+            [descriptor.admissionId]
+          )
+        ).rows[0]
+      ).toEqual(metadata);
+      expect(
+        (
+          await postgres.pool.query(
+            "SELECT id FROM pgboss.job WHERE name = 'discover-character' AND data->>'runId' = $1",
+            [run.id]
+          )
+        ).rows
+      ).toEqual([{ id: jobId }]);
+      // pg-boss can retry the retained physical job after startup registers work.
+      await postgres.pool.query(
+        "UPDATE pgboss.job SET state = 'retry', start_after = now() WHERE id = $1",
+        [jobId]
+      );
+      await expect
+        .poll(async () => (await repositories.runs.find(run.id))?.status, {
+          timeout: 5_000
+        })
+        .toBe("complete");
+      await expectJobCompleted(jobId);
+      expect((await repositories.runs.find(run.id))?.attempt).toBe(3);
+      expect(restarted.deliveries).toEqual([2]);
+    }
+  );
+
   for (const kind of ["admitted", "not_due"] as const) {
     for (const loseRecording of [false, true]) {
       it(`recovers ${kind} on restart ${loseRecording ? "after enqueue without recording" : "before enqueue"}`, async () => {
