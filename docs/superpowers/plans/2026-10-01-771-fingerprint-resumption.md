@@ -1,6 +1,6 @@
 # Issue #771: fingerprint resumption delivery and claim sequencing
 
-Status: revised after manager review; awaiting approval before implementation.
+Status: reproduction stage approved; migration/compatibility checkpoint proposed.
 
 Issue: https://github.com/Erilla/SlashWho/issues/771
 
@@ -152,3 +152,119 @@ the manager decides.
   completed continuation cycles, including guarded cleanup and publication.
 - Check both added terminal replay regressions, the schema migration/backfill
   requirement and the conservative legacy payload transition.
+
+## Reproduction results and concrete compatibility checkpoint
+
+The manager approved reproduction at `685631de`. The initial Docker-backed run
+reproduced all six original failures: both active-delivery settlement races and
+deferrals at attempts 2 and 3 for both outcomes leave the run `queued`. For the
+attempt cases, the successor queue job itself reaches `completed` without
+completing discovery. Seven existing continuation tests still pass. The added
+terminal continuation replay test fails because it reads `memberg`, `memberh`
+and `memberi` after A is complete and B admitted. The ordinary obsolete-admission
+probe supplies explicit durable contexts to the real handler and shows the run
+attempt changing from 1 to 2; this is a design probe, not yet the full two-cycle
+queue crash regression. That full regression remains required once the offset
+and delivery identity APIs exist, before calling the implementation complete.
+
+Commands: `corepack pnpm test:integration
+tests/integration/fingerprint-resumption.test.ts
+tests/integration/fingerprint-continuation-retry.test.ts` (eight expected failures,
+seven passes); `corepack pnpm exec tsc -p tsconfig.tools.json --pretty false`.
+The tests are intentionally red at this stage; no full passing gate is claimed.
+
+The branch has now merged current `origin/main` at `26f54d32`. Its #773 payload
+allow-list must explicitly permit the new admission ID and baseline fields;
+arbitrary extra fields remain excluded. Legacy jobs and jobs without admission
+identity must not silently borrow a newer admission. Re-run the reproductions
+on this merged base before publishing this checkpoint.
+
+### Schema and immutable values
+
+Add nullable `attempt_base` (non-negative integer), `dispatch_kind` (ordinary or
+continuation), `execution_job_id` (UUID), `execution_attempt` (non-negative
+integer, initially 0), `execution_max_attempts` (positive integer),
+`execution_token` (UUID), and `consumed_at` (timestamp) on admission rows.
+Null baseline/kind identify pre-upgrade rows, not a permission to recompute an
+already initialised row. Persist baseline, kind and retry allowance once, under
+the fingerprint lock when a new admission is created. All descriptor reads,
+retries and recovery use these stored values. Baseline/kind/allowance writes
+are insert-only except the one-time legacy initialisation described below.
+Test immutability via repeated settlement and recovery after run attempts move.
+
+Entry takes root lock, fingerprint lock, then run/admission row locks in that
+order, matching the existing snapshot transaction order. Choose current cycle
+by greatest `queue_order` for the run, not timestamps. Validate admission ID,
+unconsumed state, exact reservation and run/snapshot ownership, bind the first
+executing job ID and update the highest accepted delivery attempt plus a fresh
+execution token atomically with the ordinary run claim. A retry of that same job
+must have a strictly higher delivery attempt within its persisted allowance.
+An older token cannot publish, release or create a successor. Every state
+transition out of A consumes A before B becomes visible in the same transaction.
+Do not hold transaction locks across provider requests.
+
+When a bound delivery is terminal without a recorded successful settlement,
+never redispatch that admission as a new job. Reconcile it using the recorded
+queue state and existing bounded failure policy: retire/release only its own
+reservation, fail an exhausted ordinary run, or queue a fresh continuation
+admission through the existing non-progress/back-off bound. Successful consumed
+rows and superseded rows are excluded from backlog scans. Cover both terminal
+success and terminal failure, including the case with no successor yet.
+
+### Legacy transition and backfill
+
+The DDL only adds metadata; it does not infer that an old admission executed
+from `dispatched_at`, since that timestamp can be absent after a successful send
+or present after deduplication onto the wrong active delivery. Historical ended
+admissions (finished/released) and all but the highest `queue_order` per run are
+non-executable under the new entry fence. No historical baseline is invented.
+
+Before new worker delivery registration, initialise actionable legacy rows once
+in a recovery transaction using root-then-fingerprint lock ordering. For the
+latest waiting/admitted/not-due ordinary admission on an active run, capture
+the maximum of the current stored run attempt and the delivered attempt
+(`retry_count + 1`) of its linked legacy ordinary job if that job is retained
+and has actually been delivered. Read this before cancelling the job, persist
+the value once, and never recompute it on recovery. If the job has been archived,
+the stored run attempt is the available durable lower bound: the next claim
+still strictly exceeds it. This handles old attempt-2 deferral rows whose
+stored attempt is 1 without discarding retained queue history. For a completed
+run, initialise only an admitted/waiting
+continuation whose live cursor and snapshot belong to that run; never return
+the run to an active status. Completed ordinary runs and failed runs are
+non-actionable. Expired/released continuation reservations go through existing
+stranded-chain recovery to a fresh admission, rather than being revived.
+
+Under those same locks, cancel created/retry/active legacy discovery jobs for
+these actionable fingerprint runs and replace their deliveries with identified
+jobs. Reset a legacy ordinary run left `running` to `queued` while preserving
+its stored attempt; preserve cursor, snapshot, waiting priority and live budget
+reservation. Clear only the matching legacy admission's dispatch marker so
+admitted/not-due recovery can enqueue it. Waiting rows stay admission-gated.
+Leave unrelated discovery and evidence jobs alone. Repeated startup is
+idempotent: rows with an initialised baseline are not backfilled again, and
+identified deliveries retain their execution binding and retry allowance.
+
+**Deployment prerequisite:** old workers must be drained/stopped before this
+transition, with only new workers starting afterwards. An old binary ignores
+admission metadata and can otherwise still publish through its unguarded
+continuation path; cancelling an active queue row cannot stop its provider work.
+Do not claim mixed-version rolling-worker safety. This is a proposed deployment
+requirement for manager review, not a production action authorised or performed
+in this task. If uninterrupted mixed-worker operation is required, revise the
+design with database-enforced write fencing before coding.
+
+Legacy unbound payloads encountered after transition are rejected for
+fingerprint-associated runs and recovered through the identified backlog. Keep
+the old payload path for unrelated ordinary discovery jobs. Test upgrade
+fixtures with each actionable status, attempt-2 legacy deferral, completed
+cursor, active legacy job, multiple historical admissions, repeated startup,
+and restart between cancellation, initialisation and replacement enqueue.
+
+### Approval requested
+
+Review the exact metadata/backfill above and the stop-old/start-new worker
+transition. After approval, implement test-first, replace the ordinary design
+probe with the full pg-boss A-to-B lost-dispatch-recording regression, add the
+remaining crash/retry/upgrade fixtures, then run the full gate and self-review.
+No production code changes should precede this checkpoint's approval.
