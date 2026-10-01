@@ -8,6 +8,7 @@ import { getContainer } from "../../../../../../../server/container";
 import {
   apiError,
   jsonNoStore,
+  publicReadAuthorizationResponse,
   resolveCharacterRoute,
   startResultResponse,
   withHttpRequest
@@ -71,7 +72,11 @@ export async function PATCH(
       await request.json().catch(() => null)
     );
     if (!body.success) return apiError("invalid_character_url");
-    const { dossiers } = await getContainer();
+    const { dossiers, searches } = await getContainer();
+    const refusal = publicReadAuthorizationResponse(
+      await searches.authorizeConnectionMutation(request.headers, scope)
+    );
+    if (refusal) return refusal;
     const result = await dossiers.setConnectedCharacterExclusion(
       root.key,
       {
@@ -99,7 +104,11 @@ export async function DELETE(
       await request.json().catch(() => null)
     );
     if (!body.success) return apiError("invalid_character_url");
-    const { dossiers } = await getContainer();
+    const { dossiers, searches } = await getContainer();
+    const refusal = publicReadAuthorizationResponse(
+      await searches.authorizeConnectionMutation(request.headers, scope)
+    );
+    if (refusal) return refusal;
     const result = await dossiers.removeConnectedCharacter(
       root.key,
       { characterUrl: body.data.characterUrl },

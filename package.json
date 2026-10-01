@@ -20,7 +20,7 @@
     "profile:dossier": "playwright test --config playwright.profile.config.ts",
     "ops:backfill-uploader-provenance": "tsx scripts/backfill-uploader-provenance.mts",
     "ops:operators": "tsx scripts/operators.mts",
-    "typecheck": "tsc -p tsconfig.tools.json && pnpm -r typecheck",
+    "typecheck": "pnpm --filter @slashwho/web typegen && tsc -p tsconfig.tools.json && pnpm -r typecheck",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
