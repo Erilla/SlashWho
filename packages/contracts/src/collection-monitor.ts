@@ -19,6 +19,7 @@ export const evidenceRunOriginSchema = z.enum([
   "tier_search",
   "resume_sweep",
   "applicant_sheet",
+  "discovery",
   "fingerprint_admission",
   "unknown"
 ]);

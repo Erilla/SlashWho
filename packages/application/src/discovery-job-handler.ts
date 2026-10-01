@@ -209,6 +209,11 @@ export type DiscoveryJobHandlerOptions = {
     readConcurrency?: number;
   };
   enqueueFingerprintAdmission?: (runId: string) => Promise<unknown>;
+  /** Starts missing/stale evidence for Raider.IO links before fingerprint admission or publication. */
+  enqueueLinkedEvidence?: (
+    key: CharacterKey,
+    root: CharacterKey
+  ) => Promise<unknown>;
   /** Queues full WCL collection before a newly admitted fingerprint match is published. */
   enqueueFullEvidence?: (
     key: CharacterKey,
@@ -724,6 +729,17 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         }
 
         if (outcome.kind === "snapshot") {
+          // The Sheet starts the root's evidence independently. Raider.IO
+          // links need their own runs even if fingerprint admission waits,
+          // and before any reader can see the published membership (#766).
+          for (const character of outcome.characters) {
+            if (
+              canonicalCharacterId(character.key) !==
+              canonicalCharacterId(run.rootKey)
+            ) {
+              await options.enqueueLinkedEvidence?.(character.key, run.rootKey);
+            }
+          }
           let fingerprintFailure:
             Extract<DiscoveryOutcome, { kind: "failure" }> | undefined;
           const fingerprint = options.fingerprint;

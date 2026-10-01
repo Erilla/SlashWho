@@ -32,14 +32,14 @@
 
 Files: `packages/application/src/discovery-job-handler.ts` and its tests; `apps/worker/src/runtime.ts` and its tests; `packages/contracts/src/collection-monitor.ts` and contract tests; `packages/database/src/schema.ts`, the next numbered SQL migration and journal; `tests/integration/repositories-evidence-origin.test.ts`; `docs/operations/evidence-run-cost.md` and `docs/operations/applicant-sheet-watcher.md`.
 
-- [ ] Add handler regression tests for Raider.IO links without a dossier read, before publication, with disabled/deferred fingerprint discovery, and with a queue failure. Run them and observe the missing admission calls.
-- [ ] Add runtime tests for `discovery` origin/root, freshness cutoff, coalesced/fresh/suppressed runs and repair of undispatched queued evidence. Add a real PostgreSQL test for origin persistence.
-- [ ] Implement the admission seam and runtime composition; add the origin migration and contract/schema support. Do not modify the existing fingerprint scheduling policy.
-- [ ] Run the targeted unit/integration tests and verify the original unattended scenario is green. Update the monitor/watcher documentation and commit the coherent fix.
+- [x] Add handler regression tests for Raider.IO links without a dossier read, before publication, with disabled/deferred fingerprint discovery, and with a queue failure. Run them and observe the missing admission calls.
+- [x] Add runtime tests for `discovery` origin/root, freshness cutoff, coalesced/fresh/suppressed runs and repair of undispatched queued evidence. Add a real PostgreSQL test for origin persistence, including the Manager's `fresh` result with an active undispatched run.
+- [x] Implement the admission seam and runtime composition; add the origin migration and contract/schema support. Do not modify the existing fingerprint scheduling policy.
+- [x] Run the targeted unit/integration tests and verify the original unattended scenario is green. Update the monitor/watcher documentation.
 
 ## Task 2: Validate, review and monitor the PR
 
-- [ ] Start Docker if needed. Run `corepack pnpm format:check`, `lint`, `typecheck`, `test:unit`, `test:integration`, `build` and `test:e2e`; inspect results and fix failures.
+- [x] Start Docker if needed. Run `corepack pnpm format:check`, `lint`, `typecheck`, `test:unit`, `test:integration`, `build` and `test:e2e`; inspect results and fix failures (2,948 unit, 421 integration and 60 browser tests).
 - [ ] Review against `origin/main`, address findings, fetch/merge `origin/main` and rerun required checks.
 - [ ] Update the PR title/body to the final fix, include `Closes #766`, mark ready and retain no auto-merge.
 - [ ] Watch CI and read both PR discussion and inline review comments. Diagnose/fix findings, run the affected gates, push and resolve addressed review threads.
