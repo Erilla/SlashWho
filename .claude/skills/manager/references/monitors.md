@@ -2,7 +2,7 @@
 
 **Claude Code:** run the three loops below with the Monitor tool, `timeout_ms: 1800000`. Every one polls every 180 s and uses `set +e`, so one failed `gh` call can't kill it. Re-arm each on expiry.
 
-**Codex:** there is no Monitor tool, so don't run these loops; they never exit. Use the [Codex check pass](#codex-check-pass) instead.
+**Codex:** there is no Monitor tool, so don't run these loops; they never exit. Use the [Codex check pass](#codex-check-pass) instead: from a heartbeat if you can schedule one, otherwise each time the user prompts you.
 
 ## New-PR watcher (one only)
 
@@ -70,7 +70,10 @@ done
 
 ## Codex check pass
 
-Run this once, each time the user prompts you. Don't run it on a loop.
+Run this once per pass, never in a loop of its own.
+
+- **If you can schedule a heartbeat** (`automation_update`), keep one that runs the pass every 3 minutes and reports only changes. Keep exactly one heartbeat, and remove it when you stop managing.
+- **If you can't,** run the pass each time the user prompts you.
 
 It does three things:
 
@@ -90,7 +93,15 @@ gh run list --repo Erilla/SlashWho --branch main --workflow ci.yml --limit 1 --j
 Then compare the results with what you last handled:
 
 - **A PR you haven't seen before:** review it.
-- **A head that differs from the commit you last reviewed:** the author has pushed. On a PR you reviewed, that commit is the `commit_id` of your latest review: `gh api repos/Erilla/SlashWho/pulls/N/reviews --jq '.[-1].commit_id'`.
+- **A head that differs from the commit you last reviewed:** the author has pushed.
+  - Keep each PR's last reviewed head yourself, as you go. Note it when you post a review, when you check a fix commit, and when you set auto-merge.
+  - Only recover it from GitHub when you have no record, for example after a restart. Don't take the latest review blindly: every session posts as the same account, and another review can target a head you never checked. Use the latest review whose body starts with "Manager review":
+
+    ```bash
+    gh api repos/Erilla/SlashWho/pulls/N/reviews --jq '[.[]|select(.body|startswith("Manager review"))]|last|.commit_id'
+    ```
+
+  - If no such review exists, treat the PR as unreviewed and review it in full.
 - **A failed `ci`:** read the log (see the one-offs below).
 - **A PR merged since your last pass:** tell its author, update main and check main's CI.
 - **During a hold:** confirm main hasn't moved, and that no open PR shows `auto=true`.

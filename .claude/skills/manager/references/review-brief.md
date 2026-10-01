@@ -3,7 +3,7 @@
 Fill in the `<…>` parts and add the relevant sections of lessons.md. Keep the brief specific: say what could go wrong for this change, not generic advice.
 
 - **Claude Code:** launch a `general-purpose` Agent in the background with the brief.
-- **Codex:** work through the brief yourself, step by step. "Report back" means reporting to the user.
+- **Codex:** give the brief to a collaboration subagent (`spawn_agent`) if you have one, so the review stays independent. Otherwise work through it yourself, step by step, and treat "report back" as reporting to the user.
 
 ```
 Review PR #<N> in Erilla/SlashWho ("<title>"). Decide whether it solves the issue it is linked to (read the PR body and linked issue via `gh`), and whether it is correct and safe. Write in UK English.
@@ -35,6 +35,7 @@ Running tests:
 Outcome:
 - If there are problems, post ONE PR review with inline comments on the diff lines:
   - Use `gh api repos/Erilla/SlashWho/pulls/<N>/reviews --method POST --input <json>` with `{commit_id: <head sha>, event: "COMMENT", body, comments: [{path, line, side: "RIGHT", body}]}`.
+  - Start the review body with "Manager review", so a later manager session can find the last reviewed head.
   - Write the JSON as pr<N>-review.json, outside the repo (the session scratchpad, or a temp directory), and check it with `iconv -f UTF-8 -t UTF-8` before posting.
   - Every finding on a diff line must be inline. Only findings outside the diff go in the body. Optional suggestions go in the body, not as threads, since open threads block auto-merge.
   - Do not set auto-merge.

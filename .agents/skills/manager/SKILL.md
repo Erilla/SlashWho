@@ -18,14 +18,17 @@ Repo: `Erilla/SlashWho`. Work from the manager worktree the session starts in (W
 
 This skill runs in both. Steps say **Claude Code** or **Codex** only where the tools differ.
 
-| Need                      | Claude Code                                        | Codex                                                                                                               |
-| ------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Noticing new PRs, pushes  | Background monitors that wake you (`Monitor` tool) | A check pass each time the user prompts you (see [references/monitors.md](references/monitors.md#codex-check-pass)) |
-| Larger reviews            | A background review subagent                       | Do the review yourself, following the same brief                                                                    |
-| Telling an author session | `ListAgents`, then `SendMessage`                   | Post on the PR, then tell the user which session to prompt                                                          |
-| Starting new work         | A `spawn_task` card                                | `gh issue create` with the brief, then tell the user                                                                |
+What a Codex session can do depends on the runtime: Codex desktop has more tools than the CLI. So **check which tools you actually have**, and use the first option that's available. Fall back only when it isn't. Running `/manager` authorises the watching workflow, so don't ask again before scheduling it.
 
-**Codex never polls on a short timer.** The GitHub rate limit (5,000 an hour) is shared by every session. Block on `gh pr checks N --watch` when you are waiting for one PR's CI. Otherwise, do a check pass when the user prompts you, and leave at least 180 s between passes if you re-check on your own.
+| Need                     | Claude Code                                        | Codex, if available                                                        | Codex fallback                                                                               |
+| ------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Noticing new PRs, pushes | Background monitors that wake you (`Monitor` tool) | A heartbeat every 3 minutes (`automation_update`) that runs the check pass | Run the [check pass](references/monitors.md#codex-check-pass) each time the user prompts you |
+| Larger reviews           | A background review subagent                       | A collaboration subagent (`spawn_agent`) with the same brief               | Do the review yourself, following the same brief                                             |
+| Telling an author        | `ListAgents`, then `SendMessage`                   | (no direct messaging)                                                      | Post on the PR, then tell the user which session to prompt                                   |
+| Starting a session       | A `spawn_task` card                                | A new thread (`list_projects`, then `create_thread`)                       | Give the user the brief to start it themselves                                               |
+| New out-of-scope work    | A `spawn_task` card                                | `gh issue create` with the brief                                           | `gh issue create` with the brief                                                             |
+
+**Never poll on a short timer.** The GitHub rate limit (5,000 an hour) is shared by every session. A Codex heartbeat runs no more often than every 3 minutes. Block on `gh pr checks N --watch` when you are waiting for one PR's CI. Without a heartbeat, leave at least 180 s between passes if you re-check on your own.
 
 ## Start-up (and "restart the monitor")
 
@@ -39,16 +42,23 @@ This skill runs in both. Steps say **Claude Code** or **Codex** only where the t
      - One **new-PR watcher**: every 180 s, numbered above the highest PR already seen. It marks drafts ready.
      - One **tracked-PR monitor** for open PRs, seeded with the commits already reviewed.
      - Every Monitor expires after 30 minutes, so re-arm it on expiry without being asked. If a watcher exits with an error, check `gh` and restart it. When no PRs are open, stop the tracked-PR monitor and keep only the watcher.
-   - **Codex:** run the check pass from [references/monitors.md](references/monitors.md#codex-check-pass) now, and again each time the user prompts you. Tell the user that you only notice new PRs and pushes when prompted.
+   - **Codex:** run the [check pass](references/monitors.md#codex-check-pass) now.
+     - If you can schedule a heartbeat (`automation_update`), schedule one every 3 minutes that runs the check pass and reports only changes. Keep exactly one.
+     - If you can't, run the check pass again each time the user prompts you, and tell the user that you only notice new PRs and pushes when prompted.
 
 ## For each new PR
 
 0. **Drafts:** mark it ready with `gh pr ready N --repo Erilla/SlashWho` (a user rule). The Claude Code watcher and the Codex check pass both do this. Being marked ready never means merging without review. A **design-only** PR (spec or plan, no code) is reviewed as a design. Don't merge it until its code lands on the same branch, or the user has made its decisions. Review the whole PR again when the author says the implementation is done.
 1. **Triage.**
    - **Small and mechanical** (docs, CI tweaks, a one-line fix, a Dependabot patch bump): review it yourself. Read the diff, run `git merge-tree --write-tree origin/main origin/<branch>`, check CI, then set auto-merge or post findings. For docs, check that no real third-party names or ids have been added; the repo is public.
-   - **Anything touching budgets, rate limits, evidence publishing, discovery, identity matching, migrations, WCL queries or page polling:** use the brief in [references/review-brief.md](references/review-brief.md), filled in with the relevant lessons. **Claude Code:** hand it to a background review subagent. **Codex:** work through it yourself.
+   - **Anything touching budgets, rate limits, evidence publishing, discovery, identity matching, migrations, WCL queries or page polling:** use the brief in [references/review-brief.md](references/review-brief.md), filled in with the relevant lessons. **Claude Code:** hand it to a background review subagent. **Codex:** hand it to a collaboration subagent (`spawn_agent`) if you have one, so the review stays independent. Otherwise work through it yourself.
    - **If another open PR overlaps in behaviour,** test on a tree containing both.
-2. **Track it.** **Claude Code:** add it to the tracked-PR monitor. **Codex:** note its head; the check pass compares it each time.
+2. **Track it.**
+   - **Claude Code:** add it to the tracked-PR monitor.
+   - **Codex:** keep a list of each open PR and the head you last reviewed. The check pass compares heads against it.
+
+   Start every review you post with "Manager review" in its body, so that a later session can find your last reviewed head (see the check pass).
+
 3. **When the review is done:**
    - **Clean:** run `gh pr merge N --auto --squash`. If the PR merged at once, handle it as a merge (step 5).
    - **Findings:** post one review with inline comments on the diff lines. Then tell the author (see below), with the review link and a short summary of each finding.
@@ -101,7 +111,7 @@ The user or a session may ask for a spec to be reviewed before any PR exists, or
 Treat either as a spec review and answer promptly.
 
 - Find the full document on its branch (`git branch -r | grep <issue>`, then `git show origin/<branch>:<path>`). Review that, not the excerpt.
-- **For a full review,** check the spec read-only (**Claude Code:** through a subagent) against:
+- **For a full review,** check the spec read-only (**Claude Code:** through a subagent; **Codex:** through a collaboration subagent if you have one, otherwise yourself) against:
   - the issue and the recorded maintainer decisions;
   - the current code on origin/main, meaning every call site the spec relies on, plus any it misses;
   - the repo's review criteria.
@@ -120,7 +130,7 @@ The user, or a session speaking for them, may ask to hold merges while a measure
 - **Placing a hold:**
   - turn off auto-merge on any open PR (`gh pr merge N --disable-auto`);
   - don't set auto-merge yourself, and tell your review agents not to;
-  - **Claude Code:** arm the hold monitor from references/monitors.md. **Codex:** on each check pass, check main's commit and every open PR's auto-merge state;
+  - **Claude Code:** arm the hold monitor from references/monitors.md. **Codex:** check main's commit and every open PR's auto-merge state on each check pass, whether from the heartbeat or when prompted;
   - confirm the hold to whoever asked, giving main's current commit.
 - **Don't** broadcast holds to implementing sessions. Controlling merges is your job.
 - **Lifting a hold:** only when the requester says the run is done. Then set auto-merge on the PRs that were approved during the hold.
@@ -135,7 +145,9 @@ The user, or a session speaking for them, may ask to hold merges while a measure
   - "self-review before opening the PR";
   - "don't set auto-merge; the manager reviews".
 
-  **Claude Code:** put it in a `spawn_task` card, and withdraw the card with `dismiss_task` once it's superseded. **Codex:** create an issue with the brief (`gh issue create`) and tell the user. An `issue-pickup` session can take it from there.
+  - **Claude Code:** put it in a `spawn_task` card, and withdraw the card with `dismiss_task` once it's superseded.
+  - **Codex, when the user asks for a session for an existing issue:** start a new thread with the brief (`list_projects`, then `create_thread`). Don't open another issue, because that duplicates the ticket and leaves the session unstarted. If you can't create threads, give the user the brief so they can start the session themselves.
+  - **Codex, for newly discovered work with no issue yet:** create an issue with the brief (`gh issue create`) and tell the user. An `issue-pickup` session can take it from there.
 
 - **A security alert** (Dependabot or GitHub advisory) is urgent:
   - check `gh api repos/Erilla/SlashWho/dependabot/alerts`;

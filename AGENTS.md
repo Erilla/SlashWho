@@ -29,7 +29,9 @@ Both skills work in Claude Code and Codex. Each lives as identical copies in
 over the other.
 
 In Claude Code the manager watches PRs with background monitors and messages
-sessions directly. In Codex it has neither, so it checks PRs when prompted and
-reaches sessions through PR comments and the user. Sessions reach a manager
+sessions directly. In Codex it uses whatever the runtime offers: a heartbeat
+for checking PRs, collaboration subagents for reviews, and new threads for
+sessions. Where those are missing, it checks PRs when prompted and does
+reviews itself. In Codex it reaches sessions through PR comments and the user. Sessions reach a manager
 the same way in either tool: by opening a PR (a draft PR for a plan) or
 pushing to one.
