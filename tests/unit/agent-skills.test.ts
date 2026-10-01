@@ -5,13 +5,23 @@ import { describe, expect, it } from "vitest";
 const root = resolve(__dirname, "../..");
 const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
+// Claude Code loads .claude/skills and Codex loads .agents/skills. Each pair
+// is byte-for-byte the same file; edit one, then copy it over the other.
+const mirrored = [
+  "issue-pickup/SKILL.md",
+  "manager/SKILL.md",
+  "manager/references/lessons.md",
+  "manager/references/monitors.md",
+  "manager/references/review-brief.md"
+];
+
 describe("agent skills", () => {
-  // Claude Code loads .claude/skills and Codex loads .agents/skills. The two
-  // copies are byte-for-byte the same file; edit one, then copy it over the
-  // other.
-  it("keeps the issue-pickup copies for Claude Code and Codex identical", () => {
-    expect(read(".claude/skills/issue-pickup/SKILL.md")).toBe(
-      read(".agents/skills/issue-pickup/SKILL.md")
-    );
-  });
+  it.each(mirrored)(
+    "keeps the Claude Code and Codex copies of %s identical",
+    (file) => {
+      expect(read(`.agents/skills/${file}`)).toBe(
+        read(`.claude/skills/${file}`)
+      );
+    }
+  );
 });
