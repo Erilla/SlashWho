@@ -1,15 +1,20 @@
 # What SlashWho can assemble from the data it already holds
 
 Issue #759. Investigated 2026-09-30 against `origin/main` at `25a2d681`. The
-database figures come from read-only queries against Railway `test` the same
-day, with 222 characters and 1,965 evidence runs. The queries are in
-[Reproducing the figures](#reproducing-the-figures).
+queries are in [Reproducing the figures](#reproducing-the-figures).
 
-**Corrected 2026-09-30, after the post-merge review of #760.** The first
-version measured parse reads on `collected_at`, which is not the read time.
-The settle-window, re-read and retention findings were redone on
-`parses_read_at`. The copy counts are now exact, and the tables the note leaves
-out are listed with the reason.
+**Corrected 2026-10-01, after the reviews of #760 and #763.** Every database
+figure was re-measured on Railway `test` that day, with read-only queries.
+`test` then held 226 characters and 1,991 evidence runs. Three things changed
+from the first version:
+
+- **Which run is current.** "Current" now follows the dossier's rule: the
+  newest publication of any scope, not only the newest full run.
+- **When a ranking was read.** Reads are measured on `parses_read_at`, not
+  `collected_at`, which is not the read time. Each of the three metrics is
+  measured separately.
+- **Coverage.** The copy counts are exact, and every data-bearing table is in
+  the inventory.
 
 ## Question
 
@@ -24,11 +29,11 @@ A lot, and most of it needs no new request at all.
 
 **The stored evidence is richer than the dossier:**
 
-- **Volume on `test`.** The current runs alone hold 34,905 Mythic kills and
-  108,210 wipes for 121 characters. They span 41 raids and 2017-02-12 to
-  2026-09-28.
-- **Detail on the kills.** 27,722 kills carry parses and 27,649 a spec.
-- **Rosters.** Raider.IO rosters are stored for 2,716 logged kills.
+- **Volume on `test`.** The current runs alone hold 35,047 Mythic kills and
+  108,532 wipes for 124 characters. They span 41 raids and 2017-02-12 to
+  2026-09-30.
+- **Detail on the kills.** 27,832 kills carry parses and 27,791 a spec.
+- **Rosters.** Raider.IO rosters are stored for 2,740 logged kills.
 - **The dossier's view of it.** Almost all of this reaches the dossier only as
   per-boss kill events.
 
@@ -44,41 +49,49 @@ request. On `test`:
    - The median tenure puts all of its nights on three weekdays. At the 25th
      percentile the figure is still 96%.
    - The start hour has an interquartile range of one hour.
-2. **Main per tier.** In 29 of the 45 dossier roots with kills, the character
+2. **Main per tier.** In 30 of the 46 dossier roots with kills, the character
    that did most of the killing changes from one tier to another.
 3. **Progression effort per boss.**
-   - 989 of 3,019 first kills have stored wipes before them. For those, the
-     median is 35 wipes and the 90th percentile about 196.
-   - 288 bosses were wiped on and never killed.
+   - 995 of 3,034 first kills have stored wipes before them. For those, the
+     median is 35 wipes and the 90th percentile about 194.
+   - 290 bosses were wiped on and never killed.
    - These counts are lower bounds; see candidate 3 below.
 4. **Farm engagement and recency.** A killed boss has a median of 7 kills, and
    59% of them were killed five or more times. The last kill date per tier is
    stored.
 5. **Spec history.** 28% of character-tiers show more than one spec, and 55 of
-   118 characters played a different set of specs from one tier to another.
+   121 characters played a different set of specs from one tier to another.
 
 **Stored data already goes some way on one open question.**
 `EVIDENCE_KILL_SETTLE_DAYS` is seven days, and the code calls that value "a
 guess and explicitly unverified" (`apps/worker/src/config.ts:490-495`). The
 per-run evidence copies record every real rankings read as a distinct
-`parses_read_at`: 30,180 reads over 28,432 fights. Two findings, on `test`:
+`parses_read_at`: 30,430 reads over 28,574 fights. On `test`, damage, healing
+and boss damage were each measured separately and gave identical results,
+because one rankings read sets all three.
 
-- **Available percentiles did not move.** 1,506 re-reads found a fight
-  available both times, and none moved by a point or more, at any kill age.
-  1,409 of those were of kills under seven days old.
+- **Within a week, available percentiles did not move at all.**
+  - For each metric, 1,558 re-reads found the fight available both times:
+    1,461 of kills under seven days old, and 97 of older kills.
+  - None moved, by any amount.
+  - The cumulative spread was also zero: 539 fights were read available two or
+    more times, and none changed between their first and last available read.
+  - Those reads span at most 6.7 days (median 1.5). So the data shows
+    stability within a week. It says nothing about drift over longer spans.
 - **Young kills often have no ranking yet.** The share with a ranking at first
   read was:
-  - 13 of 38 fights under a day old;
-  - 83% of fights one to seven days old;
+  - 13 of 70 fights under a day old;
+  - 84% of fights one to seven days old;
   - 96% of fights seven to 28 days old;
   - 93% of older fights.
 
-  Of 238 re-reads that followed an empty read of a kill under a week old, 21
+  Of 294 re-reads that followed an empty read of a kill under a week old, 21
   found a ranking.
 
-So the settle window protects rankings that are late to appear, not
-percentiles that drift. The data does not support shortening it. It deserves
-its own issue, framed that way (see [Recommendations](#recommendations)).
+So, within the span measured, the settle window protects rankings that are
+late to appear rather than percentiles that drift. The data does not support
+shortening it. It deserves its own issue, framed that way (see
+[Recommendations](#recommendations)).
 
 An earlier version of this note measured the same question on
 `collected_at`, and reported 378,377 readings with some percentiles moving.
@@ -90,11 +103,10 @@ Warcraft Logs (`packages/database/src/evidence/merge.ts:214-220`). Only
 **Three things turned up on the way:**
 
 - **A breach of the storage rules** (#761). Discovery job payloads persist a
-  Raider.IO owner name (possibly a BattleTag) and a Discord handle in
-  `pgboss.job`.
+  Discord handle and the Raider.IO account name in `pgboss.job`.
 - **Evidence tables grow fast.** Every publish copies the whole evidence
-  history under the new run. About 91% of kill and wipe rows are copies from
-  superseded full runs.
+  history under the new run. 94% of kill rows and 95% of wipe rows are copies
+  in runs that no dossier reads.
 - **Rankings are rarely re-read.** The median fight has been asked about once;
   the most asked, 34 times. An earlier version said about eleven times; see
   candidate 12.
@@ -119,46 +131,50 @@ These are the evidence tables, with their size on `test`:
 
 | Table                                                             | Rows (all runs) | Rows (current runs) | What it records                                                                             |
 | ----------------------------------------------------------------- | --------------- | ------------------- | ------------------------------------------------------------------------------------------- |
-| `character_mythic_kills` (`packages/database/src/schema.ts:1399`) | 562,914         | 34,905              | One Mythic kill fight: raid, boss, time, guild, uploader, spec, three parses, historic rank |
-| `character_mythic_wipes` (`schema.ts:1551`)                       | 2,223,775       | 108,210             | One Mythic wipe fight: raid, boss, time, guild (no region), uploader                        |
-| `character_tier_best_parses` (`schema.ts:1495`)                   | 8,745           | —                   | Best percentile per boss across a whole zone                                                |
-| `character_raiderio_first_kills` (`schema.ts:1666`)               | 7,431           | —                   | Raider.IO first kill per boss, guild, logged encounter id                                   |
-| `raiderio_logged_encounters` (`schema.ts:1583`)                   | 2,716           | shared              | Pull and kill time, duration, item level (average, min, max), deaths, Vantus                |
-| `raiderio_logged_encounter_members` (`schema.ts:1633`)            | 46,429          | shared              | Every raider on a logged kill: name, realm, class, spec, role, item level                   |
-| `character_evidence_cutting_edges` (`schema.ts:1166`)             | 6,489           | —                   | Cutting Edge achievement ids and dates per character                                        |
+| `character_mythic_kills` (`packages/database/src/schema.ts:1399`) | 564,715         | 35,047              | One Mythic kill fight: raid, boss, time, guild, uploader, spec, three parses, historic rank |
+| `character_mythic_wipes` (`schema.ts:1551`)                       | 2,231,059       | 108,532             | One Mythic wipe fight: raid, boss, time, guild (no region), uploader                        |
+| `character_tier_best_parses` (`schema.ts:1495`)                   | 8,795           | —                   | Best percentile per boss across a whole zone                                                |
+| `character_raiderio_first_kills` (`schema.ts:1667`)               | 7,609           | —                   | Raider.IO first kill per boss, guild, logged encounter id                                   |
+| `raiderio_logged_encounters` (`schema.ts:1589`)                   | 2,740           | shared              | Pull and kill time, duration, item level (average, min, max), deaths, Vantus                |
+| `raiderio_logged_encounter_members` (`schema.ts:1633`)            | 47,192          | shared              | Every raider on a logged kill: name, realm, class, spec, role, item level                   |
+| `character_evidence_cutting_edges` (`schema.ts:1166`)             | 6,536           | —                   | Cutting Edge achievement ids and dates per character                                        |
 
-How the row counts were taken:
+**How the row counts were taken:**
 
 - **Kills and wipes.** Exact counts, in both columns.
 - **The other tables.** "All runs" is a `pg_stat_user_tables` estimate.
-- **"Current runs".** Each character's newest completed full-scope run, the
-  run the dossier reads.
-- **Tier searches.** Runs of tier-search scope hold another 17,799 kill rows
-  and 80,617 wipe rows. They appear only in the "all runs" column.
+- **"Current runs".** Two runs speak for a character
+  (`packages/database/src/evidence/load.ts:33-60`):
+  - The newest completed or partial publication of **any** scope supplies the
+    kills, wipes and tier bests. A tier search can therefore be the current
+    run.
+  - The newest **full** publication supplies collection metadata and Cutting
+    Edge.
+
+  The "current runs" column follows the first rule.
 
 **Identity and relationship tables:**
 
-- `characters`, 222 rows.
-- `snapshots`, 77 rows, and `snapshot_characters`, 603 rows.
-- `character_evidence_runs`, 1,965 rows, the run each evidence row hangs off.
-- `character_connections` (338 rows), `character_groups` (34) and
-  `character_group_members`. These are the #738 link graph, which has no
-  application reader yet
+- `characters`, 226 rows.
+- `snapshots`, 78 rows, and `snapshot_characters`, 607 rows.
+- `character_evidence_runs`, 1,991 rows, the run each evidence row hangs off.
+- The #738 link graph: `character_connections` (341 rows), `character_groups`
+  (35) and `character_group_members`. It has no application reader yet
   (`packages/database/src/repositories.ts:1975-2001`).
 - `warcraft_logs_character_ids`.
 - `character_historic_aliases`.
 
 **Operational tables:**
 
-- `character_evidence_run_costs`, 2,139 rows. A rolling 28 days of cost per
+- `character_evidence_run_costs`, 2,165 rows. A rolling 28 days of cost per
   attempt, readable only through SQL (`docs/operations/evidence-run-cost.md`).
-- `character_evidence_run_phases`, 7,679 rows. Per-step start and end times.
+- `character_evidence_run_phases`, 7,913 rows. Per-step start and end times.
 
 **History depth.** Snapshots, discovery runs and evidence runs are never
 deleted, and every publish writes the character's whole merged history under
 the new run id (`packages/database/src/evidence/repository.ts:927-972`). So a
 per-run history of every kill, wipe, parse and Cutting Edge exists. The dossier
-reads only the newest run (`packages/database/src/evidence/load.ts:40-97`).
+reads only the two runs above.
 
 **Which timestamp marks a real read.**
 
@@ -172,34 +188,35 @@ reads only the newest run (`packages/database/src/evidence/load.ts:40-97`).
   parses were read. The column comment at `schema.ts:1437-1444` describes it as
   the read time, which is wrong, and it should be corrected.
 
-**The other tables.** The schema has 52 tables in `public`
-(`tests/integration/migrations.test.ts:40-94`). Those listed above hold
-evidence and identity that a view could present. The rest are machinery for
-running collection and accounts. They hold nothing a reviewer view could use,
-beyond the operational summaries in candidates 13 and 14:
+**The other data-bearing tables.** The schema has 52 tables in `public`
+(`tests/integration/migrations.test.ts:40-94`). These hold collection state,
+limitations and reviewer activity rather than evidence. Some could feed
+operator views, or a reviewer's "what is still outstanding" view. Row counts
+are `pg_stat_user_tables` estimates.
 
-- **Run bookkeeping:** `discovery_runs`, `character_evidence_collections`
-  (staged payloads awaiting publish) and `character_alias_recollections`.
-- **Collection state:** `character_terminal_tiers`,
-  `character_raiderio_tier_reads` and `character_attendance_searches`, which
-  are per-character marks of what need not be read again.
-- **Sweep budget:** `fingerprint_sweep_states`, `_admissions`,
-  `_reservations` and `_request_events`.
-- **Graph maintenance:** `character_connection_writes`,
-  `character_connection_write_log` and `character_groups_maintenance`.
-- **Reviewer state:** `manual_dossier_connections` and
-  `dossier_character_exclusions`. Both are already shown.
-- **Caches and limiters:** `negative_character_cache` and
-  `rate_limit_events`.
-- **Removals:** `suppressed_characters` and `applicant_suppression_history`.
-- **Recent searches:** `dossier_searches`, which is shown on the landing page.
-- **The applicant sheet watcher:** `applicant_source_state`, `_counts` and
-  `_intents`.
-- **Accounts:** `accounts`, `account_sessions`, `account_request_attempts`,
-  `account_mail_tokens`, `account_mail_outbox`, `account_api_credentials` and
-  `account_auth_events`.
-- **Legacy operator tables:** `operators`, `operator_sessions`,
-  `operator_login_attempts` and `operator_auth_events`.
+| Table                                                                                                 | Key                                      | Provider                                               | Written by                                                                   | Holds                                                                                                                            | Could support                                                              |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `discovery_runs` (`schema.ts:97`), 87                                                                 | run id; one active run per root key      | internal                                               | `packages/database/src/discovery-runs.ts`, `snapshots.ts`                    | status, caller class (never an identity), attempts, timings, error code, snapshot id, `guild_reads_dropped`                      | search and refresh volume over time; upstream flakiness (candidate 13)     |
+| `character_terminal_tiers` (`schema.ts:1723`), 1,683                                                  | character key, raid id, domain           | internal, over Warcraft Logs                           | `packages/database/src/evidence/repository.ts:1507-1561`                     | raid tiers settled for good per domain (kills, parses, tier bests), collection version, `marked_at`                              | a reviewer "this tier is final" marker; when tiers settled                 |
+| `character_raiderio_tier_reads` (`schema.ts:1756`), 1,427                                             | character key, tier ordinal              | internal, over Raider.IO                               | `evidence/repository.ts:1584-1618`                                           | Raider.IO tiers already read after they settled, collection version, `read_at`                                                   | operator coverage of Raider.IO history                                     |
+| `character_attendance_searches` (`schema.ts:1795`), 923                                               | character key, guild, verified kill time | Raider.IO kill time and a Warcraft Logs search outcome | `evidence/repository.ts:1652-1682`                                           | Raider.IO-verified kills whose guild night was searched in Warcraft Logs and held nothing                                        | "verified by Raider.IO, no log found", already shown through tier search   |
+| `character_evidence_collections` (`schema.ts:1193`)                                                   | run id                                   | internal, normalised                                   | `evidence/repository.ts:1117-1158`                                           | a staged, paid-for collection awaiting publish; deleted at publish or once the run settles                                       | nothing; transient                                                         |
+| `character_alias_recollections` (`schema.ts:446`)                                                     | character key                            | internal                                               | `evidence/repository.ts:94-106`, `:328-338`                                  | a pending re-collection after an alias edit                                                                                      | nothing; transient                                                         |
+| `fingerprint_sweep_states` (`schema.ts:856`), 48                                                      | root key                                 | internal, over Blizzard                                | `packages/database/src/fingerprint-sweeps.ts:245-299`                        | sweep cursor, resume limitation, historical guild triples, tournament exclusions                                                 | operator sweep coverage                                                    |
+| `fingerprint_sweep_admissions`, `_reservations`, `_request_events` (`schema.ts:892-992`), 255         | admission and reservation ids            | internal                                               | `fingerprint-sweeps.ts`                                                      | budget requests, hourly grants and per-request events; the events are pruned after an hour                                       | sweep cadence and cap hits (candidate 13)                                  |
+| `character_connection_writes`, `_write_log` (`schema.ts:263-325`), 208                                | observer and family; append-only log     | internal                                               | `packages/database/src/character-connections.ts:260-277`, `:699`             | every link publication decision with its reason (for example `privacy_hidden`, `capped`, `matched`)                              | operator view of why links were added or retracted                         |
+| `character_groups_maintenance` (`schema.ts:328`)                                                      | singleton                                | internal                                               | `character-connections.ts:434-444`                                           | the group recompute cursor                                                                                                       | nothing                                                                    |
+| `manual_dossier_connections` (`schema.ts:360`), 4                                                     | root plus connected key                  | reviewer                                               | `packages/database/src/small-stores.ts:73-208`                               | manual links, with `created_at` and `excluded_at`                                                                                | already shown; the timestamps are unused                                   |
+| `dossier_character_exclusions` (`schema.ts:419`)                                                      | root plus excluded key                   | reviewer                                               | `small-stores.ts:39-69`                                                      | exclusions of discovered characters                                                                                              | already shown                                                              |
+| `dossier_searches` (`schema.ts:489`), 14                                                              | character key                            | internal                                               | `small-stores.ts:298-310`                                                    | the last search time per character; never the searcher                                                                           | already shown as recent searches                                           |
+| `suppressed_characters` (`schema.ts:464`), `applicant_suppression_history` (`mig/0048`)               | character key                            | operator                                               | `small-stores.ts:211-249`; trigger in `packages/database/drizzle/0048_*.sql` | removal requests, with reason and expiry; the history is append-only                                                             | nothing public; removals are handled through `docs/operations/removals.md` |
+| `applicant_source_state`, `_counts`, `_intents` (`mig/0048`, `mig/0059`), 1,035 counts and 17 intents | source and normalised identity           | applicant sheet                                        | `apps/worker/src/applicant-watcher.ts`                                       | normalised applicant identities (a character key or a Warcraft Logs id) and their arrival times; never a BattleTag or Discord id | applicant arrival over time, for operators                                 |
+| `negative_character_cache` (`schema.ts:836`), `rate_limit_events` (`schema.ts:508`)                   | character key; HMAC bucket               | internal                                               | `small-stores.ts:280-295`, `:393-463`                                        | TTL'd not-found answers and limiter events                                                                                       | nothing                                                                    |
+
+**Left out on purpose:** the account tables (`accounts`, `account_sessions`,
+`account_request_attempts`, `account_mail_tokens`, `account_mail_outbox`,
+`account_api_credentials`, `account_auth_events`) and the legacy `operator_*`
+tables. They hold authentication state, which no data view should draw on.
 
 **Not stored at all:**
 
@@ -312,15 +329,15 @@ These decisions are already made. A candidate that crosses one says so below.
 | #   | Candidate                          | Class                             | Built from                                                                           | Support on `test`                                                                          | Constraint check                                                             |
 | --- | ---------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
 | 1   | Raid schedule per guild tenure     | Stored                            | Kill and wipe times grouped into nights per guild                                    | 93 tenures of ≥10 nights; median 100% of nights on three weekdays; start-hour IQR one hour | Derived from public logs; no new identity                                    |
-| 2   | Main per tier                      | Stored                            | Snapshot membership and each member's current run                                    | 29 of 45 roots with kills change main across tiers                                         | Uses only the dossier's own characters                                       |
-| 3   | Progression effort per boss        | Stored now; Decoder to complete   | Wipes before the first kill; bosses wiped and never killed                           | 989 of 3,019 first kills have prior wipes; median 35, p90 about 196; 288 never killed      | Show as "at least"; a boss with no stored wipes is unknown, not "first pull" |
+| 2   | Main per tier                      | Stored                            | Snapshot membership and each member's current run                                    | 30 of 46 roots with kills change main across tiers                                         | Uses only the dossier's own characters                                       |
+| 3   | Progression effort per boss        | Stored now; Decoder to complete   | Wipes before the first kill; bosses wiped and never killed                           | 995 of 3,034 first kills have prior wipes; median 35, p90 about 194; 290 never killed      | Show as "at least"; a boss with no stored wipes is unknown, not "first pull" |
 | 4   | Farm engagement and recency        | Stored                            | Kills per boss after the first; last kill per tier                                   | Median 7 kills per boss; 59% killed ≥5 times                                               | Uses Warcraft Logs kills, not Raider.IO's `numKills`                         |
-| 5   | Spec and role history              | Stored; Decoder for full coverage | `spec_name` on kills; roster role on logged kills                                    | Spec on 27,649 of 34,905 kills; 28% of character-tiers show more than one spec             | Role needs class and spec together                                           |
-| 6   | Parse profile per tier             | Stored                            | Every available percentile in a tier, beside first-kill and best                     | 27,722 parsed kills                                                                        | Only over `available` values, with the count shown                           |
+| 5   | Spec and role history              | Stored; Decoder for full coverage | `spec_name` on kills; roster role on logged kills                                    | Spec on 27,791 of 35,047 kills; 28% of character-tiers show more than one spec             | Role needs class and spec together                                           |
+| 6   | Parse profile per tier             | Stored                            | Every available percentile in a tier, beside first-kill and best                     | 27,832 parsed kills                                                                        | Only over `available` values, with the count shown                           |
 | 7   | Kill pace against the raid opening | Stored                            | First kill against the region start in `raid-current-content-windows.generated.json` | Not measured                                                                               | Only for raids with a catalogued window                                      |
-| 8   | Item level against the raid        | Stored                            | Roster member item level against the kill's average, minimum and maximum             | 2,716 logged kills, all with item level                                                    | Raider.IO-logged first kills only                                            |
-| 9   | Cutting Edge per character         | Stored                            | Per-run Cutting Edge rows, before the fold to the earliest date                      | 6,489 rows                                                                                 | None                                                                         |
-| 10  | Shared history with a known roster | Stored and Request                | Logged-kill rosters matched against a reference roster                               | 10,207 distinct raiders in rosters; 124 are characters SlashWho already holds              | **Needs a decision** (see candidate 10 below)                                |
+| 8   | Item level against the raid        | Stored                            | Roster member item level against the kill's average, minimum and maximum             | 2,740 logged kills, all with item level                                                    | Raider.IO-logged first kills only                                            |
+| 9   | Cutting Edge per character         | Stored                            | Per-run Cutting Edge rows, before the fold to the earliest date                      | 6,536 rows                                                                                 | None                                                                         |
+| 10  | Shared history with a known roster | Stored and Request                | Logged-kill rosters matched against a reference roster                               | 10,396 distinct raiders in rosters; 128 are characters SlashWho already holds              | **Needs a decision** (see candidate 10 below)                                |
 
 **1. Raid schedule per guild tenure.**
 
@@ -438,7 +455,7 @@ These decisions are already made. A candidate that crosses one says so below.
   - **Within one dossier**, against the reviewing guild's own roster, it needs
     a reference roster. Blizzard's guild roster is already read during sweeps,
     but it is discarded, so this is a new read or a new stored surface.
-- **Coverage today.** 124 of the 10,207 raiders in stored rosters are
+- **Coverage today.** 128 of the 10,396 raiders in stored rosters are
   characters SlashWho already holds.
 - **Wider coverage.** Warcraft Logs `friendlyPlayers` would cover kills
   Raider.IO has not logged. That is a new identifying surface with the same
@@ -448,26 +465,30 @@ These decisions are already made. A candidate that crosses one says so below.
 
 | #   | Candidate                                          | Class  | Built from                                   | Support on `test`                                     |
 | --- | -------------------------------------------------- | ------ | -------------------------------------------- | ----------------------------------------------------- |
-| 11  | Replace `EVIDENCE_KILL_SETTLE_DAYS` with data      | Stored | Distinct `parses_read_at` readings per fight | 30,180 reads over 28,432 fights; results under Answer |
-| 12  | Parse re-read attribution                          | Stored | The same readings joined to run `origin`     | Median one read per fight; 1,748 re-reads in all      |
-| 13  | Cost and step-time panel in the collection monitor | Stored | `character_evidence_run_costs`, run phases   | 2,139 cost rows over 28 days                          |
-| 14  | Snapshot history                                   | Stored | `snapshots`, `snapshot_characters`           | 77 snapshots; thin                                    |
+| 11  | Replace `EVIDENCE_KILL_SETTLE_DAYS` with data      | Stored | Distinct `parses_read_at` readings per fight | 30,430 reads over 28,574 fights; results under Answer |
+| 12  | Parse re-read attribution                          | Stored | The same readings joined to run `origin`     | Median one read per fight; 1,856 re-reads in all      |
+| 13  | Cost and step-time panel in the collection monitor | Stored | `character_evidence_run_costs`, run phases   | 2,165 cost rows over 28 days                          |
+| 14  | Snapshot history                                   | Stored | `snapshots`, `snapshot_characters`           | 78 snapshots; thin                                    |
 
 **11. Settle window.** The query is under
 [Reproducing the figures](#reproducing-the-figures).
 
-- **Available rankings do not move.** A ranking read with `timeframe:
-Historical` did not move once available: 0 of 1,506 available re-reads
-  moved by a point or more.
-- **The risk is an early empty read.** Only 34% of fights read within a day of
-  the kill had a ranking, against 83% at one to seven days and 96% at seven to
-  28 days.
-- **What the window must protect.** The unavailable-to-available change, not
-  percentile drift.
+- **Available rankings did not move within a week.** These rankings are read
+  with `timeframe: Historical`. Damage, healing and boss damage were each
+  compared only across pairs where that metric was available both times.
+  - None of the 1,558 such pairs per metric moved by any amount.
+  - None of the 539 fights read available more than once changed between
+    their first and last available read.
+- **The risk is an early empty read.** The share of fights with a ranking at
+  first read was 19% within a day of the kill, 84% at one to seven days and
+  96% at seven to 28 days.
+- **What the window must protect.** The change from unavailable to available,
+  not percentile drift.
 - **Why it is not conclusive yet.**
-  - Only 238 empty young reads were followed by another read. 21 of them found
-    a ranking.
-  - Only 11 re-reads exist between seven and 28 days.
+  - Only 294 empty young reads were followed by another read, and 21 of them
+    found a ranking.
+  - Every available re-read fell within 6.7 days of the first. Drift over
+    weeks or months is unmeasured, not disproved.
 - **What to do.**
   - After a raid reset has produced more young kills, measure how long an
     empty read stays empty.
@@ -478,8 +499,8 @@ Historical` did not move once available: 0 of 1,506 available re-reads
 **12. Re-read attribution.**
 
 - **The finding.** Reads are not the waste they first appeared.
-  - Of 35,177 stored fights, 28,432 have been asked about at least once.
-  - In all, 30,180 reads were made, so only 1,748 were repeats. The busiest
+  - Of 35,319 stored fights, 28,574 have been asked about at least once.
+  - In all, 30,430 reads were made, so only 1,856 were repeats. The busiest
     fight was read 34 times.
   - 6,474 kills in current runs have never been asked about
     (`parses_read_at` is null).
@@ -488,7 +509,7 @@ Historical` did not move once available: 0 of 1,506 available re-reads
 - **Attribution.**
   - 25,822 reads came from runs whose `origin` is `unknown`, because they
     predate the origin column.
-  - `resume_sweep` made 2,613, `refresh` 731 and `dossier_read` 719.
+  - `resume_sweep` made 2,781, `dossier_read` 743 and `refresh` 731.
 - **What remains.** The fights read over and over. Check what keeps them from
   settling before treating it as a cost lever.
 
@@ -516,17 +537,26 @@ but they are readable only through SQL and the Discord webhook
 
 ## Found on the way
 
-- **Storage-rule breach: Discord handles and possible BattleTags in
+- **Storage-rule breach: Discord handles and Raider.IO account names in
   `pgboss.job`.**
   - **What happens.** `DiscoverCharacterJob.rootCharacter` is the whole
     normalised Raider.IO character (`packages/database/src/queue.ts:17-27`).
     That object includes:
-    - `ownerId`, the Raider.IO account name, which "can be a BattleTag or a
-      Discord handle";
-    - `profileGuess`, the `discord_profile` customisation.
-
-    Sources: `packages/raiderio/src/normalize.ts:191-192`,
-    `packages/raiderio/src/client.ts:174-176`.
+    - `profileGuess`, taken from the `discord_profile` customisation
+      (`packages/raiderio/src/normalize.ts:192`). It is a Discord handle and a
+      guess string.
+    - `ownerId`, taken from `characterDetails.user.name`
+      (`normalize.ts:191`). This is the Raider.IO account name.
+  - **How the code treats `ownerId`.** As an identity that must never reach
+    the logs (`packages/application/src/discovery-job-handler.ts:55-57`). The
+    MVP design lists BattleTags and Discord handles among values that exist
+    only in worker memory
+    (`docs/superpowers/specs/2026-08-04-slashwho-mvp-design.md:187`).
+  - **Not evidenced.** Whether a Raider.IO account name can itself be a
+    BattleTag is unverified. The repository's "can be a BattleTag or a Discord
+    handle" comment (`packages/raiderio/src/client.ts:174-176`) is about a
+    different field: the logged-encounter `log.sources`, the uploader's
+    account, which the schema never reads.
 
   - **Where it is enqueued.** Whole, at
     `packages/application/src/search-service.ts:409-415` and
@@ -540,24 +570,51 @@ but they are readable only through SQL and the Discord webhook
   - **The size now.** The database is 1,319 MB, and the wipe table alone is
     954 MB.
   - **Why.** Superseded runs are never pruned (`schema.ts:1712-1714`).
-  - **Current against total.** These are exact counts.
+  - **Current against total.** These are exact counts, taken 2026-10-01.
+    "Current" is each character's newest publication of any scope, which is
+    the dossier's snapshot run.
 
-    | Rows                      | Kills   | Wipes     |
-    | ------------------------- | ------- | --------- |
-    | In all                    | 562,914 | 2,223,775 |
-    | Current runs              | 34,905  | 108,210   |
-    | Tier-search runs          | 17,799  | 80,617    |
-    | Copies in superseded runs | 510,210 | 2,034,948 |
+    | Rows                                  | Kills   | Wipes     |
+    | ------------------------------------- | ------- | --------- |
+    | In all                                | 564,715 | 2,231,059 |
+    | In current runs                       | 35,047  | 108,532   |
+    | In runs no dossier reads for evidence | 529,668 | 2,122,527 |
 
-    The superseded copies are 91% of kill rows and 92% of wipe rows.
+    The unread copies are 94% of kill rows and 95% of wipe rows. Tier-search
+    publications hold 17,799 kill rows and 80,617 wipe rows in all. Those
+    that are a character's newest publication count as current.
 
   - **The rate.** In the last two weeks a single day wrote up to 118,174 kill
     rows and 643,776 wipe rows.
-  - **What a retention policy could do.** Keep each character's newest full
-    run, and for older runs only the kill rows that carry a distinct
-    `parses_read_at`. That preserves every real rankings read, which is what
-    candidate 11 measures: 30,180 reads against 562,914 kill rows. Superseded
-    wipe copies carry no reading and could go.
+  - **What a retention policy must keep.** Both runs the dossier reads
+    (`packages/database/src/evidence/load.ts:33-60`):
+    - the newest publication of any scope, whose kills, wipes and tier bests
+      are the snapshot. A newer tier search can hold visible kills absent from
+      the full run, including kills never asked about, with a null
+      `parses_read_at`;
+    - the newest full publication, whose run metadata and Cutting Edge the
+      dossier reads.
+
+  - **Carry-forward reads every older run, not only the newest.** Each
+    publish looks up a fight's stored values across all of the character's
+    completed runs. That covers:
+    - performance, via `loadStoredPerformanceByFightUrl`, which takes the
+      newest copy per fight (`packages/database/src/evidence/load.ts:138-170`);
+    - `collected_at`, the newest per fight;
+    - historic rank (`packages/database/src/evidence/repository.ts:838-880`).
+
+    So a fight missing from the newest runs but present in an older one gets
+    its percentile and rank back when a run finds it again. A policy that
+    deletes older runs would lose that. The newest copy of every fight that has
+    ever been published must therefore survive, not only the two dossier runs.
+
+  - **What it could drop.** Older rows that are neither the newest copy of
+    their fight nor a distinct `parses_read_at` reading. Keeping the distinct
+    readings preserves every real rankings read, which is what candidate 11
+    measures: 30,430 reads against 564,715 kill rows. Wipe copies need the
+    same newest-copy-per-fight treatment before older ones go.
+  - **Before any deletion.** This needs a design that is replayed against
+    stored rows; the note does not supply one.
   - **Why not key it on `collected_at`.** It is re-stamped on every listing,
     so a policy keyed on it would keep nearly every copy.
 - **Wipes lose the guild region.** `character_mythic_wipes` has no
@@ -598,9 +655,16 @@ In order:
 4. **Decide the settle window from data** (candidate 11). After the next raid
    reset, measure how long an empty first read stays empty. Stored data
    already shows that available percentiles do not move.
-5. **Add a retention policy for superseded evidence copies**, keyed on
-   `parses_read_at`, and correct the `collected_at` column comment. Do this
-   before production volumes arrive.
+5. **Design a retention policy for superseded evidence copies**, and correct
+   the `collected_at` column comment. The policy must keep:
+   - both runs the dossier reads;
+   - the newest copy of every fight ever published, which carry-forward
+     relies on;
+   - the distinct `parses_read_at` readings.
+
+   Replay it against stored rows before it deletes anything. Do this before
+   production volumes arrive.
+
 6. **Put candidate 10 to the maintainer as a decision**, not a build. It
    touches the not-a-directory stance and needs a reference roster.
 
@@ -612,24 +676,28 @@ Candidates 5 to 9 are small follow-ons once a tier summary view exists.
 
 - Read-only, over `railway ssh --service worker --environment test`, inside
   `BEGIN READ ONLY`.
-- Every query that touches current evidence uses the dossier's rule for a
-  character's current run (`packages/database/src/evidence/repository.ts:1689-1711`):
+- Every query that touches current evidence uses the run the dossier takes
+  kills, wipes and tier bests from: the newest completed or partial
+  publication of any scope (`packages/database/src/evidence/load.ts:40-53`).
 
 ```sql
 with latest as (
   select distinct on (region, realm_slug, normalized_name) id
   from character_evidence_runs
-  where status in ('complete', 'partial') and publication_scope = 'full'
+  where status in ('complete', 'partial')
   order by region, realm_slug, normalized_name, completed_at desc, id desc
 )
 ```
 
 **Settle window and re-reads, candidates 11 and 12.**
 
-- **What a reading is.** One `(character, fight, parses_read_at)` with a
-  non-null `parses_read_at`. Pairs are consecutive readings of the same fight.
-- **"Available".** Any of the three metrics is available. Moves are measured
-  on damage.
+- **What a reading is.** One `(character, fight, metric, parses_read_at)` with
+  a non-null `parses_read_at`. Pairs are consecutive readings of the same
+  fight and metric.
+- **Comparable pairs.** A pair counts towards drift only when that metric was
+  available at both readings.
+- **Cumulative spread.** For each fight and metric, the spread is the maximum
+  minus the minimum over all of its available readings.
 - **Origin.** Found by joining each reading to the run whose `completed_at`
   equals it.
 - **Consistency.** No reading had two different values under the same
@@ -637,32 +705,29 @@ with latest as (
 
 ```sql
 with raw as (
-  select r.region, r.realm_slug, r.normalized_name, k.source_fight_key,
-    k.killed_at, k.parses_read_at, k.damage_parse_state::text as ds,
-    k.damage_percentile as dp,
-    k.damage_parse_state::text = 'available'
-      or k.healing_parse_state::text = 'available'
-      or k.boss_damage_parse_state::text = 'available' as any_avail
+  select distinct r.region, r.realm_slug, r.normalized_name,
+    k.source_fight_key, k.killed_at, k.parses_read_at, m.metric, m.state, m.pct
   from character_mythic_kills k
   join character_evidence_runs r on r.id = k.evidence_run_id
+  cross join lateral (values
+    ('damage', k.damage_parse_state::text, k.damage_percentile),
+    ('healing', k.healing_parse_state::text, k.healing_percentile),
+    ('boss_damage', k.boss_damage_parse_state::text, k.boss_damage_percentile)
+  ) as m(metric, state, pct)
   where k.parses_read_at is not null
-), per_reading as (
-  select region, realm_slug, normalized_name, source_fight_key, killed_at,
-    parses_read_at, min(ds) as ds, min(dp) as dp, bool_or(any_avail) as any_avail
-  from raw group by 1, 2, 3, 4, 5, 6
 ), seq as (
-  select *, lag(ds) over w as prev_ds, lag(dp) over w as prev_dp,
-    lag(any_avail) over w as prev_any, lag(parses_read_at) over w as prev_at,
-    row_number() over w as n
-  from per_reading
+  select *, lag(state) over w as prev_state, lag(pct) over w as prev_pct,
+    lag(parses_read_at) over w as prev_at, row_number() over w as n
+  from raw
   window w as (partition by region, realm_slug, normalized_name,
-    source_fight_key order by parses_read_at)
+    source_fight_key, metric order by parses_read_at)
 )
-select extract(epoch from (coalesce(prev_at, parses_read_at) - killed_at))
+select metric, n,
+  extract(epoch from (coalesce(prev_at, parses_read_at) - killed_at))
     / 86400 as age_days,
-  n, prev_any, any_avail,
-  case when prev_ds = 'available' and ds = 'available'
-    then abs(dp - prev_dp) end as moved
+  prev_state, state,
+  case when prev_state = 'available' and state = 'available'
+    then abs(pct - prev_pct) end as moved
 from seq;
 ```
 
@@ -700,12 +765,13 @@ was selected.
 
 ## Caveats
 
-- **The data is from `test`, not production.** `test` holds 222 characters,
+- **The data is from `test`, not production.** `test` holds 226 characters,
   many seeded or re-collected during development. Ratios are more trustworthy
   than absolute counts.
-- **Some evidence was collected under older rules.** The current-run
-  definition excludes tier-search runs, whose rows add to some characters'
-  evidence.
+- **Some evidence was collected under older rules.** In particular, 25,822 of
+  the rankings reads predate the run `origin` column.
+- **Within-week stability only.** The drift results cover re-reads up to 6.7
+  days apart, and say nothing about longer spans.
 - **The wipe figures are lower bounds throughout.** They include the schedule
   pulls-per-night figure and all of candidate 3.
 - **Unverified fields must be checked before an issue depends on them.** That
