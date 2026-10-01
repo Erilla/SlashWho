@@ -191,7 +191,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-39).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-40).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
@@ -231,7 +231,8 @@ describe("database migrations", () => {
       { idx: 67, tag: "0068_raiderio_vantus_null" },
       { idx: 68, tag: "0069_character_groups" },
       { idx: 69, tag: "0070_fingerprint_excluded_tournament_characters" },
-      { idx: 70, tag: "0071_discovery_evidence_origin" }
+      { idx: 70, tag: "0071_discovery_evidence_origin" },
+      { idx: 71, tag: "0072_fingerprint_delivery" }
     ]);
   });
 
@@ -350,9 +351,10 @@ describe("database migrations", () => {
       expect(existing).not.toContain("character_connections");
       const before = await checksum(pool, existing);
 
-      await runMigrations(pool);
+      await runMigrationsThrough(pool, "0071_discovery_evidence_origin");
 
       expect(await checksum(pool, existing)).toBe(before);
+      await runMigrations(pool);
       const manualGroups = await pool.query<{ n: string }>(
         `SELECT count(DISTINCT group_id)::text AS n FROM character_group_members WHERE character_id = ANY($1)`,
         [[root, manualTarget]]

@@ -250,9 +250,14 @@ describe("character evidence queue", () => {
 });
 
 describe("job telemetry", () => {
-  it.each([false, true])(
-    "strips wider discovery inputs, continuation=%s",
-    async (continuation) => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true]
+  ])(
+    "strips wider discovery inputs, continuation=%s, identified=%s",
+    async (continuation, identified) => {
       // Break caught: TypeScript structural typing cannot protect persisted JSON.
       const queue = createDiscoveryQueue({
         connectionString: "postgres://worker:secret@database/slashwho"
@@ -273,7 +278,10 @@ describe("job telemetry", () => {
         profileGuess: "private-profile",
         correlationId: "c1",
         enqueuedAt: "2026-09-15T10:00:00.000Z",
-        ...(continuation ? { continuation: true as const } : {})
+        ...(continuation ? { continuation: true as const } : {}),
+        ...(identified
+          ? { admissionId: "private-admission", attemptBase: 3 }
+          : {})
       };
       await queue.enqueue(payload);
       expect(queueFakes.send.mock.calls).toEqual([
@@ -284,12 +292,17 @@ describe("job telemetry", () => {
             key: { region: "eu", realm: "silvermoon", name: "root" },
             correlationId: "c1",
             enqueuedAt: "2026-09-15T10:00:00.000Z",
-            ...(continuation ? { continuation: true } : {})
+            ...(continuation ? { continuation: true } : {}),
+            ...(identified
+              ? { admissionId: "private-admission", attemptBase: 3 }
+              : {})
           },
           {
-            singletonKey: continuation
-              ? "private-payload-run:continuation"
-              : "private-payload-run"
+            singletonKey: identified
+              ? "private-payload-run:admission:private-admission"
+              : continuation
+                ? "private-payload-run:continuation"
+                : "private-payload-run"
           }
         ]
       ]);

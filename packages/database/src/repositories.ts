@@ -2001,6 +2001,7 @@ export interface CharacterConnectionRepository {
 }
 
 export interface Repositories {
+  fingerprintDeliveries?: import("./fingerprint-delivery").FingerprintDeliveryRepository;
   accountAuth: AccountAuthRepository;
   accountMail: AccountMailRepository;
   accountTokens: AccountTokenRepository;

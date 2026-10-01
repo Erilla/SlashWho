@@ -1,6 +1,5 @@
 import type { CharacterGuild, CharacterKey } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
-import { activeRunSql } from "./discovery-runs";
 import { lockFingerprintSweeps } from "./locks";
 import type {
   FingerprintAdmission,
@@ -69,7 +68,7 @@ async function admitFingerprintWaitingRun(
        ON state.region = admission.region
       AND state.realm_slug = admission.realm_slug
       AND state.normalized_name = admission.normalized_name
-     WHERE admission.status = 'waiting'
+     WHERE admission.status = 'waiting' AND admission.consumed_at IS NULL
        AND admission.requested_at <= $2
        AND (
          state.last_published_at IS NULL
@@ -236,9 +235,9 @@ export async function finishFingerprintSweep(
   if (!row) throw new Error("fingerprint_reservation_not_active");
   await client.query(
     `UPDATE fingerprint_sweep_admissions
-     SET status = 'finished'
+     SET status = 'finished', consumed_at = CASE WHEN $2 THEN now() ELSE consumed_at END
      WHERE id = $1`,
-    [row.admission_id]
+    [row.admission_id, input.published]
   );
   if (!input.published) return;
   const cursor = input.cursor;
@@ -302,8 +301,9 @@ export async function finishFingerprintSweep(
     await client.query(
       `INSERT INTO fingerprint_sweep_admissions
         (discovery_run_id, region, realm_slug, normalized_name, request_cap,
-         hourly_budget, cadence_cutoff, requested_at)
-       SELECT $1, $2, $3, $4, $5, $6, $7, $8
+         hourly_budget, cadence_cutoff, requested_at, attempt_base, dispatch_kind, execution_max_attempts)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8,
+         (SELECT attempt FROM discovery_runs WHERE id = $1), 'continuation', 5
        WHERE NOT EXISTS (
          SELECT 1 FROM fingerprint_sweep_admissions
          WHERE discovery_run_id = $1 AND status IN ('waiting', 'admitted')
@@ -335,7 +335,7 @@ export async function finishFingerprintSweep(
  * set to the admission time, so the row passes the cadence filter everywhere
  * -- a continuation finishes a sweep in progress and was never cadence-gated.
  */
-async function requeueContinuations(
+export async function requeueContinuations(
   client: Queryable,
   input: {
     at: Date;
@@ -348,10 +348,11 @@ async function requeueContinuations(
   const result = await client.query<{ discovery_run_id: string }>(
     `INSERT INTO fingerprint_sweep_admissions
       (discovery_run_id, region, realm_slug, normalized_name, request_cap,
-       hourly_budget, cadence_cutoff, requested_at)
+       hourly_budget, cadence_cutoff, requested_at, attempt_base, dispatch_kind, execution_max_attempts)
      SELECT snapshot.discovery_run_id, state.region, state.realm_slug,
             state.normalized_name, previous.request_cap,
-            previous.hourly_budget, $1, $5
+            previous.hourly_budget, $1, $5,
+            (SELECT attempt FROM discovery_runs WHERE id = snapshot.discovery_run_id), 'continuation', 5
      FROM fingerprint_sweep_states state
      JOIN snapshots snapshot ON snapshot.id = state.resume_snapshot_id
      CROSS JOIN LATERAL (
@@ -371,7 +372,7 @@ async function requeueContinuations(
            ON reservation.admission_id = live.id
          WHERE live.discovery_run_id = snapshot.discovery_run_id
            AND (
-             live.status = 'waiting'
+             (live.status = 'waiting' AND live.consumed_at IS NULL)
              OR (
                live.status = 'admitted'
                AND reservation.released_at IS NULL
@@ -383,6 +384,13 @@ async function requeueContinuations(
      LIMIT $4
      RETURNING discovery_run_id`,
     [input.at, input.runId, input.maxFailures, input.limit, input.notBefore]
+  );
+  await client.query(
+    `UPDATE fingerprint_sweep_admissions a SET consumed_at = now()
+    WHERE a.consumed_at IS NULL AND a.discovery_run_id = ANY($1::uuid[])
+      AND EXISTS (SELECT 1 FROM fingerprint_sweep_admissions n
+        WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)`,
+    [result.rows.map((row) => row.discovery_run_id)]
   );
   return result.rows.map((row) => row.discovery_run_id);
 }
@@ -456,7 +464,7 @@ export function createFingerprintSweepRepositories(
             await client.query(
               `UPDATE fingerprint_sweep_admissions
                SET status = 'not_due'
-               WHERE discovery_run_id = $1 AND status = 'waiting'`,
+               WHERE discovery_run_id = $1 AND status = 'waiting' AND consumed_at IS NULL`,
               [input.runId]
             );
             return { kind: "not_due" };
@@ -465,7 +473,7 @@ export function createFingerprintSweepRepositories(
           const waiting = await client.query<{ id: string }>(
             `SELECT id
              FROM fingerprint_sweep_admissions
-             WHERE discovery_run_id = $1 AND status = 'waiting'
+             WHERE discovery_run_id = $1 AND status = 'waiting' AND consumed_at IS NULL
              ORDER BY requested_at, queue_order
              LIMIT 1
              FOR UPDATE`,
@@ -488,8 +496,9 @@ export function createFingerprintSweepRepositories(
             const admission = await client.query<{ id: string }>(
               `INSERT INTO fingerprint_sweep_admissions
                 (discovery_run_id, region, realm_slug, normalized_name, request_cap,
-                 hourly_budget, cadence_cutoff, requested_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 hourly_budget, cadence_cutoff, requested_at, attempt_base, dispatch_kind, execution_max_attempts)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                 (SELECT attempt FROM discovery_runs WHERE id = $1), $9, 5)
                RETURNING id`,
               [
                 input.runId,
@@ -499,10 +508,16 @@ export function createFingerprintSweepRepositories(
                 input.requestCap,
                 input.hourlyBudget,
                 input.cadenceCutoff,
-                input.at
+                input.at,
+                input.continuation ? "continuation" : "ordinary"
               ]
             );
             admissionId = one(admission).id;
+            await client.query(
+              `UPDATE fingerprint_sweep_admissions SET consumed_at = coalesce(consumed_at, now())
+              WHERE discovery_run_id = $1 AND id <> $2`,
+              [input.runId, admissionId]
+            );
           }
 
           const result = await admitFingerprintWaitingRun(
@@ -519,7 +534,7 @@ export function createFingerprintSweepRepositories(
           if (result.kind === "waiting" && !input.continuation) {
             const deferred = await client.query(
               `UPDATE discovery_runs
-               SET status = 'queued', attempt = greatest(attempt - 1, 0),
+               SET status = 'queued',
                    next_retry_at = NULL
                WHERE id = $1 AND status IN ('running', 'queued')`,
               [input.runId]
@@ -725,7 +740,7 @@ export function createFingerprintSweepRepositories(
         const result = await pool.query<{ discovery_run_id: string }>(
           `SELECT discovery_run_id
            FROM fingerprint_sweep_admissions
-           WHERE status = 'waiting'
+           WHERE status = 'waiting' AND consumed_at IS NULL
            ORDER BY requested_at, queue_order
            LIMIT $1 OFFSET $2`,
           [limit, offset]
@@ -740,10 +755,14 @@ export function createFingerprintSweepRepositories(
           );
         }
         const result = await pool.query<{ discovery_run_id: string }>(
-          `SELECT discovery_run_id
-           FROM fingerprint_sweep_admissions
-           WHERE status = 'admitted' AND dispatched_at IS NULL
-           ORDER BY requested_at, queue_order
+          `SELECT a.discovery_run_id
+           FROM fingerprint_sweep_admissions a JOIN discovery_runs r ON r.id = a.discovery_run_id
+           WHERE a.status IN ('admitted','not_due') AND a.dispatched_at IS NULL AND a.consumed_at IS NULL
+             AND a.execution_job_id IS NULL AND a.attempt_base IS NOT NULL
+             AND (r.status IN ('queued','running','retrying') OR a.dispatch_kind = 'continuation')
+             AND NOT EXISTS (SELECT 1 FROM fingerprint_sweep_admissions n
+               WHERE n.discovery_run_id = a.discovery_run_id AND n.queue_order > a.queue_order)
+           ORDER BY a.requested_at, a.queue_order
            LIMIT $1`,
           [limit]
         );
@@ -779,7 +798,7 @@ export function createFingerprintSweepRepositories(
           }>(
             `SELECT id, region, realm_slug, normalized_name, cadence_cutoff
              FROM fingerprint_sweep_admissions
-             WHERE discovery_run_id = $1 AND status = 'waiting'
+             WHERE discovery_run_id = $1 AND status = 'waiting' AND consumed_at IS NULL
              ORDER BY requested_at, queue_order
              LIMIT 1
              FOR UPDATE`,
@@ -796,14 +815,21 @@ export function createFingerprintSweepRepositories(
                FROM fingerprint_sweep_admissions admission
                JOIN discovery_runs run ON run.id = admission.discovery_run_id
                WHERE admission.discovery_run_id = $1
-                 AND run.status IN ${activeRunSql}
+                 AND admission.consumed_at IS NULL
+                 AND (run.status IN ('queued','running','retrying') OR
+                   (admission.dispatch_kind = 'continuation' AND run.status = 'complete' AND EXISTS (
+                     SELECT 1 FROM fingerprint_sweep_states state JOIN snapshots snapshot
+                       ON snapshot.id = state.resume_snapshot_id
+                     WHERE snapshot.discovery_run_id = run.id AND state.resume_after IS NOT NULL)))
                ORDER BY admission.requested_at DESC, admission.queue_order DESC
                LIMIT 1`,
               [runId]
             );
             return latest.rows[0]?.status === "not_due"
               ? { kind: "not_due" }
-              : { kind: "settled" };
+              : latest.rows[0]?.status === "admitted"
+                ? { kind: "admitted" }
+                : { kind: "settled" };
           }
 
           const state = await client.query<{
