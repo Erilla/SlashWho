@@ -505,6 +505,13 @@
       "when": 1792011600023,
       "tag": "0072_fingerprint_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1792011600024,
+      "tag": "0073_roster_profile_resolutions",
+      "breakpoints": true
     }
   ]
 }

@@ -755,7 +755,7 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
 
     // A mark below the current version is not read back.
     await pool.query(
-      `UPDATE character_raiderio_tier_reads SET collection_version = 0
+      `UPDATE character_raiderio_tier_reads SET collection_version = 1
         WHERE tier_ordinal = 23`
     );
     expect(

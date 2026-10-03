@@ -1,4 +1,11 @@
 export { runMigrations } from "./migrate";
+export { createRosterProfileResolutionRepository } from "./roster-profile-resolutions";
+export type {
+  RosterProfileLocator,
+  StoredRosterProfileResolution,
+  RosterProfileResolutionAnswer,
+  RosterProfileResolutionRepository
+} from "./roster-profile-resolutions";
 export { StaleFingerprintDeliveryError } from "./fingerprint-delivery-error";
 export { createPostgresRepositories } from "./postgres-repositories";
 export { mergeRaiderIoFirstKills } from "./evidence/merge";
