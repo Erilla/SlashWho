@@ -108,6 +108,22 @@ export type MythicBossRankingsResult =
 /** Receives no request identity, payload, or credential information. */
 export type RaiderIoPhysicalRequestObserver = () => void;
 
+/** A historic tombstone name is a locator, never evidence of identity. */
+export type RosterProfileLocator = Readonly<{
+  region: string;
+  realm: string;
+  name: string;
+  historicId: number;
+}>;
+
+export type RosterProfileResolutionResult =
+  | { kind: "resolved"; characterId: number }
+  | {
+      kind: "limitation";
+      code: RaiderIoEvidenceLimitation;
+      retryAfterMs?: number;
+    };
+
 export type RaiderIoRosterRole = "tank" | "healer" | "dps";
 
 /** One raider on a logged encounter's roster. */
@@ -162,6 +178,12 @@ export type LoggedEncounterResult =
     };
 
 export interface RaiderIoGateway {
+  /** Resolve a historic roster tombstone through upstream character detail. */
+  resolveRosterProfile(
+    locator: RosterProfileLocator,
+    signal?: AbortSignal,
+    onPhysicalRequest?: RaiderIoPhysicalRequestObserver
+  ): Promise<RosterProfileResolutionResult>;
   getCharacter(
     key: CharacterKey,
     signal?: AbortSignal

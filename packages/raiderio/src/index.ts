@@ -1,5 +1,6 @@
 export {
   createRaiderIoClient,
+  isValidRosterProfileLocator,
   maximumHistoricMythicKillTiers,
   raiderIoHistoricTierOrdinals,
   raiderIoHistoricTiers
@@ -19,5 +20,7 @@ export type {
   RaiderIoEvidenceLimitation,
   RaiderIoGateway,
   RaiderIoProfile,
-  RaiderIoRosterRole
+  RaiderIoRosterRole,
+  RosterProfileLocator,
+  RosterProfileResolutionResult
 } from "./types";
