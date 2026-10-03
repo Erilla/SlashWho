@@ -1848,6 +1848,58 @@ export const characterAttendanceSearches = pgTable(
 );
 
 /**
+ * Parsed historic profile answers, shared across subjects. Attempt metadata
+ * survives partial publication; leases prevent simultaneous profile dispatch.
+ * No raw profile, ownership connection or subject-specific presence is stored.
+ */
+export const raiderIoRosterProfileResolutions = pgTable(
+  "raiderio_roster_profile_resolutions",
+  {
+    region: text("region").notNull(),
+    realm: text("realm").notNull(),
+    name: text("name").notNull(),
+    historicId: bigint("historic_id", { mode: "number" }).notNull(),
+    resolverVersion: integer("resolver_version").notNull(),
+    resolvedId: bigint("resolved_id", { mode: "number" }),
+    limitationCode: text("limitation_code"),
+    answeredAt: timestamp("answered_at", { withTimezone: true }),
+    lastAttemptAt: timestamp("last_attempt_at", {
+      withTimezone: true
+    }).notNull(),
+    retryNotBefore: timestamp("retry_not_before", { withTimezone: true }),
+    attemptToken: uuid("attempt_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true })
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.region,
+        table.realm,
+        table.name,
+        table.historicId,
+        table.resolverVersion
+      ]
+    }),
+    check(
+      "roster_profile_historic_id_safe",
+      sql`${table.historicId} BETWEEN 1 AND 9007199254740991`
+    ),
+    check(
+      "roster_profile_resolved_id_safe",
+      sql`${table.resolvedId} IS NULL OR ${table.resolvedId} BETWEEN 1 AND 9007199254740991`
+    ),
+    check(
+      "roster_profile_answer_shape",
+      sql`(${table.resolvedId} IS NULL OR (${table.limitationCode} IS NULL AND ${table.answeredAt} IS NOT NULL)) AND (${table.answeredAt} IS NULL OR ${table.resolvedId} IS NOT NULL OR (${table.limitationCode} IS NOT NULL AND ${table.limitationCode} IN ('not_found', 'private', 'schema_drift')))`
+    ),
+    check(
+      "roster_profile_lease_shape",
+      sql`(${table.attemptToken} IS NULL) = (${table.leaseUntil} IS NULL)`
+    )
+  ]
+);
+
+/**
  * The stable Warcraft Logs character ID each name, realm and region last
  * resolved to. The ID survives renames and realm transfers where the key does
  * not, so it is what can tell a character's former name from its current one.

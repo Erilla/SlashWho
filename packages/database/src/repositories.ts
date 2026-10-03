@@ -12,6 +12,7 @@ import type {
   LedgerReason,
   ObservationSource
 } from "@slashwho/domain";
+import type { RosterProfileResolutionRepository } from "./roster-profile-resolutions";
 
 export type CallerClass = "anonymous" | "bot";
 export type EvidenceRunStatus =
@@ -1026,6 +1027,7 @@ export type EvidenceRunCost = Readonly<{
 }>;
 
 export interface EvidenceRepository {
+  rosterProfileResolutions?: RosterProfileResolutionRepository;
   /** Reviewer-declared former identities of this connected character. */
   historicAliases?(key: CharacterKey): Promise<readonly CharacterKey[]>;
   addHistoricAlias?(

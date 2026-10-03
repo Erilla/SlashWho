@@ -1,6 +1,7 @@
 import {
   isRosterShown,
   isValidCharacterKey,
+  supportedRegions,
   type CharacterKey
 } from "@slashwho/domain";
 import {
@@ -30,7 +31,9 @@ import type {
   RaiderIoEvidenceLimitation,
   RaiderIoPhysicalRequestObserver,
   RaiderIoGateway,
-  RaiderIoProfile
+  RaiderIoProfile,
+  RosterProfileLocator,
+  RosterProfileResolutionResult
 } from "./types";
 
 /**
@@ -87,6 +90,33 @@ export const maximumHistoricMythicKillTiers =
 // undocumented and this client has no rate limiter of its own: it only reports
 // throttling once Raider.IO has already applied it.
 const historicMythicKillTierConcurrency = 3;
+
+const rosterProfileResponseSchema = z.object({
+  characterDetails: z.object({
+    character: z.object({
+      id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER)
+    })
+  })
+});
+
+/** Only the supported canonical key plus its exact historical ID suffix. */
+export function isValidRosterProfileLocator(
+  locator: RosterProfileLocator
+): boolean {
+  if (!Number.isSafeInteger(locator.historicId) || locator.historicId <= 0)
+    return false;
+  const suffix = `-${String(locator.historicId)}`;
+  if (!locator.name.endsWith(suffix)) return false;
+  const region = supportedRegions.find((region) => region === locator.region);
+  return (
+    region !== undefined &&
+    isValidCharacterKey({
+      region,
+      realm: locator.realm,
+      name: locator.name.slice(0, -suffix.length)
+    })
+  );
+}
 
 /**
  * What this client calls itself upstream. Raider.IO rejects requests without
@@ -523,6 +553,40 @@ export function createRaiderIoClient(
     );
   }
 
+  async function resolveRosterProfile(
+    locator: RosterProfileLocator,
+    signal?: AbortSignal,
+    onPhysicalRequest?: RaiderIoPhysicalRequestObserver
+  ): Promise<RosterProfileResolutionResult> {
+    if (!isValidRosterProfileLocator(locator)) {
+      return { kind: "limitation", code: "schema_drift" };
+    }
+    signal?.throwIfAborted();
+    const path = [
+      "api",
+      "characters",
+      locator.region,
+      locator.realm,
+      locator.name
+    ]
+      .map(encodeURIComponent)
+      .join("/");
+    try {
+      const characterId = await request(
+        new URL(`/${path}`, baseUrl),
+        (value) =>
+          rosterProfileResponseSchema.parse(value).characterDetails.character
+            .id,
+        signal,
+        onPhysicalRequest
+      );
+      return { kind: "resolved", characterId };
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return raiderIoLimitation(error);
+    }
+  }
+
   async function getClaimedCharacters(
     ownerId: string,
     signal?: AbortSignal
@@ -792,6 +856,7 @@ export function createRaiderIoClient(
   }
 
   return {
+    resolveRosterProfile,
     getCharacter,
     getClaimedCharacters,
     resolveProfileGuess,

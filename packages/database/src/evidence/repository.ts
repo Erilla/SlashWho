@@ -1,5 +1,6 @@
 import type { CharacterKey } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
+import { createRosterProfileResolutionRepository } from "../roster-profile-resolutions";
 import { lockCharacterEvidence } from "../locks";
 import {
   type EvidenceRunRow,
@@ -110,6 +111,7 @@ export function createEvidenceRepositories(
 ): Pick<Repositories, "evidence"> {
   return {
     evidence: {
+      rosterProfileResolutions: createRosterProfileResolutionRepository(pool),
       async historicAliases(key) {
         const result = await pool.query<{
           region: CharacterKey["region"];

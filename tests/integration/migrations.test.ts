@@ -85,6 +85,7 @@ describe("database migrations", () => {
       "operators",
       "raiderio_logged_encounter_members",
       "raiderio_logged_encounters",
+      "raiderio_roster_profile_resolutions",
       "rate_limit_events",
       "snapshot_characters",
       "snapshots",
@@ -191,7 +192,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-40).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-41).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
@@ -232,7 +233,8 @@ describe("database migrations", () => {
       { idx: 68, tag: "0069_character_groups" },
       { idx: 69, tag: "0070_fingerprint_excluded_tournament_characters" },
       { idx: 70, tag: "0071_discovery_evidence_origin" },
-      { idx: 71, tag: "0072_fingerprint_delivery" }
+      { idx: 71, tag: "0072_fingerprint_delivery" },
+      { idx: 72, tag: "0073_roster_profile_resolutions" }
     ]);
   });
 

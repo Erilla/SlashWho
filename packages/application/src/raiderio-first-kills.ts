@@ -7,6 +7,8 @@ import type {
   StoredRaiderIoLoggedEncounter,
   StoredRaiderIoLoggedEncounterAnswers
 } from "@slashwho/database";
+import type { RosterProfileResolutionRepository } from "@slashwho/database";
+import { resolveRosterPresence } from "./roster-profile-presence";
 import {
   lookupRaidEncounterByRaiderIoSlugs,
   matchesRaiderIoKill,
@@ -174,7 +176,9 @@ export async function collectRaiderIoFirstKills(
     ) => Promise<StoredRaiderIoLoggedEncounterAnswers>;
     saveAnswers: (answers: RaiderIoLoggedEncounterAnswers) => Promise<void>;
     raiderio: Pick<RaiderIoGateway, "getLoggedEncounter"> &
-      Partial<Pick<RaiderIoGateway, "getCharacter">>;
+      Partial<Pick<RaiderIoGateway, "getCharacter" | "resolveRosterProfile">>;
+    rosterProfileResolutions?: RosterProfileResolutionRepository | undefined;
+    onIdentityRequest?: () => void;
     signal: AbortSignal;
     now: () => Date;
     /**
@@ -401,6 +405,25 @@ export async function collectRaiderIoFirstKills(
     ? await raiderIoCharacterId(input)
     : null;
   if (character?.kind === "failed") fallShort({ code: "unavailable" });
+  const historicPresence =
+    character?.kind === "id"
+      ? await resolveRosterPresence({
+          encounters: [...encounters.values()].filter(
+            (encounter) =>
+              encounter.rosterState === "available" &&
+              !established.has(encounter.loggedEncounterId)
+          ),
+          subjectId: character.id,
+          subjectClass: character.className,
+          repository: input.rosterProfileResolutions,
+          resolve: input.raiderio.resolveRosterProfile,
+          signal: input.signal,
+          now: input.now,
+          onPhysicalRequest: input.onIdentityRequest
+        })
+      : null;
+  if (historicPresence?.limitation)
+    fallShort({ code: historicPresence.limitation });
 
   const kills = input.kills.flatMap(
     (kill): CharacterRaiderIoFirstKillInput[] => {
@@ -443,11 +466,7 @@ export async function collectRaiderIoFirstKills(
         if (established.has(id)) {
           presenceChecked = true;
         } else if (character?.kind === "id") {
-          if (
-            !encounter.members.some(
-              (member) => member.raiderIoCharacterId === character.id
-            )
-          ) {
+          if (historicPresence?.presence.get(id) !== "present") {
             return [];
           }
           presenceChecked = true;
@@ -499,7 +518,7 @@ export function rebuildSettledFirstKills(
 }
 
 type CharacterIdAnswer =
-  | Readonly<{ kind: "id"; id: number }>
+  | Readonly<{ kind: "id"; id: number; className: string }>
   // The read succeeded and Raider.IO gives the profile no id. That answer
   // does not change, so it is not a shortfall.
   | Readonly<{ kind: "none" }>
@@ -522,7 +541,11 @@ async function raiderIoCharacterId(
     );
     return character.raiderIoCharacterId == null
       ? { kind: "none" }
-      : { kind: "id", id: character.raiderIoCharacterId };
+      : {
+          kind: "id",
+          id: character.raiderIoCharacterId,
+          className: character.className
+        };
   } catch (error) {
     if (input.signal.aborted) throw error;
     return { kind: "failed" };

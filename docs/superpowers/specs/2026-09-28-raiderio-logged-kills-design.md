@@ -28,7 +28,14 @@ read later kills.
   treats Raider.IO kills as places to search, "never evidence". This design
   changes that policy. A logged encounter is a parsed combat log, and the
   character's presence on its roster, matched by Raider.IO character id, is
-  the proof that they were there. Where the guild has hidden the roster,
+  the proof that they were there. Historic roster profile IDs can differ after
+  a transfer. A validated historic `name-<id>` locator may be resolved by
+  Raider.IO to the current subject's exact positive safe integer ID (#782);
+  that saved upstream resolution also establishes presence. Names, class and
+  suffixes are locators or candidate filters only, never identity proof or
+  inferred account connections. Unresolved identity leaves collection partial
+  and preserves published evidence; the historical roster remains unchanged.
+  Where the guild has hidden the roster,
   Raider.IO's own attribution of that logged encounter to the character stands
   in for it. Raider.IO's plain kill list, without a logged encounter, still
   stays a search hint only.
