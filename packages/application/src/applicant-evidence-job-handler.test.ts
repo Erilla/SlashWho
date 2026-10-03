@@ -6025,7 +6025,10 @@ describe("applicant evidence job handler", () => {
       overrides: Partial<
         Pick<
           RaiderIoGateway,
-          "getHistoricMythicKills" | "getLoggedEncounter" | "getCharacter"
+          | "getHistoricMythicKills"
+          | "getLoggedEncounter"
+          | "getCharacter"
+          | "resolveRosterProfile"
         >
       > = {}
     ) {
@@ -6141,6 +6144,72 @@ describe("applicant evidence job handler", () => {
         state: "completed"
       });
     });
+
+    it.each(["resolved", "private", "rate_limited", "save_failed"] as const)(
+      "publishes historic identity %s without a Raider.IO-only evidence retry",
+      async (outcome) => {
+        const evidence = loggedStore();
+        evidence.rosterProfileResolutions = {
+          load: async () => [],
+          reserve: async () => "fixture-token",
+          answer: async () => {
+            if (outcome === "save_failed") throw new Error("database_down");
+            return true;
+          }
+        };
+        const provider = raiderIo({
+          getLoggedEncounter: vi.fn(async () => ({
+            ...encounter,
+            roster: {
+              state: "available" as const,
+              members: [
+                {
+                  ...encounter.roster.members[0]!,
+                  raiderIoCharacterId: 12345,
+                  name: "Alfa-12345",
+                  realm: "nemesis"
+                }
+              ]
+            }
+          })),
+          resolveRosterProfile: vi.fn(
+            async (_locator, _signal, onPhysicalRequest) => {
+              onPhysicalRequest?.();
+              return outcome === "resolved" || outcome === "save_failed"
+                ? { kind: "resolved" as const, characterId: 424242 }
+                : {
+                    kind: "limitation" as const,
+                    code: outcome,
+                    retryAfterMs: 30000
+                  };
+            }
+          )
+        });
+        await loggedHandler(evidence, provider).execute(run.id);
+        const published = evidence.published[0]!.result;
+        expect(published.state).toBe(
+          outcome === "resolved" ? "complete" : "partial"
+        );
+        expect(published).not.toHaveProperty("retryAfterAt");
+        expect(published.raiderIoFirstKills?.kills).toEqual(
+          outcome === "resolved"
+            ? [
+                expect.objectContaining({
+                  presenceChecked: true,
+                  encounterState: "read"
+                })
+              ]
+            : []
+        );
+        expect(published.raiderIoFirstKills?.limitationCode).toBe(
+          outcome === "resolved"
+            ? null
+            : outcome === "save_failed"
+              ? "unavailable"
+              : outcome
+        );
+      }
+    );
 
     it.each([
       [

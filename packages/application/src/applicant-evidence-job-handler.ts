@@ -17,6 +17,7 @@ import type {
   StoredRaiderIoLoggedEncounterAnswers,
   TerminalTier
 } from "@slashwho/database";
+import type { RosterProfileResolutionRepository } from "@slashwho/database";
 import type { BlizzardGateway } from "@slashwho/blizzard";
 import type { CharacterKey } from "@slashwho/domain";
 import {
@@ -211,6 +212,7 @@ export type ApplicantEvidenceRun = Readonly<{
 export type { EvidenceLimitationCode };
 
 export type ApplicantEvidenceStore = {
+  rosterProfileResolutions?: RosterProfileResolutionRepository;
   find(runId: string): Promise<ApplicantEvidenceRun | null>;
   claim(runId: string, attempt: number): Promise<ApplicantEvidenceRun | null>;
   seedPhases?(
@@ -407,7 +409,10 @@ export type ApplicantEvidenceJobHandlerOptions = Readonly<{
     Partial<
       Pick<
         RaiderIoGateway,
-        "getHistoricMythicKills" | "getLoggedEncounter" | "getCharacter"
+        | "getHistoricMythicKills"
+        | "getLoggedEncounter"
+        | "getCharacter"
+        | "resolveRosterProfile"
       >
     >;
   createWarcraftLogsGateway?: (credentials: {
@@ -2393,8 +2398,16 @@ export function createApplicantEvidenceJobHandler(
                 saveAnswers: async (answers) => {
                   await evidence.saveRaiderIoLoggedEncounters?.(answers, now());
                 },
+                rosterProfileResolutions: evidence.rosterProfileResolutions,
+                onIdentityRequest: () =>
+                  scope.increment("raiderIoHistoricRequests"),
                 raiderio: {
                   getLoggedEncounter,
+                  ...(raiderIoLogs.resolveRosterProfile
+                    ? {
+                        resolveRosterProfile: raiderIoLogs.resolveRosterProfile
+                      }
+                    : {}),
                   ...(raiderIoLogs.getCharacter
                     ? { getCharacter: raiderIoLogs.getCharacter }
                     : {})

@@ -117,7 +117,7 @@ function storedRead(
 const midnightFalls = kill("midnight-falls", 700_001);
 
 type Gateway = Pick<RaiderIoGateway, "getLoggedEncounter"> &
-  Partial<Pick<RaiderIoGateway, "getCharacter">>;
+  Partial<Pick<RaiderIoGateway, "getCharacter" | "resolveRosterProfile">>;
 
 function gateway(overrides: Partial<Gateway> = {}) {
   return {
@@ -186,6 +186,44 @@ function memoryStore() {
 }
 
 describe("collectRaiderIoFirstKills", () => {
+  it("keeps a historic kill when the roster profile resolves to the current subject ID", async () => {
+    const historic = {
+      ...alfa,
+      name: "Alfa-12345",
+      realm: "nemesis",
+      raiderIoCharacterId: 12345
+    };
+    const resolveRosterProfile = vi.fn(async () => ({
+      kind: "resolved" as const,
+      characterId: alfaId
+    }));
+    const rosterProfileResolutions = {
+      load: async () => [],
+      reserve: async () => "fixture-token",
+      answer: async () => true
+    };
+    const result = await collect(
+      [midnightFalls],
+      {
+        ...gateway({
+          getLoggedEncounter: vi.fn(async () =>
+            encounter("midnight-falls", {
+              state: "available",
+              members: [historic]
+            })
+          )
+        }),
+        resolveRosterProfile
+      },
+      { rosterProfileResolutions }
+    );
+    expect(result.kills).toEqual([
+      expect.objectContaining({ encounterState: "read", presenceChecked: true })
+    ]);
+    expect(result.limitation).toBeNull();
+    expect(resolveRosterProfile).toHaveBeenCalledTimes(1);
+  });
+
   it("reads a first kill's logged encounter and publishes it read, at the log's own time", async () => {
     const saved: RaiderIoLoggedEncounterAnswers[] = [];
     const result = await collect([midnightFalls], gateway(), {
