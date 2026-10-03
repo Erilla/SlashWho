@@ -451,12 +451,6 @@ it.each(["private", "not_found", "save_failed"] as const)(
         resolveRosterProfile,
         async getMythicBossRankings() {
           return { kind: "rankings", rows: [] };
-        },
-        async getClaimedCharacters() {
-          return { characters: [] };
-        },
-        async resolveProfileGuess() {
-          return null;
         }
       },
       warcraftLogs: {
