@@ -13,6 +13,7 @@ import type {
   ObservationSource
 } from "@slashwho/domain";
 import type { RosterProfileResolutionRepository } from "./roster-profile-resolutions";
+import type { GroupReadRepository } from "./group-reads";
 
 export type CallerClass = "anonymous" | "bot";
 export type EvidenceRunStatus =
@@ -2003,6 +2004,7 @@ export interface CharacterConnectionRepository {
 }
 
 export interface Repositories {
+  groupReads?: GroupReadRepository;
   fingerprintDeliveries?: import("./fingerprint-delivery").FingerprintDeliveryRepository;
   accountAuth: AccountAuthRepository;
   accountMail: AccountMailRepository;
