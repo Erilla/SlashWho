@@ -39,7 +39,16 @@ git worktree add -b feat/applicant-application-links .claude/worktrees/feat-appl
 - **Privacy.** The new tables hold only identity strings (`character:[…]`, `warcraftlogs_id:N`), timestamps, a Forms serial, sequences and counts. Never Battletags, Discord ids, names, URLs or raw cells. Logs are count-only.
 - **Identities.** Canonical identities are `character:["eu","realm","name"]` strings. Always decode them with `decodeApplicantIdentity` before using a key.
 - **Source.** `source` stays `"manually_added"` for every manual connection. Only `origin?: "application"` is new on the dossier character contract.
-- **Settlement deviation from the spec.** The spec has `admitCanonicalIntent` and the drain write `settled_at`. This plan has the linking step stamp `settled_at` at the start of each pass, from the root intent's state. That's at most one tick later, and it leaves the admission transaction untouched. A root inserted as `suppressed` is still settled at intake, as the spec says. Mention this in the PR.
+- **Overlap with #904** (character groups phase 2, on a long hold). Whichever PR lands second keeps one copy of anything both make.
+  - **If #904 has merged before you start**, `COUNTING_LINKS_FROM` lives in `packages/database/src/counting-links.ts`, so Task 8 builds `countingComponents` on that module rather than `character-connections.ts`.
+  - **#904 also adds** the contract `origin`, the "From application" label and the `group-subjects.ts` origin rule. Task 7 then reduces to checking that what's on main matches this plan's tests: `origin: "application"` on the dossier character, "From application" in the list, Remove still offered, and `labelOf` unchanged. Write only what's missing.
+  - **If #904 lands after this PR**, its author resolves the overlap.
+- **Settlement deviation from the spec.** The spec has `admitCanonicalIntent` and the drain write `settled_at`. This plan instead has `settleApplicantApplications(pool)` run on **every watcher tick, after the drain, whatever `APPLICANT_LINKING_ENABLED` says**.
+  - It is a single idempotent `UPDATE`. It stamps `settled_at = now()` on open applications whose root intent is `done` or `suppressed` and whose `settled_at` is NULL.
+  - Settlement is therefore at most one tick later than the spec's, and the admission transaction stays untouched.
+  - It must not depend on the flag. If it did, applications recorded while linking was off would never settle, and switching linking on would settle up to 30 days of them at once, each with a fresh 7-day window, and link them in one burst.
+  - A root inserted as `suppressed` is still settled at intake, as the spec says. The 30-day hard close on `created_at` stays as the backstop.
+  - Mention this in the PR.
 
 ## Review focus
 
@@ -47,7 +56,11 @@ git worktree add -b feat/applicant-application-links .claude/worktrees/feat-appl
 2. **A response whose first link is a Warcraft Logs id.** The root is a `warcraftlogs_id:N` identity, and its key comes from the root intent's `canonical_identity`. Until it resolves, the application waits. Task 9 tests a numeric root.
 3. **One character in two open applications** (resubmission before the first links). Each member's intent is its own (`member_intent_sequence`), and the newer intent doesn't stall the older application. Task 4 tests the fill-in.
 4. **A reviewer acting while the worker links.** The worker's `ON CONFLICT DO NOTHING` never overwrites a reviewer's row, and the reviewer's add converts a worker row. Task 7 tests both orders.
-5. **The watcher enabled with linking disabled for days.** Applications pile up, settle and expire. The 7-day expiry runs from `settled_at` only when the step runs, so the hard close (30 days from creation) must also run while linking is disabled. Task 10 runs the expiry and deletion in hourly maintenance whatever the flag says.
+5. **The watcher enabled with linking disabled for days.** Applications pile up, so two things must run whatever the flag says:
+   - **Settlement.** `settleApplicantApplications` runs every tick, so switching linking on later does not settle a month of applications at once. Task 9 tests settlement on its own, and Task 10 tests that it's called with the flag off.
+   - **Cleanup.** The hard close (30 days from creation) and the deletion run in hourly maintenance.
+
+   Applications already settled more than 7 days before linking is switched on are expired on its first pass, which is intended.
 
 ---
 
@@ -80,7 +93,7 @@ it("adds application tables and a reviewer-default origin to manual connections"
   try {
     await runMigrations(pool);
     const root = await pool.query<{ id: string }>(
-      "INSERT INTO characters (region, realm_slug, normalized_name, display_name) VALUES ('eu', 'hyjal', 'tropipe', 'Tropipe') RETURNING id"
+      "INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url) VALUES ('eu', 'hyjal', 'tropipe', 'Tropipe', 'Mage', 80, 'https://raider.io/characters/eu/hyjal/tropipe') RETURNING id"
     );
     await pool.query(
       "INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name) VALUES ($1, 'eu', 'hyjal', 'tropicos')",
@@ -413,6 +426,26 @@ it("fails the read when the sheet was sorted or a row deleted between reads", as
     }).readRows()
   ).rejects.toThrow("applicant_sheet_rows_moved");
 });
+
+it("accepts a numeric or boolean link cell that renders differently in the two reads", async () => {
+  // Break caught: comparing the formatted cell with the unformatted one by
+  // `!==` failed on a response holding a bare number (a pasted WCL or Discord
+  // id), so every poll failed and all intake stopped until the sheet was edited.
+  const fetch = sheetFetch(
+    [["123456"], ["TRUE"], ["https://raider.io/characters/eu/hyjal/a"]],
+    {
+      serials: [[1], [2], [3]],
+      links: [[123456], [true], ["https://raider.io/characters/eu/hyjal/a"]]
+    }
+  );
+  const rows = await createApplicantSheetClient({
+    sheetId: "s",
+    column: "F",
+    apiKey: "k",
+    fetch: fetch as typeof globalThis.fetch
+  }).readRows();
+  expect(rows.map((row) => row.submittedSerial)).toEqual([1, 2, 3]);
+});
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
@@ -453,19 +486,31 @@ if (
   throw new Error("applicant_sheet_bounds_exceeded");
 // Forms appends, so a longer second read is rows submitted between the
 // two; anything else -- a sort, a deletion -- would misalign them.
+//
+// The reads use different render options, so the raw cells are not
+// comparable: a bare number, date or boolean renders as text in the first
+// and as a number in the second, and `!==` would fail every tick. Compare
+// what intake actually reads from each cell -- its accepted candidate
+// identities, in order -- instead.
 const cellOf = (rows: readonly unknown[], index: number) => {
   const row = rows[index];
   return isList(row) ? row[0] : undefined;
 };
+const identitiesOf = (rows: readonly unknown[], index: number) =>
+  parseApplicantCandidates(cellOf(rows, index))
+    .candidates.map((candidate) => candidate.identity)
+    .join("\n");
 for (let index = 0; index < links.length; index++) {
-  if (cellOf(links, index) !== cellOf(recheck, index))
+  if (identitiesOf(links, index) !== identitiesOf(recheck, index))
     throw new Error("applicant_sheet_rows_moved");
 }
 for (let index = links.length; index < recheck.length; index++) {
-  if (index < details.length && cellOf(recheck, index) !== undefined)
+  if (index < details.length && identitiesOf(recheck, index) !== "")
     throw new Error("applicant_sheet_rows_moved");
 }
 ```
+
+Import `parseApplicantCandidates` from `./applicant-candidates` in `applicant-sheet.ts`. `applicant-candidates.ts` doesn't import the sheet module, so this adds no cycle.
 
 When building each row, add:
 
@@ -1441,7 +1486,7 @@ it("keeps a reviewer's link when the worker adds the same one, and converts the 
   };
   const other = { region: "eu" as const, realm: "hyjal", name: "originother" };
   await pool.query(
-    "INSERT INTO characters (region, realm_slug, normalized_name, display_name) VALUES ('eu', 'hyjal', 'originroot', 'Originroot')"
+    "INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url) VALUES ('eu', 'hyjal', 'originroot', 'Originroot', 'Mage', 80, 'https://raider.io/characters/eu/hyjal/originroot')"
   );
   const application = await insertApplication(pool); // see helper below
 
@@ -1746,7 +1791,7 @@ it("reports counting components from links alone", async () => {
 
 Use the file's existing helpers for inserting characters and observed `character_connections` rows. If there are none, insert directly:
 
-- `characters`: `(region, realm_slug, normalized_name, display_name)`, with region `eu` and realm `test`.
+- `characters`: `(region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url)`, with region `eu`, realm `test`, class `'Mage'`, level `80`, and `raider_io_url` set to `https://raider.io/characters/eu/test/<name>`. All of these columns are NOT NULL.
 - `character_connections`: `(character_low_id, character_high_id, kind)`, with kind `'observed'` and the ids ordered low before high. Look up the table's other NOT NULL columns in migration `0069_character_groups.sql`.
 
 - [ ] **Step 2: Run it and watch it fail**
@@ -1844,11 +1889,15 @@ export type ApplicantLinkCounts = {
   needed_link_pairs: number;
   expired: number;
 };
+/** Every tick, whatever the linking flag says. Returns how many it settled. */
+export async function settleApplicantApplications(pool: Pool): Promise<number>;
 export async function linkApplicantApplications(input: {
   pool: Pool;
   repositories: Pick<Repositories, "manualConnections" | "suppressions">;
   now?: Date;
   batch?: number;
+  /** The counting-component walk's node cap; defaults to 2,000. A test seam. */
+  componentCap?: number;
 }): Promise<ApplicantLinkCounts>;
 export async function closeStaleApplicantApplications(
   pool: Pool,
@@ -1863,7 +1912,7 @@ export async function closeStaleApplicantApplications(
 ```ts
 async function character(name: string, region = "eu"): Promise<string> {
   const result = await pool.query<{ id: string }>(
-    "INSERT INTO characters (region, realm_slug, normalized_name, display_name) VALUES ($1, 'hyjal', $2, $2) RETURNING id",
+    "INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url) VALUES ($1, 'hyjal', $2, $2, 'Mage', 80, 'https://raider.io/characters/' || $1 || '/hyjal/' || $2) RETURNING id",
     [region, name]
   );
   return result.rows[0]!.id;
@@ -1899,11 +1948,14 @@ async function application(
     );
   return created.rows[0]!.id;
 }
-const link = () =>
-  linkApplicantApplications({
+// The runtime settles on every tick before linking; the tests do the same.
+const link = async () => {
+  await settleApplicantApplications(pool);
+  return linkApplicantApplications({
     pool,
     repositories: createPostgresRepositories(pool)
   });
+};
 async function links() {
   const result = await pool.query<{
     root: string;
@@ -2192,6 +2244,7 @@ it("visits the least recently checked applications first and skips locked ones",
       { identity: id(name), sequence: member }
     ]);
   }
+  await settleApplicantApplications(pool);
   const first = await linkApplicantApplications({
     pool,
     repositories: createPostgresRepositories(pool),
@@ -2203,7 +2256,71 @@ it("visits the least recently checked applications first and skips locked ones",
   );
   expect(unchecked.rows[0].n).toBe(1);
 });
+
+it("settles only applications whose root intent is done or suppressed, once, without linking", async () => {
+  // Break caught: settlement inside the link step never ran while linking was
+  // off, so switching it on settled a month of applications at once, each with
+  // a fresh 7-day window, and linked them in one burst.
+  await character("settleroot");
+  await character("settlemember");
+  const done = await intent(id("settleroot"), "done");
+  const pending = await intent(id("settlependingroot"), "pending");
+  const member = await intent(id("settlemember"), "done");
+  await application({ identity: id("settleroot"), sequence: done }, [
+    { identity: id("settlemember"), sequence: member }
+  ]);
+  await application({ identity: id("settlependingroot"), sequence: pending }, [
+    { identity: id("settlemember"), sequence: member }
+  ]);
+  expect(await settleApplicantApplications(pool)).toBe(1);
+  const first = await pool.query<{ settled_at: Date }>(
+    "SELECT settled_at FROM applicant_source_applications WHERE root_identity = $1",
+    [id("settleroot")]
+  );
+  expect(await settleApplicantApplications(pool)).toBe(0);
+  const again = await pool.query<{ settled_at: Date }>(
+    "SELECT settled_at FROM applicant_source_applications WHERE root_identity = $1",
+    [id("settleroot")]
+  );
+  expect(again.rows[0]?.settled_at).toEqual(first.rows[0]?.settled_at);
+  // Settling links nothing: that is the link step's job, behind the flag.
+  expect(await links()).toEqual([]);
+});
+
+it("links a member with no links of its own even when the root's component is capped", async () => {
+  await character("caproot");
+  await character("capmember");
+  const root = await intent(id("caproot"), "done");
+  const member = await intent(id("capmember"), "done");
+  await application({ identity: id("caproot"), sequence: root }, [
+    { identity: id("capmember"), sequence: member }
+  ]);
+  // A root in a component larger than the walk's cap: give it a chain of 3
+  // linked characters and walk with a cap of 2 via the test seam below.
+  const rootId = (
+    await pool.query<{ id: string }>(
+      "SELECT id FROM characters WHERE normalized_name = 'caproot'"
+    )
+  ).rows[0]!.id;
+  for (const name of ["capa", "capb", "capc"]) {
+    await character(name);
+    await pool.query(
+      "INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name) VALUES ($1, 'eu', 'hyjal', $2)",
+      [rootId, name]
+    );
+  }
+  await settleApplicantApplications(pool);
+  expect(
+    await linkApplicantApplications({
+      pool,
+      repositories: createPostgresRepositories(pool),
+      componentCap: 2
+    })
+  ).toMatchObject({ linked: 1, skipped_cross_group: 0 });
+});
 ```
+
+Import `settleApplicantApplications` beside `linkApplicantApplications` in this test file.
 
 - [ ] **Step 2: Run them and watch them fail**
 
@@ -2337,19 +2454,13 @@ async function decide(
 }
 
 /**
- * Links each settled application's members to its root, one decision per
- * member, never deciding on a character that does not exist yet. Makes no
- * provider calls.
+ * Stamps settlement once a root intent is done or suppressed. Runs on every
+ * watcher tick whatever the linking flag says, so the 7-day expiry always runs
+ * from when the root settled -- not from whenever linking was switched on.
+ * Idempotent: only NULL settled_at is written.
  */
-export async function linkApplicantApplications(input: {
-  pool: Pool;
-  repositories: Pick<Repositories, "manualConnections" | "suppressions">;
-  now?: Date;
-  batch?: number;
-}): Promise<ApplicantLinkCounts> {
-  const now = input.now ?? new Date();
-  const counts = emptyCounts();
-  await input.pool.query(
+export async function settleApplicantApplications(pool: Pool): Promise<number> {
+  const result = await pool.query(
     `UPDATE applicant_source_applications application
         SET settled_at = now()
        FROM applicant_source_intents intent
@@ -2358,6 +2469,23 @@ export async function linkApplicantApplications(input: {
         AND application.settled_at IS NULL
         AND application.closed_at IS NULL`
   );
+  return result.rowCount ?? 0;
+}
+
+/**
+ * Links each settled application's members to its root, one decision per
+ * member, never deciding on a character that does not exist yet. Makes no
+ * provider calls. Settlement is not its job: see settleApplicantApplications.
+ */
+export async function linkApplicantApplications(input: {
+  pool: Pool;
+  repositories: Pick<Repositories, "manualConnections" | "suppressions">;
+  now?: Date;
+  batch?: number;
+  componentCap?: number;
+}): Promise<ApplicantLinkCounts> {
+  const now = input.now ?? new Date();
+  const counts = emptyCounts();
   const client = await input.pool.connect();
   try {
     await client.query("BEGIN");
@@ -2503,14 +2631,15 @@ export async function linkApplicantApplications(input: {
         const components = await countingComponents(
           input.pool,
           rootId,
-          memberId
+          memberId,
+          input.componentCap
         );
         if (!components.same) {
           counts.needed_link_pairs++;
-          if (
-            components.capped ||
-            (components.rootShared && components.memberShared)
-          ) {
+          // A capped walk leaves "same" unknown, so treat the pair as two
+          // groups -- but a member with no links of its own merges nothing,
+          // and links whatever the root's component size.
+          if (components.rootShared && components.memberShared) {
             await decide(
               client,
               application.id,
@@ -2598,8 +2727,9 @@ git commit -m "feat(worker): link each settled application's members to its root
 
 **Interfaces:**
 
-- Consumes: `linkApplicantApplications` and `closeStaleApplicantApplications` (Task 9), and `config.applicantWatcher.linkingEnabled` (Task 2).
+- Consumes: `settleApplicantApplications`, `linkApplicantApplications` and `closeStaleApplicantApplications` (Task 9), and `config.applicantWatcher.linkingEnabled` (Task 2).
 - Produces:
+  - Log event `applicant_applications_settle_failed`, with `errorName`.
   - Log event `applicant_links`, with `ApplicantLinkCounts` and `durationMs`.
   - Log event `applicant_links_failed`, with `errorName` and `durationMs`.
   - Log event `applicant_applications_cleanup`, with `{ expired, deleted }`.
@@ -2624,13 +2754,30 @@ vi.mock("./applicant-links", () => ({
   closeStaleApplicantApplications: vi.fn(async () => ({
     expired: 0,
     deleted: 0
-  }))
+  })),
+  settleApplicantApplications: vi.fn(async () => 0)
 }));
 ```
 
-and import `linkApplicantApplications` and `closeStaleApplicantApplications` from `./applicant-links`. Then:
+and import `linkApplicantApplications`, `closeStaleApplicantApplications` and `settleApplicantApplications` from `./applicant-links`. Then:
 
 ```ts
+it("settles applications on every tick even with linking off", async () => {
+  // Break caught: settlement that ran only with linking on left a month of
+  // applications unsettled, then settled and linked them in one burst.
+  vi.mocked(settleApplicantApplications).mockClear();
+  vi.mocked(linkApplicantApplications).mockClear();
+  const fakes = runtimeFakes();
+  const runtime = await createWorkerRuntime(applicantConfig, {
+    ...fakes.dependencies,
+    createEvidenceGateway: applicantGateway
+  });
+  await fakes.applicantSheetTickHandler?.();
+  expect(settleApplicantApplications).toHaveBeenCalledTimes(1);
+  expect(linkApplicantApplications).not.toHaveBeenCalled();
+  await runtime.stop();
+});
+
 it("links applications after the drain only when linking is enabled", async () => {
   vi.mocked(pollApplicantSheet).mockResolvedValue({
     baseline: false,
@@ -2730,9 +2877,19 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-In `createApplicantSheetTick`, after the drain block and still inside the tick's `try`:
+In `createApplicantSheetTick`, after the drain block and still inside the tick's `try`. Settlement comes first, whatever the flag says, and it runs even while a points block skips the drain:
 
 ```ts
+try {
+  // Whatever the linking flag says: expiry must run from when each root
+  // settled, not from when linking was switched on.
+  await settleApplicantApplications(pool as Pool);
+} catch (error) {
+  logger?.info({
+    event: "applicant_applications_settle_failed",
+    errorName: errorName(error)
+  });
+}
 if (config.applicantWatcher.linkingEnabled) {
   const linkStartedAt = clock();
   try {
@@ -2797,8 +2954,8 @@ git commit -m "feat(worker): run application linking after each drain when enabl
 
 - Modify: `docs/operations/applicant-sheet-watcher.md`
 - Modify: `CONTEXT.md` (**Manual connection**, about line 65)
-- Modify: `docs/operations/character-groups.md`
-- Modify: `docs/superpowers/specs/2026-09-28-character-groups-design.md` (its rollback and phase 2 sections)
+
+The character-groups rollback and phase 2 notes, about `APPLICANT_LINKING_ENABLED` and the `group-subjects.ts` origin, are already on main from #901. Don't add them again.
 
 - [ ] **Step 1: Update the docs**
 
@@ -2820,13 +2977,7 @@ git commit -m "feat(worker): run application linking after each drain when enabl
 
 > A manual connection can also come from an application: the applicant sheet watcher links the other characters in a response to its first one, and the dossier labels these "From application". That is still the applicant's statement, not an ownership claim.
 
-**`docs/operations/character-groups.md`**, and the character-groups design's rollback section. Add:
-
-> Before reverting phase 1, set `APPLICANT_LINKING_ENABLED=false`. The applicant linking step reads `character_connections` to decide whether a link would merge two groups.
-
-In the design's phase 2 section, add:
-
-> `group-subjects.ts` must carry the manual connection's `origin`, so group pages label application links "From application".
+If #904 has already merged and added this wording, keep one copy.
 
 - [ ] **Step 2: Run the full gate**
 
