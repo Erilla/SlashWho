@@ -1,9 +1,9 @@
 # Linking the characters in each application, and polling every minute
 
-**Status (2026-10-13): proposed, revision 2.** Nothing here is built. The
-design went through one review with the Manager before being written, and this
-revision folds in its review of the first written draft (38bb2789), plus the
-maintainer's answers.
+**Status (2026-10-13): proposed, revision 3.** Nothing here is built. The
+design went through one review with the Manager before being written. This
+revision folds in its reviews of the written drafts (38bb2789 and cf2e9d6e),
+plus the maintainer's answers.
 
 ## Problem
 
@@ -137,7 +137,8 @@ New tables:
   - one count column per outcome
   - an index on `(root_identity, submitted_serial)`
 - `applicant_source_application_members`: `application_id`, `ordinal`,
-  `identity`, `outcome` (NULL while waiting).
+  `identity`, `member_intent_sequence bigint NULL`, `outcome` (NULL while
+  waiting).
 
 `applicant_source_state` gains `submitted_serial_mark double precision NULL`,
 the high-water mark described below.
@@ -155,6 +156,9 @@ the high-water mark described below.
 - Member rows are deleted when their application closes. Only the counts
   stay, so the database doesn't keep a record of which characters were
   submitted together.
+- An application still open 30 days after `created_at` closes with every
+  remaining member `expired`. This covers roots that never settle, such as a
+  Warcraft Logs id that never resolves.
 - Closed application rows, with their `root_identity`, `submitted_serial` and
   counts, are deleted 30 days after `closed_at` by the hourly maintenance
   cleanup.
@@ -183,32 +187,38 @@ So applications don't use the occurrence index. They use the form's own
 timestamp, as a raw serial, against a high-water mark.
 
 **Reading column A.**
-- After the existing batchGet, the poll reads `'Form Responses'!A2:A` in a
-  separate request, with `valueRenderOption=UNFORMATTED_VALUE` and
-  `dateTimeRenderOption=SERIAL_NUMBER`. It can't share the batchGet: that
-  request uses `FORMATTED_VALUE`, and switching it would turn an 18-digit
-  Discord id into a lossy double.
+- After the existing batchGet, the poll makes a second request: a batchGet
+  of `'Form Responses'!A2:A` and the link column, with
+  `valueRenderOption=UNFORMATTED_VALUE` and
+  `dateTimeRenderOption=SERIAL_NUMBER`. It can't reuse the first batchGet:
+  that request uses `FORMATTED_VALUE`, and switching it would turn an
+  18-digit Discord id into a lossy double. Unformatted makes no difference to
+  the text in link cells.
 - Serials are compared only with each other and never converted to UTC, so
   the spreadsheet's time zone and daylight saving don't matter.
-- **Aligning the reads.**
-  - The API drops trailing empty rows, and `readRows` takes the longer of
-    B:D and the link column, so the row counts can legitimately differ.
-  - If column A is longer than the rows, truncate it: Forms appends rows,
-    so the extra rows arrived after the first read.
-  - If column A is shorter, a row was deleted between the reads. Fail the
-    whole poll without advancing any state, exactly as for a read error,
-    and retry on the next tick.
-  - Known limit, to note in the doc: a deletion plus an append between the
-    two reads keeps the counts equal while the rows are misaligned.
+- **Aligning the reads.** The link column from the second request must match
+  the first request's link column, cell for cell.
+  - The second read may have extra rows at the end, appended by Forms
+    between the reads. Drop them.
+  - Any other difference fails the whole poll without advancing any state,
+    exactly as for a read error, and the poll retries on the next tick. That
+    covers a deletion, a sort, and a deletion plus an append between the
+    reads.
 
 **The high-water mark.**
 - `applicant_source_state.submitted_serial_mark` is the largest column-A
   serial seen at the end of the last successful poll.
 - The baseline poll and each re-baselining poll set it without recording
   applications.
+- **First poll after deploy.** The column starts NULL. A poll that finds the
+  mark NULL only sets it: it records no applications and sends
+  per-occurrence alerts as today, like a baseline that still admits intents.
 - When an occurrence is first seen, it carries the mark as it stood at the
   start of that poll. A deferred occurrence stores that mark in its
   `deferred_observed_ats` entry, beside its time and index.
+- **Older deferred entries.** Entries written before the deploy (a bare
+  timestamp string, or `{at, index}`) carry no mark. When inserted, they
+  record no application and get a per-occurrence alert, as today.
 
 **Choosing the row.** When an intent is inserted for identity X, the
 candidate rows are those where:
@@ -226,8 +236,16 @@ Then:
 - **Several** (two submissions in one poll): use the newest, and count the
   rest as `applications_ambiguous`.
 
-A Forms edit that adds links to an existing row doesn't change that row's
-timestamp, so it never creates an application.
+**Edited responses.** If respondents can edit their responses, Google Forms
+may set the row's timestamp to the time of the edit. That isn't verified for
+this form. Either way, the rules above handle it:
+- An edited row rises above the mark, but it creates an application only if
+  a newly inserted intent's identity is its first link. If the edit put a
+  new character first, that is the applicant's updated application, and
+  linking it is intended.
+- It alerts only if one of its identities' counts rose in that poll (see
+  [The arrival alert](#the-arrival-alert)). An edit that only rewrites
+  existing links alerts nobody.
 
 The application is written in the intake transaction, using
 `RETURNING sequence` from the intent insert. `pollApplicantSheet` threads the
@@ -236,6 +254,17 @@ row with a single accepted link records nothing.
 
 If the root intent is inserted as `suppressed`, the intake transaction sets
 `settled_at` there and then.
+
+**Member intents.** Each member records the intent that belongs to this
+application in `member_intent_sequence`.
+- If the member's intent is inserted in the same intake transaction, record
+  that sequence.
+- If the member's occurrence is deferred, leave it NULL. When an intent for
+  that identity is next inserted, the same transaction fills it into every
+  open application member with that identity and a NULL sequence.
+
+This keys the wait on the right intent. A later resubmission's pending
+intent can't stall an older application.
 
 ### Safeguards at intake
 
@@ -274,8 +303,8 @@ For each application:
    there. `done` means discovery was queued, not that it has finished. The
    check must be explicit, because `manualConnections.add` returns
    `duplicate` both for an existing link and for a missing root.
-4. **Each member without an outcome.** "The member's intent" means the newest
-   intent whose `identity` is the member's identity.
+4. **Each member without an outcome.** "The member's intent" is the one in
+   its `member_intent_sequence`.
    - **Wait** until that intent is `done` or `suppressed`. A member with no
      intent yet (deferred, or still backlogged) waits too.
    - **Resolve its key.** A character identity is its own key. A Warcraft Logs
@@ -292,6 +321,10 @@ For each application:
      Otherwise a resubmission that puts the excluded character first would
      write the reverse link, and groups count manual links whether excluded
      or not.
+     - Exclusions are written under every key sharing the target's Warcraft
+       Logs identity when they're made. So compare against each side's
+       shared-identity key set (`sharedIdentityKeys`), not one key. A member
+       resolved through a Warcraft Logs id to a new name is still caught.
    - **`skipped_cross_group`:** see below.
    - **`linked`:** otherwise, call `manualConnections.add` with origin
      `applicant_sheet` and the application id. Record `linked` whether the
@@ -310,16 +343,25 @@ For each application:
   components and **both** have more than one member. Merging two established
   groups is always a reviewer's call. A member already in the root's
   component, or on its own, is linked.
-- **Measured before writing this.** On test, 2026-10-13, there were 5
-  resolved manual links made by reviewers. With each link's own edge removed,
-  the root and the target were already in the same component through other
-  links in all 5 (component sizes 10, 17, 10, 10 and 2). The rule would have
-  skipped none of them, including Tropipe → Tropicos, which Raider.IO
-  connected once Tropicos was discovered. Five links is a small sample. The
-  `applicant_links` counts show the real skip rate once linking is on. If
-  `skipped_cross_group` turns out to be most links, narrow the rule: for
-  example, skip only when the member's component holds another
-  application's root, or another dossier's manual link.
+- **What was measured, and what it doesn't show.** On test, 2026-10-13,
+  there were 5 resolved manual links made by reviewers. With each link's own
+  edge removed, the root and the target were already in the same component
+  in all 5 (component sizes 10, 17, 10, 10 and 2). That includes Tropipe →
+  Tropicos, which Raider.IO connected once Tropicos was discovered.
+  - This is **not** evidence that the rule is safe. The rule only fires for
+    pairs that aren't already connected, and the sample contains none, so
+    it says nothing about how often the rule blocks a link that was needed.
+  - What it does suggest is that an applicant's characters are usually
+    connected through Raider.IO anyway. So the rule should rarely fire, and
+    when it does, the pair genuinely deserves a reviewer's look.
+- **Measuring it live.** `applicant_links` also counts
+  `needed_link_pairs`: pairs that reached the cross-group check in different
+  components. Read `skipped_cross_group` against that count, not against all
+  links.
+- **If it blocks too much.** If `skipped_cross_group` is most of
+  `needed_link_pairs`, narrow the rule: for example, skip only when the
+  member's component holds another application's root, or another
+  dossier's manual link.
 - **Rollback.** The check reads `character_connections`, a #738 table, so the
   #738 phase 1 rollback can no longer assume nothing reads it. Before
   reverting phase 1, set `APPLICANT_LINKING_ENABLED=false`. Record this in
@@ -339,7 +381,8 @@ step adds first and marks second, so a crash between them repeats an add that
 
 **Logging.** Each tick emits one count-only event:
 `applicant_links { linked, waiting, suppressed, same_character,
-skipped_region, skipped_excluded, skipped_cross_group, expired }`. A failure
+skipped_region, skipped_excluded, skipped_cross_group, needed_link_pairs,
+expired }`. A failure
 in the step is logged and never fails the drain.
 
 Members marked `linked` are never revisited, so a reviewer's removal holds
@@ -359,6 +402,9 @@ until the applicant submits again.
   - An existing reviewer link returns no row, so the result is `duplicate`.
   - A reviewer re-adding an existing link therefore still sees "duplicate",
     as today. `excluded_at` is never touched.
+  - `add` must decide from the returned `inserted` column, not from
+    `rowCount === 1`. A conversion returns one row, and `rowCount` would
+    report it as `added`.
 
 **Reads.** `source` stays `manually_added` for every manual connection. A
 separate optional field carries the origin, and is used only to choose the
@@ -384,6 +430,10 @@ So:
   `"application"`, and "Manually added" otherwise.
 - **Unchanged:** sources, the Remove and Exclude actions, `labelOf`, group
   subjects and every other reader.
+- **Phase 2 of character groups.** When group pages are built,
+  `group-subjects.ts:129` must carry `origin` too. Otherwise group pages
+  would say "Manually added" for these links. Note this in the
+  character-groups design's phase 2 section.
 - **CONTEXT.md:** extend **Manual connection** to say a connection can come
   from an application. It's still not an ownership claim, and it's labelled
   separately.
@@ -392,8 +442,11 @@ So:
 
 Today's alert fires once per newly recorded link occurrence, so a 4-link row
 sends 4 alerts. Instead, alerts become per **new row**: a row whose column-A
-serial is above the poll's starting mark, and which has at least one accepted
-link with a newly recorded intent.
+serial is above the poll's starting mark, and which holds at least one
+accepted link whose identity's count rose in this poll. The rise counts
+whether that occurrence was recorded as an intent or deferred, so a row
+whose links are all deferred (a full backlog, or Warcraft Logs ids being
+held) still alerts when it's first seen.
 
 - **A row with several accepted links:** one alert. It carries the applicant
   details as now and the root's dossier URL, plus one of:
@@ -405,12 +458,16 @@ link with a newly recorded intent.
 - **A row with one accepted link:** the current alert, unchanged.
 - **Not tied to the intent's admission.** The alert goes out when the row is
   first seen, even if the root's intent is deferred and its application is
-  recorded later. So there's no second alert. Nothing alerts when links are
-  written.
+  recorded later. A deferred occurrence that carries a mark never alerts
+  when its intent is inserted, so there's no second alert. Nothing alerts
+  when links are written.
+- **Exceptions that keep the per-occurrence alert:** a poll that finds the
+  mark NULL, and a deferred entry from before the deploy that carries no
+  mark.
 - **No occurrence-index mapping.** Alerts are keyed by row through the
   serial, so the ambiguity of the old mapping doesn't come back.
 - **Baselines and re-baselines** send no alerts, as now.
-- **Read-alignment failure.** If column A can't be aligned, the poll fails
+- **Read-alignment failure.** If the two reads don't match, the poll fails
   and sends nothing. It retries on the next tick.
 
 ### Character groups
@@ -437,10 +494,18 @@ link with a newly recorded intent.
 - The newest of two first-link rows is chosen, and the other is counted as
   ambiguous.
 - A sorted sheet still picks the right row.
-- Column A longer than the rows is truncated; shorter fails the poll without
-  advancing.
+- The second read's extra trailing rows are dropped.
+- A deletion, a sort, or a deletion plus an append between the reads fails
+  the poll without advancing.
 - A deferred root records its application in the later poll, using the mark
   it carried.
+- With a NULL mark, the poll only sets the mark: no applications, and
+  per-occurrence alerts.
+- A deferred entry without a mark records no application and alerts per
+  occurrence.
+- `member_intent_sequence` is set for a member inserted in the same
+  transaction. It is filled in later for a deferred member. A later
+  resubmission's intent doesn't stall the older application.
 - Over-cap rows record no members.
 - A root inserted as `suppressed` is settled at intake.
 
@@ -456,6 +521,11 @@ link with a newly recorded intent.
 - Covers `same_character` and `skipped_region`.
 - Covers `skipped_excluded` in both directions, and for manual and
   discovered exclusions.
+- `skipped_excluded` also applies to a member resolved through a Warcraft
+  Logs id to a new name, when its shared-identity keys are excluded.
+- An application that never settles closes as `expired` 30 days after
+  creation.
+- `needed_link_pairs` counts only pairs in different components.
 - Cross-group check:
   - skips when both are in different multi-member components;
   - links when the member is on its own or already in the root's component;
@@ -488,6 +558,8 @@ link with a newly recorded intent.
 - One alert per new multi-link row, with the root's dossier URL and the right
   text for each case.
 - No second alert when a deferred root's application is recorded.
+- A new row whose links are all deferred alerts once, when first seen.
+- An edited row whose counts don't rise sends no alert.
 - Single-link rows alert as today.
 
 ### Docs
@@ -499,8 +571,8 @@ link with a newly recorded intent.
   serial mark. Note that their members are deleted on close, and closed
   applications after 30 days.
 - Add the new tables to the new-baseline procedure.
-- Describe the column A read, its alignment rules, and the known limit of a
-  delete plus an append between the two reads.
+- Describe the second read and its alignment rule: any mismatch apart from
+  appended rows fails the poll.
 
 Also update:
 - `docs/operations/character-groups.md` and the character-groups design's
