@@ -42,11 +42,82 @@ function graph(
     suppressed: overrides.suppressed ?? new Set(),
     warcraftLogsIds: overrides.warcraftLogsIds ?? new Map(),
     sharedIdentity: overrides.sharedIdentity ?? ((id) => new Set([id])),
-    latestSnapshot: overrides.latestSnapshot ?? new Map()
+    latestSnapshot: overrides.latestSnapshot ?? new Map(),
+    snapshotMembers: overrides.snapshotMembers ?? new Map(),
+    snapshotSources: overrides.snapshotSources ?? new Map()
   };
 }
 
 describe("page members", () => {
+  it("keeps Remove on a merged identity when its alias has the manual row", () => {
+    const g = graph({
+      names: ["o", "a", "b"],
+      links: [
+        { a: "o", b: "a", strength: "raiderio" },
+        { a: "o", b: "b", strength: "manual" }
+      ],
+      manual: [{ makerId: "o", targetId: "b", excluded: false }],
+      warcraftLogsIds: new Map([
+        ["a", 42],
+        ["b", 42]
+      ])
+    });
+    expect(
+      resolveGroupSubjects(key("o"), g, { DOSSIER_CHARACTER_CEILING: 50 })!
+        .selected[1]
+    ).toMatchObject({
+      key: key("a"),
+      source: "claimed",
+      hasManualConnection: true
+    });
+  });
+  it("folds snapshot members in without a path and keeps their labels", () => {
+    const g = graph({
+      names: ["o", "a"],
+      groupOf: new Map([["o", "g"]]),
+      links: [],
+      snapshotMembers: new Map([["o", ["o", "a"]]]),
+      snapshotSources: new Map([["o", new Map([["a", "claimed"]])]])
+    });
+    const subjects = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!;
+    expect(subjects.selected.map((c) => [c.key.name, c.source])).toEqual([
+      ["o", "input"],
+      ["a", "claimed"]
+    ]);
+  });
+  it("labels applicant-only manual paths and retains the removal flag on provider paths", () => {
+    const g = graph({
+      names: ["o", "a"],
+      links: [{ a: "o", b: "a", strength: "manual" }],
+      manual: [
+        {
+          makerId: "o",
+          targetId: "a",
+          excluded: false,
+          origin: "applicant_sheet"
+        }
+      ]
+    });
+    expect(
+      resolveGroupSubjects(key("o"), g, { DOSSIER_CHARACTER_CEILING: 50 })!
+        .selected[1]
+    ).toMatchObject({
+      source: "manually_added",
+      origin: "application",
+      hasManualConnection: true
+    });
+    const provider = {
+      ...g,
+      links: [...g.links, { a: "o", b: "a", strength: "raiderio" as const }]
+    };
+    expect(
+      resolveGroupSubjects(key("o"), provider, {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!.selected[1]
+    ).toMatchObject({ source: "claimed", hasManualConnection: true });
+  });
   it("never walks through a suppressed character", () => {
     const g = graph({
       names: ["o", "s", "x"],
@@ -317,6 +388,7 @@ describe("resolveGroupSubjects", () => {
       DOSSIER_CHARACTER_CEILING: 50
     })!;
     const pendingSubject = (name: string) => ({
+      hasManualConnection: true,
       key: key(name),
       displayName: name,
       className: null,

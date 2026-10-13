@@ -220,9 +220,10 @@ async function load(
     maker: string;
     target: string;
     excluded: boolean;
+    origin: string | null;
   }>(
     `SELECT manual.root_character_id AS maker, target.id AS target,
-            manual.excluded_at IS NOT NULL AS excluded
+            manual.excluded_at IS NOT NULL AS excluded, to_jsonb(manual)->>'origin' AS origin
      FROM manual_dossier_connections manual
      JOIN characters target ON target.region = manual.connected_region
        AND target.realm_slug = manual.connected_realm_slug
@@ -237,12 +238,13 @@ async function load(
     realm_slug: string;
     normalized_name: string;
     excluded: boolean;
+    origin: string | null;
   }>(
     `SELECT manual.root_character_id AS maker,
             manual.connected_region AS region,
             manual.connected_realm_slug AS realm_slug,
             manual.connected_normalized_name AS normalized_name,
-            manual.excluded_at IS NOT NULL AS excluded
+            manual.excluded_at IS NOT NULL AS excluded, to_jsonb(manual)->>'origin' AS origin
      FROM manual_dossier_connections manual
      WHERE NOT EXISTS (
          SELECT 1 FROM characters target
@@ -317,9 +319,10 @@ async function load(
   const rawMembershipRows = await client.query<{
     root_character_id: string;
     character_id: string;
+    source: import("./repositories").DiscoverySource;
   }>(
     `WITH latest AS (${LATEST_SNAPSHOTS})
-     SELECT latest.root_character_id, member.character_id
+     SELECT latest.root_character_id, member.character_id, member.discovery_source AS source
      FROM latest
      JOIN snapshot_characters member ON member.snapshot_id = latest.id
      ORDER BY latest.root_character_id, member.display_order`
@@ -432,7 +435,8 @@ async function load(
     manual: manualRows.rows.map((row) => ({
       makerId: row.maker,
       targetId: row.target,
-      excluded: row.excluded
+      excluded: row.excluded,
+      ...(row.origin ? { origin: row.origin } : {})
     })),
     undiscoveredManualTargets: undiscoveredRows.rows.map((row) => ({
       makerId: row.maker,
@@ -441,7 +445,8 @@ async function load(
         realm: row.realm_slug,
         name: row.normalized_name
       },
-      excluded: row.excluded
+      excluded: row.excluded,
+      ...(row.origin ? { origin: row.origin } : {})
     })),
     discoveredExclusions: exclusionRows.rows.map((row) => ({
       makerId: row.maker,
@@ -456,7 +461,18 @@ async function load(
         ...(wcl === undefined ? [] : (idsByWarcraftLogsId.get(wcl) ?? []))
       ]);
     },
-    latestSnapshot
+    latestSnapshot,
+    snapshotMembers: latestRawMembership,
+    snapshotSources: new Map(
+      [...latestRawMembership.keys()].map((id) => [
+        id,
+        new Map(
+          rawMembershipRows.rows
+            .filter((row) => row.root_character_id === id)
+            .map((row) => [row.character_id, row.source])
+        )
+      ])
+    )
   };
 
   return {

@@ -272,6 +272,7 @@ export type GroupGraph = Readonly<{
     Readonly<{ state: "complete" | "partial"; limitationCode: string | null }>
   >; // by root id, suppression-filtered
   snapshotMembers?: ReadonlyMap<string, readonly string[]>;
+  snapshotSources?: ReadonlyMap<string, ReadonlyMap<string, DiscoverySource>>;
 }>;
 
 /** Walk current links within the stored group, then fold in the opened snapshot. */

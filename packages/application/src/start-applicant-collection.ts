@@ -30,7 +30,11 @@ export async function startApplicantCollection(input: {
     )
   });
   if (discovery.kind === "suppressed") return "suppressed";
-  if (discovery.kind === "rate_limited" || discovery.kind === "negative")
+  if (
+    discovery.kind === "rate_limited" ||
+    discovery.kind === "negative" ||
+    discovery.kind === "not_due"
+  )
     return "unavailable";
   if (discovery.kind === "reserved") {
     try {
@@ -61,7 +65,7 @@ export async function startApplicantCollection(input: {
   ) {
     const queueJobId = await queue.enqueue({
       runId: discovery.run.id,
-      key,
+      key: discovery.run.rootKey,
       enqueuedAt: new Date().toISOString()
     });
     await repositories.searchReservations.markEnqueued(

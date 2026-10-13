@@ -210,6 +210,23 @@ export interface ManualConnectionCharacter {
 }
 
 export interface ManualConnectionRepository {
+  canAddGroupConnection?(
+    root: CharacterKey,
+    target: CharacterKey
+  ): Promise<boolean>;
+  addGroupConnection?(
+    root: CharacterKey,
+    target: CharacterKey
+  ): Promise<"added" | "duplicate" | "rejected">;
+  removeGroupConnection?(
+    root: CharacterKey,
+    target: CharacterKey
+  ): Promise<"removed" | "missing">;
+  setGroupExcluded?(
+    root: CharacterKey,
+    targets: readonly CharacterKey[],
+    excluded: boolean
+  ): Promise<"updated" | "missing">;
   /** Exclusions for snapshot-discovered characters; manual links keep their flag. */
   listDiscoveredExclusions?(
     root: CharacterKey
@@ -1577,6 +1594,7 @@ export type SearchReservationResult =
   | { kind: "reserved"; run: DiscoveryRun }
   | { kind: "rate_limited"; retryAt: Date }
   | { kind: "fresh" }
+  | { kind: "not_due" }
   | { kind: "negative" }
   | { kind: "suppressed" };
 
@@ -1589,7 +1607,14 @@ export interface SearchReservationRepository {
     expiresAt: Date;
     at: Date;
     freshnessCutoff: Date;
+    ignoreFreshness?: boolean;
+    sweepDue?: { cadenceCutoff: Date; maxFailures: number };
   }): Promise<SearchReservationResult>;
+  checkAllowance?(input: {
+    callerBucketHash: string;
+    limit: number;
+    at: Date;
+  }): Promise<{ allowed: boolean; retryAt: Date | null }>;
   cancel(runId: string): Promise<void>;
   listPending(
     limit?: number
@@ -1985,7 +2010,7 @@ export interface CharacterConnectionRepository {
    */
   recomputeGroupsOf(
     characterIds: readonly string[]
-  ): Promise<{ mergedGroups: number }>;
+  ): Promise<{ mergedGroups: number; merges?: readonly CharacterGroupMerge[] }>;
   recomputePass(input: { budgetMs: number }): Promise<{
     groupsRecomputed: number;
     /** Previously-ungrouped characters newly assigned a group this call. */
@@ -1999,9 +2024,16 @@ export interface CharacterConnectionRepository {
     cyclesCompleted: number;
     /** Merges of multi-member groups, as `recomputeGroupsOf` counts them. */
     mergedGroups: number;
+    merges?: readonly CharacterGroupMerge[];
   }>;
   rebuild(): Promise<{ observers: number; links: number; groups: number }>;
 }
+
+export type CharacterGroupMerge = Readonly<{
+  groupSizes: readonly number[];
+  sources: readonly ObservationSource[];
+  throughObserved: boolean;
+}>;
 
 export interface Repositories {
   groupReads?: GroupReadRepository;

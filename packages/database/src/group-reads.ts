@@ -22,11 +22,14 @@ export type GroupRead = Readonly<{
   runs: readonly DiscoveryRun[];
   sweepStates: readonly GroupSweepState[];
   negativeUntil: Date | null;
+  activeEvidenceKeys: readonly CharacterKey[];
 }>;
 
 export interface GroupReadRepository {
   read(key: CharacterKey, at: Date): Promise<GroupRead | null>;
 }
+
+export { groupMemberFacts } from "@slashwho/domain";
 
 export function createGroupReadRepository(pool: Pool): GroupReadRepository {
   return {
@@ -275,9 +278,28 @@ export async function loadGroupRead(
         byKey.get(canonicalCharacterId(s.rootKey))!,
         s.characters.map((c) => c.characterId)
       ])
+    ),
+    snapshotSources: new Map(
+      snapshots.map((s) => [
+        byKey.get(canonicalCharacterId(s.rootKey))!,
+        new Map(s.characters.map((c) => [c.characterId, c.source]))
+      ])
     )
   };
+  const activeEvidence = await client.query<{
+    region: CharacterKey["region"];
+    realm_slug: string;
+    normalized_name: string;
+  }>(
+    `SELECT DISTINCT e.region, e.realm_slug, e.normalized_name FROM character_evidence_runs e JOIN characters c ON c.region = e.region AND c.realm_slug = e.realm_slug AND c.normalized_name = e.normalized_name WHERE c.id = ANY($1::uuid[]) AND e.status IN ('queued', 'running', 'retrying')`,
+    [ids]
+  );
   return {
+    activeEvidenceKeys: activeEvidence.rows.map((row) => ({
+      region: row.region,
+      realm: row.realm_slug,
+      name: row.normalized_name
+    })),
     groupId: root.group_id,
     storedMemberIds,
     graph,

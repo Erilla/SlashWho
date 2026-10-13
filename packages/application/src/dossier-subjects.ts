@@ -3,6 +3,8 @@ import type {
   StoredSnapshot,
   StoredSnapshotCharacter
 } from "@slashwho/database";
+import type { GroupRead } from "@slashwho/database";
+import { resolveGroupSubjects } from "./group-subjects";
 import {
   canonicalCharacterId,
   type CharacterGuild,
@@ -18,6 +20,8 @@ export type DossierSubject = Readonly<{
   guild: CharacterGuild | null;
   raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
+  hasManualConnection?: boolean;
+  origin?: "application";
   /**
    * Other dossier keys that resolved to this character's Warcraft Logs ID, so
    * are the same character under another name (#423). Each keeps its own
@@ -52,8 +56,75 @@ export type ResolvedSubjects = Readonly<{
 
 export type SubjectRepositories = Pick<
   Repositories,
-  "snapshots" | "manualConnections" | "evidence"
+  "snapshots" | "manualConnections" | "evidence" | "groupReads"
 >;
+
+export type LiveResolvedSubjects = Omit<ResolvedSubjects, "snapshot"> & {
+  snapshot: StoredSnapshot | null;
+  group?: GroupRead;
+  research?: { state: "complete" | "partial"; message: string };
+};
+
+export async function resolveSubjects(
+  key: CharacterKey,
+  repositories: SubjectRepositories,
+  config: { DOSSIER_CHARACTER_CEILING: number },
+  logger?: { info(value: Record<string, unknown>): void }
+): Promise<LiveResolvedSubjects | null> {
+  // Test/in-memory adapters may retain the legacy snapshot-only projection.
+  if (!repositories.groupReads)
+    return legacyResolveSubjects(key, repositories, config);
+  const group = await repositories.groupReads.read(key, new Date());
+  if (!group || group.snapshots.length === 0) return null;
+  const subjects = resolveGroupSubjects(key, group.graph, config, logger);
+  if (!subjects) return null;
+  const guildOf = (subject: RankedSubject): RankedSubject => ({
+    ...subject,
+    guild:
+      group.snapshots
+        .flatMap((s) => s.characters)
+        .find(
+          (c) =>
+            canonicalCharacterId(c.key) === canonicalCharacterId(subject.key)
+        )?.guild ?? null
+  });
+  const members = new Set(
+    [...subjects.selected, ...subjects.skipped, ...subjects.excluded].flatMap(
+      (s) => [
+        canonicalCharacterId(s.key),
+        ...(s.warcraftLogsAliases?.map(canonicalCharacterId) ?? [])
+      ]
+    )
+  );
+  const privateRoots = group.snapshots
+    .filter(
+      (s) =>
+        s.limitationCode === "privacy_hidden" &&
+        members.has(canonicalCharacterId(s.rootKey))
+    )
+    .map(
+      (s) =>
+        group.graph.characters.get(group.graph.idOf(s.rootKey)!)?.displayName ??
+        s.rootKey.name
+    );
+  return {
+    snapshot: group.ownSnapshot,
+    group,
+    selected: subjects.selected.map(guildOf),
+    skipped: subjects.skipped.map(guildOf),
+    excludedOrdered: subjects.excluded.map(guildOf),
+    provisional: false,
+    research: {
+      state: subjects.research.state,
+      message:
+        privateRoots.length > 0
+          ? `Raider.IO shows no public account claim for ${privateRoots.join(", ")}, so additional linked characters may exist.`
+          : subjects.research.state === "complete"
+            ? "Linked-character research is complete."
+            : "Additional linked characters may exist; this dossier is not exhaustive."
+    }
+  };
+}
 
 /**
  * Another root's snapshot, re-rooted at a character it lists as a

@@ -4,6 +4,7 @@ import type {
   DiscoveryWorkContext,
   JobTelemetry,
   ObservationWriteInput,
+  CharacterGroupMerge,
   Repositories
 } from "@slashwho/database";
 import type {
@@ -23,6 +24,7 @@ import {
 } from "@slashwho/domain";
 
 import { bestEffort } from "./best-effort";
+import { notifyGroupMerges } from "./group-merge-alert";
 import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
@@ -162,7 +164,8 @@ export type FingerprintAlertNotifier = {
       | "applicant_poll_failed"
       | "applicant_new_intents"
       | "applicant_backlog_pressure"
-      | "applicant_input_truncated";
+      | "applicant_input_truncated"
+      | "character_groups_merged";
     details: Record<string, number>;
     applicant?: {
       battletag?: string | undefined;
@@ -467,10 +470,13 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
     }
     if (signal.aborted) return;
     let mergedGroups: number;
+    let merges: readonly CharacterGroupMerge[] = [];
     try {
-      ({ mergedGroups } = await connections.recomputeGroupsOf(
+      const recomputed = await connections.recomputeGroupsOf(
         result.changedCharacterIds
-      ));
+      );
+      mergedGroups = recomputed.mergedGroups;
+      merges = recomputed.merges ?? [];
     } catch (error) {
       logObservationFailure("recompute", error);
       return;
@@ -481,12 +487,14 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         options.logger?.info({
           event: "character_groups_merged",
           stage: "publication",
-          mergedGroups
+          mergedGroups,
+          ...(merges.length ? { merges } : {})
         });
       } catch {
         // Best effort only, as below.
       }
     }
+    await notifyGroupMerges(options.fingerprintAlertNotifier, merges);
   }
 
   function logObservationFailure(

@@ -1,5 +1,29 @@
 import { canonicalCharacterId } from "./deduplicate";
 import type { CharacterKey } from "./character-key";
+import { groupPageMembers, type GroupGraph } from "./character-connections";
+
+export function groupMemberFacts<T extends { rootKey: CharacterKey }>(
+  read: {
+    graph: GroupGraph;
+    runs: readonly T[];
+    sweepStates: readonly GroupSweepState[];
+  },
+  key: CharacterKey
+) {
+  const originId = read.graph.idOf(key);
+  const ids = originId
+    ? groupPageMembers(originId, read.graph)
+    : new Set<string>();
+  const visible = (key: CharacterKey) => {
+    const id = read.graph.idOf(key);
+    return id !== undefined && ids.has(id);
+  };
+  return {
+    ids,
+    runs: read.runs.filter((run) => visible(run.rootKey)),
+    sweepStates: read.sweepStates.filter((state) => visible(state.key))
+  };
+}
 
 export function isFresh(
   completedAt: readonly Date[],

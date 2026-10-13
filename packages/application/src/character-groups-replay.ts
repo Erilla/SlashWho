@@ -354,6 +354,11 @@ function ledgerCoverage(
   for (const createdAt of audit.manualCreatedAt) {
     if (createdAt.getTime() > start) add("manual_added");
   }
+  const applicantLinks = [
+    ...audit.graph.manual,
+    ...audit.graph.undiscoveredManualTargets
+  ].filter((row) => row.origin === "applicant_sheet").length;
+  if (applicantLinks > 0) coverage.applicant_link = applicantLinks;
   return coverage;
 }
 

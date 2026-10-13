@@ -1,5 +1,6 @@
 import {
   canonicalCharacterId,
+  groupPageMembers,
   pathStrengths,
   toRaiderIoUrl,
   type CharacterKey,
@@ -22,37 +23,7 @@ export type GroupSubjects = Readonly<{
 }>;
 
 /** A page's members: reach from `originId` within its group, never through a suppressed character. */
-export function pageMembers(originId: string, graph: GroupGraph): Set<string> {
-  if (graph.suppressed.has(originId)) return new Set();
-  const group = graph.groupOf.get(originId);
-  // No group assignment means nothing to walk into: every link's ends would
-  // also read as ungrouped (`undefined === undefined`), so without this
-  // guard the filter below would never skip them and the walk would leak
-  // into unrelated, equally ungrouped characters.
-  if (group === undefined) return new Set([originId]);
-  const members = new Set<string>([originId]);
-  const neighbours = new Map<string, string[]>();
-  for (const link of graph.links) {
-    if (
-      graph.groupOf.get(link.a) !== group ||
-      graph.groupOf.get(link.b) !== group
-    )
-      continue;
-    neighbours.set(link.a, [...(neighbours.get(link.a) ?? []), link.b]);
-    neighbours.set(link.b, [...(neighbours.get(link.b) ?? []), link.a]);
-  }
-  const queue = [originId];
-  for (;;) {
-    const node = queue.shift();
-    if (node === undefined) break;
-    for (const next of neighbours.get(node) ?? []) {
-      if (members.has(next) || graph.suppressed.has(next)) continue;
-      members.add(next);
-      queue.push(next);
-    }
-  }
-  return members;
-}
+export const pageMembers = groupPageMembers;
 
 const SOURCE_FOR: Record<LinkStrength, RankedSubject["source"]> = {
   raiderio: "claimed",
@@ -63,7 +34,8 @@ const SOURCE_FOR: Record<LinkStrength, RankedSubject["source"]> = {
 export function resolveGroupSubjects(
   originKey: CharacterKey,
   graph: GroupGraph,
-  config: { DOSSIER_CHARACTER_CEILING: number }
+  config: { DOSSIER_CHARACTER_CEILING: number },
+  logger?: { info(value: Record<string, unknown>): void }
 ): GroupSubjects | null {
   const originId = graph.idOf(originKey);
   if (!originId || graph.suppressed.has(originId)) return null;
@@ -72,8 +44,55 @@ export function resolveGroupSubjects(
     originId,
     graph.links.filter((link) => members.has(link.a) && members.has(link.b))
   );
+  const manualFacts = (targetKey: CharacterKey) => {
+    const targetId = graph.idOf(targetKey);
+    const origins = [
+      ...graph.manual
+        .filter((row) => members.has(row.makerId) && row.targetId === targetId)
+        .map((row) => row.origin),
+      ...graph.undiscoveredManualTargets
+        .filter(
+          (row) =>
+            members.has(row.makerId) &&
+            canonicalCharacterId(row.targetKey) ===
+              canonicalCharacterId(targetKey)
+        )
+        .map((row) => row.origin)
+    ];
+    return {
+      present: origins.length > 0,
+      applicant:
+        origins.length > 0 &&
+        origins.every((origin) => origin === "applicant_sheet")
+    };
+  };
   const subject = (id: string): RankedSubject => {
     const character = graph.characters.get(id)!;
+    const ownSource = graph.snapshotSources?.get(originId)?.get(id);
+    const fallbackSource =
+      ownSource ??
+      [...(graph.snapshotSources?.values() ?? [])]
+        .map((sources) => sources.get(id))
+        .find((source) => source !== undefined);
+    const strength = strengths.get(id);
+    if (id !== originId && strength === undefined && ownSource === undefined)
+      logger?.info({ event: "group_member_unreachable" });
+    const source =
+      id === originId
+        ? "input"
+        : strength
+          ? SOURCE_FOR[strength]
+          : (fallbackSource ?? "fingerprint");
+    if (
+      id !== originId &&
+      ownSource &&
+      ["claimed", "declared_main", "profile_guess"].includes(ownSource) &&
+      source !== "claimed" &&
+      source !== "declared_main" &&
+      source !== "profile_guess"
+    )
+      logger?.info({ event: "group_label_weakened" });
+    const manual = manualFacts(character.key);
     return {
       key: character.key,
       displayName: character.displayName,
@@ -81,14 +100,11 @@ export function resolveGroupSubjects(
       guild: null,
       raiderIoUrl: character.raiderIoUrl,
       level: character.level,
-      source:
-        id === originId
-          ? "input"
-          : // A page member with no strength can't happen under one consistent
-            // read of the graph; fall back to the weakest label so it can
-            // only under-state, never over-state, the connection. Pure
-            // function, no logger to record it with.
-            SOURCE_FOR[strengths.get(id) ?? "fingerprint"]
+      source,
+      ...(manual.present ? { hasManualConnection: true } : {}),
+      ...(source === "manually_added" && manual.applicant
+        ? { origin: "application" as const }
+        : {})
     };
   };
   const isSelfExclusion = (makerId: string, targetId: string) =>
@@ -126,7 +142,11 @@ export function resolveGroupSubjects(
       guild: null,
       raiderIoUrl: toRaiderIoUrl(row.targetKey),
       level: 0,
-      source: "manually_added"
+      source: "manually_added",
+      hasManualConnection: true,
+      ...(manualFacts(row.targetKey).applicant
+        ? { origin: "application" as const }
+        : {})
     });
   }
   const originCanonical = canonicalCharacterId(originKey);
@@ -171,11 +191,20 @@ export function resolveGroupSubjects(
   const excluded: RankedSubject[] = [];
   for (const { primary, aliases } of identities) {
     const isOrigin = canonicalCharacterId(primary.key) === originCanonical;
+    const manual = [primary, ...aliases]
+      .map((candidate) => manualFacts(candidate.key))
+      .filter((fact) => fact.present);
     const row =
       aliases.length === 0
         ? primary
         : {
             ...primary,
+            ...(manual.length ? { hasManualConnection: true } : {}),
+            ...(primary.source === "manually_added" &&
+            manual.length &&
+            manual.every((fact) => fact.applicant)
+              ? { origin: "application" as const }
+              : {}),
             warcraftLogsAliases: aliases.map((alias) => alias.key)
           };
     if (!isOrigin && [primary, ...aliases].some(excludedSubject))

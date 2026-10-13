@@ -1,8 +1,15 @@
-import type { CharacterKey } from "@slashwho/domain";
+import { isFresh, isSweepDue, type CharacterKey } from "@slashwho/domain";
 import type { Pool } from "pg";
 import { type RunRow, mapRun } from "./mappers";
-import type { Repositories } from "./repositories";
+import type { Repositories, DiscoveryRun } from "./repositories";
 import { one, withTransaction } from "./sql";
+import {
+  loadGroupRead,
+  groupMemberFacts,
+  createGroupReadRepository
+} from "./group-reads";
+import { lockRebuildShared, lockGroups } from "./character-connections";
+import { lockFingerprintSweeps } from "./locks";
 
 export const activeRunSql = "('queued', 'running', 'retrying')";
 
@@ -20,6 +27,18 @@ export function createDiscoveryRunRepositories(
 ): Pick<Repositories, "searchReservations" | "runs"> {
   return {
     searchReservations: {
+      async checkAllowance(input) {
+        const row = one(
+          await pool.query<{ count: string; retry_at: Date | null }>(
+            `SELECT count(*)::text AS count, min(expires_at) AS retry_at FROM rate_limit_events WHERE caller_bucket_hash = $1 AND expires_at > $2`,
+            [input.callerBucketHash, input.at]
+          )
+        );
+        return {
+          allowed: Number(row.count) < input.limit,
+          retryAt: row.retry_at
+        };
+      },
       async reserve(input) {
         if (!Number.isInteger(input.limit) || input.limit < 1) {
           throw new RangeError("rate_limit_out_of_range");
@@ -28,7 +47,37 @@ export function createDiscoveryRunRepositories(
           throw new RangeError("rate_limit_expiry_out_of_range");
         }
 
+        const cheap = await createGroupReadRepository(pool).read(
+          input.key,
+          input.at
+        );
+        const fresh = (runs: readonly DiscoveryRun[]) =>
+          !input.ignoreFreshness &&
+          isFresh(
+            runs.flatMap((run) =>
+              run.status === "complete" && run.completedAt
+                ? [run.completedAt]
+                : []
+            ),
+            input.at,
+            (input.at.getTime() - input.freshnessCutoff.getTime()) / 3_600_000
+          );
+        if (cheap) {
+          const facts = groupMemberFacts(cheap, input.key);
+          if (fresh(facts.runs)) return { kind: "fresh" };
+          if (
+            input.sweepDue &&
+            !isSweepDue(
+              facts.sweepStates,
+              facts.runs,
+              input.sweepDue.cadenceCutoff,
+              input.sweepDue.maxFailures
+            )
+          )
+            return { kind: "not_due" };
+        }
         return withTransaction(pool, async (client) => {
+          await lockRebuildShared(client);
           const rootLock = `root:${input.key.region}:${input.key.realm}:${input.key.name}`;
           await client.query(
             `SELECT pg_advisory_xact_lock(lock_id)
@@ -51,6 +100,34 @@ export function createDiscoveryRunRepositories(
             return { kind: "suppressed" };
           }
 
+          if (input.sweepDue) await lockFingerprintSweeps(client);
+          await lockGroups(client);
+          const group = await loadGroupRead(client, input.key, input.at);
+          if (group) {
+            const facts = groupMemberFacts(group, input.key);
+            if (fresh(facts.runs)) return { kind: "fresh" };
+            if (
+              input.sweepDue &&
+              !isSweepDue(
+                facts.sweepStates,
+                facts.runs,
+                input.sweepDue.cadenceCutoff,
+                input.sweepDue.maxFailures
+              )
+            )
+              return { kind: "not_due" };
+            for (const run of facts.runs) {
+              if (!["queued", "running", "retrying"].includes(run.status))
+                continue;
+              const active = await client.query<RunRow>(
+                `SELECT * FROM discovery_runs WHERE id = $1 AND status IN ${activeRunSql} FOR UPDATE`,
+                [run.id]
+              );
+              if (active.rows[0])
+                return { kind: "active", run: mapRun(active.rows[0]) };
+            }
+          }
+
           const current = await client.query<{ id: string }>(
             `SELECT snapshot.id
              FROM snapshots snapshot
@@ -59,7 +136,7 @@ export function createDiscoveryRunRepositories(
              WHERE root.region = $1 AND root.realm_slug = $2
                AND root.normalized_name = $3
                AND run.status = 'complete'
-               AND snapshot.refreshed_at > $4
+               AND run.completed_at > $4
              ORDER BY snapshot.refreshed_at DESC, snapshot.id DESC
              LIMIT 1`,
             [
@@ -69,7 +146,7 @@ export function createDiscoveryRunRepositories(
               input.freshnessCutoff
             ]
           );
-          if (current.rowCount === 1) {
+          if (current.rowCount === 1 && !input.ignoreFreshness && !group) {
             return { kind: "fresh" };
           }
 

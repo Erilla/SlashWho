@@ -105,3 +105,6 @@ export type {
 export * from "./character-connections";
 export { isFresh, hasFailureBackoff, isSweepDue } from "./group-freshness";
 export type { GroupRunFact, GroupSweepState } from "./group-freshness";
+export { groupPageMembers } from "./character-connections";
+export { DISCOVERY_SOURCES } from "./deduplicate";
+export { groupMemberFacts } from "./group-freshness";

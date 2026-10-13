@@ -9,6 +9,8 @@ export type {
 export { StaleFingerprintDeliveryError } from "./fingerprint-delivery-error";
 export { createPostgresRepositories } from "./postgres-repositories";
 export type { GroupRead, GroupReadRepository } from "./group-reads";
+export type { CharacterGroupMerge } from "./repositories";
+export { groupMemberFacts } from "./group-reads";
 export { mergeRaiderIoFirstKills } from "./evidence/merge";
 export { loadCharacterGroupsAudit } from "./character-groups-audit";
 export type {

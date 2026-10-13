@@ -1034,7 +1034,12 @@ describe("character connections: observation writes", () => {
       const bridged = await raiderIoWrite(rootRun, rootKey, thirdKey);
       expect(
         await connections().recomputeGroupsOf(bridged.changedCharacterIds)
-      ).toEqual({ mergedGroups: 1 });
+      ).toMatchObject({
+        mergedGroups: 1,
+        merges: [
+          { groupSizes: [2, 2], sources: ["claimed"], throughObserved: true }
+        ]
+      });
       expect(await groupOf(eKey)).toBe(await groupOf(altKey));
     });
 

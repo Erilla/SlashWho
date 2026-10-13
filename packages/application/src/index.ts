@@ -173,3 +173,4 @@ export {
   encryptCredential,
   parseEncryptionKey
 } from "./credential-encryption";
+export { notifyGroupMerges } from "./group-merge-alert";
