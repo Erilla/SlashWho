@@ -1,6 +1,6 @@
 # Issue #787: first-kill assembly optimisation
 
-Status: proposed; awaiting Manager review before implementation.
+Status: approved to build after folding in review 5506067965 on 13 October 2026.
 
 ## Outcome and current evidence
 
@@ -46,7 +46,8 @@ measurements have not yet been reproduced.
    case, and preserving null for all other ambiguities.
 4. Cache canonical IDs by immutable CharacterKey object using a WeakMap local to
    dossier assembly helpers, covering comparisons as well as matching. Use push
-   accumulators and compute dossier roster membership with a Set. Preserve the
+   accumulators (all four, including tier bests) and compute dossier roster
+   membership with a Set. Preserve the
    existing case behaviour of dossier keys; do not broaden membership semantics
    for malformed/noncanonical inputs accidentally.
 
@@ -59,18 +60,26 @@ bound, agree a time-index strategy before implementation.
 
 ## Test-first implementation and verification
 
-- First add failing generator/publication tests and deterministic operation-count
-  guards at production-shaped volume. Measure catalogue calls or timestamp reads
-  at the matching seam with test spies, covering both eligible and withheld paths;
-  avoid public instrumentation APIs and wall-clock-only unit assertions.
+- First add failing generator/publication tests and deterministic growth guards
+  at production-shaped volume. Spy on String.prototype.normalize and Date.parse,
+  which intercept actual internal work without exporting instrumentation seams.
+  Compare F and 2F first kills at fixed K on both eligible and withheld paths.
+  Use distinct cold, catalogue-equivalent spellings of valid raid and boss names
+  for each build (punctuation variations stripped by normalisation), so persistent
+  caches cannot hide the work. Assert that the extra normalisations/timestamp
+  reads grow with F, not F times K; preserve output assertions alongside counts.
+  No module-namespace/private-function spies or wall-clock-only unit assertions.
 - Add focused equivalence cases for boundaries, nearest/tied kills, repeated
   first kills, ambiguous/faction catalogue entries, missing names and invalid
   dates. Extend existing tests rather than copying implementation into tests.
 - Capture an assembled result before optimisation and compare JSON.stringify
   after optimisation on identical immutable inputs. Replay an actual stored
-  dossier through the same domain builder before/after when the coordinator
-  supplies an authorised read-only access route; keep identifiers and data out
-  of committed fixtures, logs and new durable storage. A synthetic replay alone
+  dossier through the same domain builder before/after inside the test deployment
+  when the coordinator agrees the concrete execution method. Use one REPEATABLE
+  READ READ ONLY transaction and default read-only connection options. Keep live
+  inputs in memory there; print only aggregate counts and before/after SHA-256
+  hashes, never identifiers or input files. Do not download live rows locally.
+  A synthetic replay alone
   does not satisfy the stored-dossier criterion.
 - Record before/after local profiler evidence. Run the full Docker-backed gate:
   format:check, lint, typecheck, test:unit, test:integration, build, test:e2e.
