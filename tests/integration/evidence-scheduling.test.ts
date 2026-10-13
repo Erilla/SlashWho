@@ -120,6 +120,42 @@ describe("metadata evidence scheduling", () => {
     ]);
   });
 
+  it("keeps roster timing wired through the single-publication baseline hydrator", async () => {
+    const at = new Date("2026-10-13T12:00:00Z");
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      origin: "dossier_read",
+      at,
+      freshnessCutoff: at
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: at
+    });
+    const fresh = await repositories.evidence.reserveForScheduling!({
+      key: rootKey,
+      origin: "dossier_read",
+      at: new Date(at.getTime() + 1_000),
+      freshnessCutoff: new Date(at.getTime() - 60_000)
+    });
+    expect(fresh.kind).toBe("fresh");
+    if (fresh.kind !== "fresh") throw new Error("expected_fresh_publication");
+    const measured: string[] = [];
+    await repositories.evidence.hydrateCompletedEvidence!(
+      fresh.completed,
+      async (label, work) => {
+        measured.push(label);
+        return work();
+      }
+    );
+    expect(measured).toEqual(["evidence.raiderIoRoster"]);
+  });
+
   it("defers all batch payload hydration while the root is stale", async () => {
     const at = new Date("2026-10-13T12:00:00Z");
     const reserved = await repositories.evidence.reserve({

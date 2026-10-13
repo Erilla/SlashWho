@@ -477,8 +477,8 @@ export function createEvidenceRepositories(
       reserve: (input) => reserveEvidence(input, loadCompletedEvidence),
       reserveForScheduling: (input) =>
         reserveEvidence(input, loadCompletedEvidenceSelection, true),
-      hydrateCompletedEvidence: (selection) =>
-        hydrateCompletedEvidence(pool, selection),
+      hydrateCompletedEvidence: (selection, measureReadStep) =>
+        hydrateCompletedEvidence(pool, selection, measureReadStep),
       completedSettlementKills: (selection) =>
         loadCompletedSettlementKills(pool, selection),
 
