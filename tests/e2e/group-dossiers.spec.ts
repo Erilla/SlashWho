@@ -609,8 +609,12 @@ for (const failures of [0, 5]) {
 test("concurrent sibling page visits reserve one group sweep and one charge", async ({
   page
 }) => {
-  const root = { region: "eu", realm: "silvermoon", name: "queued" } as const;
-  const sibling = { ...root, name: "frostalt" };
+  const root = {
+    region: "eu",
+    realm: "silvermoon",
+    name: "profilecoldsweeproot"
+  } as const;
+  const sibling = { ...root, name: "profilecoldsweepalt" };
   await seedSnapshot({
     key: root,
     displayName: "Sweep root",
@@ -650,7 +654,10 @@ test("concurrent sibling page visits reserve one group sweep and one charge", as
       ).rows[0]!.count;
     const baselineRuns = await runCount();
     const baselineCharges = await chargeCount();
-    expect((await fetch(`${fixtureBaseUrl}/__control/hold`)).ok).toBeTruthy();
+    expect(
+      (await fetch(`${fixtureBaseUrl}/__control/hold?profile=profilecoldsweep`))
+        .ok
+    ).toBeTruthy();
     await Promise.all([
       page.goto(`/dossiers/eu/silvermoon/${root.name}`),
       siblingPage.goto(`/dossiers/eu/silvermoon/${sibling.name}`)
@@ -666,7 +673,12 @@ test("concurrent sibling page visits reserve one group sweep and one charge", as
           (response) => response.json() as Promise<FixtureStats>
         );
         return (
-          stats.characterRequests["/api/characters/eu/silvermoon/frostalt"] ?? 0
+          (stats.characterRequests[
+            `/api/characters/eu/silvermoon/${root.name}`
+          ] ?? 0) +
+          (stats.characterRequests[
+            `/api/characters/eu/silvermoon/${sibling.name}`
+          ] ?? 0)
         );
       })
       .toBeGreaterThan(0);

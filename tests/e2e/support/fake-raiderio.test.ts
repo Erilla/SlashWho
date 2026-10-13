@@ -67,6 +67,60 @@ describe("startFakeRaiderIo", () => {
     }
   });
 
+  it("holds only the requested profile prefix and releases its pending reads", async () => {
+    const fixture = await startFakeRaiderIo();
+    close = fixture.close;
+    await fetch(`${fixture.baseUrl}/__control/hold?profile=profilecoldsweep`);
+    let answered = false;
+    const heldRead = fetch(
+      `${fixture.baseUrl}/api/characters/eu/silvermoon/profilecoldsweeproot`
+    ).then((response) => {
+      answered = true;
+      return response;
+    });
+    try {
+      await expect
+        .poll(async () => {
+          const response = await fetch(`${fixture.baseUrl}/__control/stats`);
+          const stats = (await response.json()) as {
+            characterRequests: Record<string, number>;
+          };
+          return (
+            stats.characterRequests[
+              "/api/characters/eu/silvermoon/profilecoldsweeproot"
+            ] ?? 0
+          );
+        })
+        .toBe(1);
+      expect(
+        (
+          await fetch(
+            `${fixture.baseUrl}/api/characters/eu/silvermoon/profilecoldunrelated`
+          )
+        ).status
+      ).toBe(200);
+      expect(answered).toBe(false);
+      // The targeted sweep cannot hold another spec's Frostalt fixture.
+      expect(
+        (
+          await fetch(
+            `${fixture.baseUrl}/api/characters/eu/silvermoon/frostalt`
+          )
+        ).status
+      ).toBe(200);
+    } finally {
+      await fetch(`${fixture.baseUrl}/__control/release`);
+    }
+    expect((await heldRead).status).toBe(200);
+    expect(answered).toBe(true);
+    expect(
+      (
+        await fetch(
+          `${fixture.baseUrl}/api/characters/eu/silvermoon/profilecoldsweepalt`
+        )
+      ).status
+    ).toBe(200);
+  });
   it("does not expose an account profile responder", async () => {
     // Break caught: the deterministic source can retain an account-identity
     // endpoint even after its character payload stops returning that identity.
