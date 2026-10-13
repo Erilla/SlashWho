@@ -13,9 +13,10 @@ const allowlist = new Set([
   "status",
   "durationMs",
   "count",
-  // The error class only. Messages, bodies, URLs, and payloads stay out by
+  // Bounded error name and closed code. Messages, bodies, URLs and payloads stay out by
   // construction: any field not named here is dropped before serialization.
   "errorName",
+  "errorCode",
   // Performance totals. Integers and booleans only -- never identity.
   "raiderIoMs",
   "raiderIoCalls",

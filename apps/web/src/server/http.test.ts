@@ -1,7 +1,7 @@
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import { upstreamThrottleRecord } from "@slashwho/application";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { dossierStartResponseSchema } from "@slashwho/contracts";
 
@@ -532,4 +532,78 @@ describe("withHttpRequest", () => {
     );
     expect(records[0]).toMatchObject({ status: 500, errorName: "TypeError" });
   });
+});
+import { errorName } from "./error-name";
+
+it("logs the explicit name and registered code of a renamed constructor", async () => {
+  class Stable extends Error {
+    override readonly name = "RankingLookupFailure";
+  }
+  Object.defineProperty(Stable, "name", { value: "te" });
+  const error = new Stable("rankings_unavailable");
+  expect(errorName(error)).toBe("RankingLookupFailure");
+  const records: Record<string, unknown>[] = [];
+  const response = await withHttpRequest(
+    "dossier",
+    async () => {
+      throw error;
+    },
+    { info: (record) => records.push(record) }
+  );
+  expect(response.status).toBe(500);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(records[0]).toMatchObject({
+    errorName: "RankingLookupFailure",
+    errorCode: "rankings_unavailable"
+  });
+  expect(records[0]).not.toHaveProperty("message");
+});
+
+it("records a driver's code when response counting fails", async () => {
+  const records: Record<string, unknown>[] = [];
+  const body = new ReadableStream({
+    start(controller) {
+      controller.error(
+        Object.assign(new Error("PRIVATE_ROW https://private"), {
+          code: "40P01"
+        })
+      );
+    }
+  });
+  const response = await withHttpRequest(
+    "dossier",
+    async () =>
+      new Response(body, { headers: { "content-type": "application/json" } }),
+    { info: (record) => records.push(record) }
+  );
+  expect(response.status).toBe(500);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(records[0]).toMatchObject({ errorName: "Error", errorCode: "40P01" });
+  expect(JSON.stringify(records)).not.toContain("PRIVATE_ROW");
+});
+
+it("preserves the first cause if the error response also fails counting", async () => {
+  const records: Record<string, unknown>[] = [];
+  const read = vi
+    .spyOn(Response.prototype, "text")
+    .mockRejectedValueOnce(
+      Object.assign(new Error("private second cause"), { code: "40P01" })
+    );
+  try {
+    await withHttpRequest(
+      "dossier",
+      async () => {
+        throw Object.assign(new Error("rankings_unavailable"), {
+          name: "RankingLookupFailure"
+        });
+      },
+      { info: (record) => records.push(record) }
+    );
+    expect(records[0]).toMatchObject({
+      errorName: "RankingLookupFailure",
+      errorCode: "rankings_unavailable"
+    });
+  } finally {
+    read.mockRestore();
+  }
 });

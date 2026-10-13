@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 
 import { parseCharacterRoute } from "../lib/character-route";
 import { loadWebConfig } from "./config";
-import { errorName } from "./error-name";
+import { errorFields, type ErrorFields } from "@slashwho/application";
 import { webLogger } from "./logger";
 
 export function apiError(
@@ -215,14 +215,14 @@ export async function withHttpRequest(
   });
   const startedAt = clock();
   let response: Response;
-  let failure: string | undefined;
+  let failure: ErrorFields | undefined;
   try {
     response = await attributeThrottlesTo({ correlationId }, () => {
       bindThrottleScope(scope);
       return action(scope, correlationId);
     });
   } catch (error) {
-    failure = errorName(error);
+    failure = errorFields(error);
     response = apiError("search_failed");
   }
   // Every response this wraps is private to its caller, so one that names no
@@ -240,7 +240,7 @@ export async function withHttpRequest(
       countedResponse(counted)
     ));
   } catch (error) {
-    failure ??= errorName(error);
+    failure ??= errorFields(error);
     response = apiError("search_failed");
     response.headers.set("x-request-id", correlationId);
   }
@@ -258,7 +258,7 @@ export async function withHttpRequest(
     durationMs: Math.max(0, Math.round(clock() - startedAt)),
     ...scope.totals(),
     ...(count === undefined ? {} : { count }),
-    ...(failure === undefined ? {} : { errorName: failure })
+    ...(failure ?? {})
   });
   return response;
 }
