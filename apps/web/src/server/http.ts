@@ -90,6 +90,8 @@ export function jsonNoStore<T>(
 export function startResultResponse(
   result: Exclude<CreateSearchResult, { kind: "character" }>
 ): Response {
+  if (result.kind === "group_ready")
+    return jsonNoStore(dossierStartResponseSchema, { kind: "ready" });
   if (result.kind === "job") {
     return jsonNoStore(
       dossierStartResponseSchema,

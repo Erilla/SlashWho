@@ -1,7 +1,7 @@
 "use client";
 
 import { safeApiErrorSchema, type DossierCharacter } from "@slashwho/contracts";
-import type { CharacterKey } from "@slashwho/domain";
+import { canonicalCharacterId, type CharacterKey } from "@slashwho/domain";
 import { useEffect, useRef, useState } from "react";
 
 import { dossierApiPath } from "../lib/dossier-api";
@@ -220,25 +220,28 @@ export function DossierCharacterMenu({
           ref={menuRef}
           role="menu"
         >
-          <button
-            className="dossier-character-menu-item"
-            disabled={pending}
-            onClick={() =>
-              void send(
-                "PATCH",
-                {
-                  characterUrl: character.raiderIoUrl,
-                  excluded: character.excluded !== true
-                },
-                character.excluded ? "included" : "excluded"
-              )
-            }
-            ref={firstItemRef}
-            role="menuitem"
-            type="button"
-          >
-            {character.excluded ? "Include" : "Exclude"}
-          </button>
+          {canonicalCharacterId(character.key) !==
+          canonicalCharacterId(root) ? (
+            <button
+              className="dossier-character-menu-item"
+              disabled={pending}
+              onClick={() =>
+                void send(
+                  "PATCH",
+                  {
+                    characterUrl: character.raiderIoUrl,
+                    excluded: character.excluded !== true
+                  },
+                  character.excluded ? "included" : "excluded"
+                )
+              }
+              ref={firstItemRef}
+              role="menuitem"
+              type="button"
+            >
+              {character.excluded ? "Include" : "Exclude"}
+            </button>
+          ) : null}
           <button
             className="dossier-character-menu-item"
             disabled={pending}
@@ -263,7 +266,8 @@ export function DossierCharacterMenu({
               Remove historic alias {alias.name}-{alias.realm}
             </button>
           ))}
-          {character.source === "manually_added" ? (
+          {(character.hasManualConnection ??
+          character.source === "manually_added") ? (
             <button
               className="dossier-character-menu-item dossier-character-menu-item--destructive"
               disabled={pending}
@@ -305,13 +309,13 @@ export function DossierCharacterMenu({
           ref={dialogRef}
         >
           <h2 className="section-heading" id={titleId}>
-            Remove connected character
+            Remove the manual connection to {character.displayName}
           </h2>
           <p>
-            Remove {character.displayName} ({character.key.region.toUpperCase()}{" "}
-            · {character.key.realm}) from this dossier? Its evidence goes with
-            it. The character and every snapshot that found it are left alone,
-            and it can be added again.
+            Remove the manual connection to {character.displayName}?
+            {character.source !== "manually_added"
+              ? " This character stays in the dossier through its provider link."
+              : " The character can be added again."}
           </p>
           <div className="dossier-character-add-actions">
             <button

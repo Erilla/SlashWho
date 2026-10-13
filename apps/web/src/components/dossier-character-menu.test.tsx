@@ -179,7 +179,7 @@ it("confirms a removal by naming the exact character", async () => {
   await user.click(screen.getByRole("menuitem", { name: "Remove…" }));
 
   const dialog = screen.getByRole("dialog", {
-    name: "Remove connected character"
+    name: "Remove the manual connection to Ryalts"
   });
   expect(dialog).toBeVisible();
   expect(dialog).toHaveTextContent("Ryalts");

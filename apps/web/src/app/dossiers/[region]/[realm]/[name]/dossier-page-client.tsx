@@ -275,6 +275,7 @@ function DossierPageState({
   const terminalPollError = useRef(unexpectedDossierMessage);
   const previousDossier = useRef(initialDossier);
   const [researchFailed, setResearchFailed] = useState(false);
+  const silentGroupStart = useRef(false);
   const [identityHidden, setIdentityHidden] = useState(false);
   const [identitySlot, setIdentitySlot] = useState<HTMLElement | null>(null);
   const identityRef = useRef<HTMLDivElement>(null);
@@ -435,7 +436,11 @@ function DossierPageState({
       setStatus(null);
     }
 
-    async function startResearch(researchRoot = identity) {
+    async function startResearch(
+      researchRoot = identity,
+      fromGroupPage = false
+    ) {
+      silentGroupStart.current = fromGroupPage;
       try {
         const result = await fetchDossierApi(
           dossierStartApiPath,
@@ -444,7 +449,8 @@ function DossierPageState({
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              characterUrl: raiderIoCharacterUrl(researchRoot)
+              characterUrl: raiderIoCharacterUrl(researchRoot),
+              ...(fromGroupPage ? { startedFrom: "page" } : {})
             }),
             cache: "no-store",
             signal: controller.signal
@@ -452,6 +458,10 @@ function DossierPageState({
         );
         if (controller.signal.aborted) return;
         if (result.kind !== "ok") {
+          if (fromGroupPage) {
+            setStatus(null);
+            return;
+          }
           setResearchFailed(true);
           setError(
             result.kind === "refused"
@@ -469,6 +479,10 @@ function DossierPageState({
         await readCompletedDossier();
       } catch (caught) {
         if (isAbortError(caught) || controller.signal.aborted) return;
+        if (fromGroupPage) {
+          setStatus(null);
+          return;
+        }
         setResearchFailed(true);
         setError("The applicant research could not be started.");
         setStatus(null);
@@ -515,6 +529,10 @@ function DossierPageState({
         // character, so its own discovery still has to run.
         if (rootOnly || current.research.state === "provisional") {
           await startResearch();
+          return;
+        }
+        if (current.groupStale) {
+          await startResearch(identity, true);
           return;
         }
         setStatus(null);
@@ -637,6 +655,10 @@ function DossierPageState({
           return;
         }
         if (job.status === "failed") {
+          if (silentGroupStart.current) {
+            setStatus(null);
+            return;
+          }
           setResearchFailed(true);
           setError(
             job.error?.message ??

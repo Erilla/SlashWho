@@ -29,8 +29,17 @@ The unlisted view of SlashWho's findings intended for someone assessing an appli
 _Avoid_: Officer mode, admin view, Applicant Intel API
 
 **Applicant dossier**:
-The reviewer-surface report about a searched character and every character linked to it, carrying evidence attributed per character. It is never stored, so it is always a view of the moment rather than a citable record.
+The reviewer-surface report about an opened character and its page members, carrying evidence attributed per character. Every member reuses its group's discovery, while the URL and root stay the opened character's. It is never stored, so it is always a view of the moment rather than a citable record.
 _Avoid_: Intel report, applicant snapshot, saved dossier
+
+**Connection**:
+An observation of a link between two characters, with its observer, source and time. Manual connections are read live. Rejections are recorded separately; phase 3 owns their reviewer actions and expiry.
+
+**Group**:
+The stored connected component of counting links. Groups share discovery and reviewer exclusions. Membership recomputes best effort after publication; it does not participate in the publication transaction.
+
+**A page's members**:
+The characters reachable from the opened character through counting links within its stored group, without showing or traversing suppressed characters, plus non-suppressed members of its own latest completed snapshot. The snapshot fold-in preserves immediate visibility while recompute catches up. Freshness, active discovery, research state and weekly sweep eligibility use page members, rather than the whole stored group.
 
 **Historic alias**:
 A reviewer-declared former name and realm attached to one connected character. It is used to collect older evidence under that character and is not an independent dossier character.
@@ -57,9 +66,7 @@ was the first `declared_main` member. Only that first member is the root's direc
 declaration; later members are mains reached by following the forward chain.
 Discovery treats the stored direct edge with the same authority as a forward
 Raider.IO declaration and adds the declaring character without another upstream
-request. The lookup is deliberately one hop: a newer snapshot that omits the edge
-retires it, and canonical deduplication contains self-references and cycles rather
-than recursively walking other dossiers.
+request. Discovery's lookup remains one hop; dossier membership follows transitive counting links through the group. A newer observation can retire a link, and canonical deduplication contains self-references and cycles.
 _Avoid_: Historical reverse match, reverse account enumeration
 
 **Manual connection**:
@@ -79,9 +86,10 @@ from one dossier's evidence. The searched character cannot be excluded. The
 character keeps its row, greyed and labelled, so the exclusion can be
 reversed; it contributes no kills, wipes, parses or Cutting Edge, raises no
 limitation, and never costs another character its place under the character
-ceiling. It is scoped to the dossier it was made on, and excluding a manual
+ceiling. Its effect is shared by the maker's group, and excluding a manual
 connection does not disturb the characters that connection's own discovery run
 found. It is shared by every viewer, unlike the per-viewer visibility filter.
+Reads ignore suppressed makers' rows and maker self-exclusions, including recorded Warcraft Logs aliases. Include and Remove clear the stored group's rows, suppressed makers included; Exclude and manual adds act from the opened page.
 _Avoid_: Removal request, suppression, blacklisted alt
 
 **Terminal tier**:

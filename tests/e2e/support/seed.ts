@@ -121,7 +121,7 @@ export async function seedSnapshot(
         level: 80
       }
     ];
-    return await repositories.snapshots.create({
+    const snapshot = await repositories.snapshots.create({
       runId: run.id,
       rootKey: input.key,
       state: input.state ?? "complete",
@@ -134,6 +134,32 @@ export async function seedSnapshot(
         source: index === 0 ? "input" : "claimed"
       }))
     });
+    await pool.query(
+      "UPDATE discovery_runs SET completed_at = $2 WHERE id = $1",
+      [run.id, input.refreshedAt]
+    );
+    const written = await repositories.characterConnections!.writeObservations({
+      runId: run.id,
+      observerKey: input.key,
+      families: [
+        {
+          family: "raiderio",
+          decision: "replaced",
+          reason:
+            input.limitationCode === "privacy_hidden"
+              ? "privacy_hidden"
+              : "raiderio_complete",
+          sweepReservationId: null,
+          observed: snapshot.characters
+            .filter((c) => c.source !== "input")
+            .map((c) => ({ key: c.key, source: "claimed" }))
+        }
+      ]
+    });
+    await repositories.characterConnections!.recomputeGroupsOf(
+      written.changedCharacterIds
+    );
+    return snapshot;
   } finally {
     await pool.end();
   }
@@ -405,10 +431,8 @@ export async function seedManualConnection(
 ): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl() });
   try {
-    await createPostgresRepositories(pool).manualConnections.add(
-      root,
-      character
-    );
+    await createPostgresRepositories(pool).manualConnections
+      .addGroupConnection!(root, character);
   } finally {
     await pool.end();
   }

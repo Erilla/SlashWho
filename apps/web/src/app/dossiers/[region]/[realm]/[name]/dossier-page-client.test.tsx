@@ -240,6 +240,30 @@ function withCharacterEvidenceStates(
 }
 
 describe("DossierPageClient live evidence", () => {
+  it("keeps a stale group dossier after a refused automatic page start", async () => {
+    const stale = { ...expanded, groupStale: true };
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
+      if (input === "/api/dossiers") {
+        requests.push(init?.body as string);
+        return Response.json(
+          { error: { code: "rate_limited", message: "Too many requests" } },
+          { status: 429 }
+        );
+      }
+      return Response.json(stale);
+    });
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(JSON.parse(requests[0]!)).toMatchObject({ startedFrom: "page" });
+    expect(screen.queryByText("Too many requests")).not.toBeInTheDocument();
+  });
   it("hides the Refresh control for a read-only dossier", () => {
     // Break caught: the frozen demo can expose a refresh action even though it
     // has no writable data source or character-management controls.
