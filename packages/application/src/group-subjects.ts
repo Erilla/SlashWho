@@ -31,6 +31,15 @@ const SOURCE_FOR: Record<LinkStrength, RankedSubject["source"]> = {
   manual: "manually_added"
 };
 
+const SOURCE_STRENGTH: Record<RankedSubject["source"], number> = {
+  input: 3,
+  claimed: 2,
+  declared_main: 2,
+  profile_guess: 2,
+  fingerprint: 1,
+  manually_added: 0
+};
+
 export function resolveGroupSubjects(
   originKey: CharacterKey,
   graph: GroupGraph,
@@ -77,7 +86,7 @@ export function resolveGroupSubjects(
     const strength = strengths.get(id);
     if (id !== originId && strength === undefined && ownSource === undefined)
       logger?.info({ event: "group_member_unreachable" });
-    const source =
+    const pathSource =
       id === originId
         ? "input"
         : strength
@@ -86,12 +95,16 @@ export function resolveGroupSubjects(
     if (
       id !== originId &&
       ownSource &&
-      ["claimed", "declared_main", "profile_guess"].includes(ownSource) &&
-      source !== "claimed" &&
-      source !== "declared_main" &&
-      source !== "profile_guess"
+      SOURCE_STRENGTH[ownSource] > SOURCE_STRENGTH[pathSource]
     )
       logger?.info({ event: "group_label_weakened" });
+    // A committed publication remains authoritative while its group write heals.
+    const source =
+      id !== originId &&
+      ownSource &&
+      SOURCE_STRENGTH[ownSource] > SOURCE_STRENGTH[pathSource]
+        ? ownSource
+        : pathSource;
     const manual = manualFacts(character.key);
     return {
       key: character.key,

@@ -49,6 +49,21 @@ function graph(
 }
 
 describe("page members", () => {
+  it.each(["fingerprint", "manual"] as const)(
+    "keeps a committed claimed label above an older %s path after a lost write",
+    (strength) => {
+      const g = graph({
+        names: ["o", "a"],
+        links: [{ a: "o", b: "a", strength }],
+        snapshotMembers: new Map([["o", ["o", "a"]]]),
+        snapshotSources: new Map([["o", new Map([["a", "claimed"]])]])
+      });
+      const subjects = resolveGroupSubjects(key("o"), g, {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!;
+      expect(subjects.selected[1]!.source).toBe("claimed");
+    }
+  );
   it("a reviewer row on an alias prevents an application label on the merged manual row", () => {
     const g = graph({
       names: ["o", "a", "b"],
