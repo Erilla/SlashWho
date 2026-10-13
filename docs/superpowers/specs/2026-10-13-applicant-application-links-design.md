@@ -347,6 +347,10 @@ For each application:
   `COUNTING_LINKS_FROM`: observed links without a rejection, plus every
   resolved manual connection. It doesn't read `character_group_members`,
   which lags behind until a recompute.
+  - **It uses #738's shared counting-links fragments,** not a query of its
+    own, so it and the group recompute cannot drift apart. From #738's
+    phase 3 that includes the manual-half rejection predicate, so a rejected
+    manual or applicant link doesn't count here either.
 - It skips the member when the root and the member are in **different**
   components and **both** have more than one member. Merging two established
   groups is always a reviewer's call. A member already in the root's
@@ -375,6 +379,11 @@ For each application:
   reverting phase 1, set `APPLICANT_LINKING_ENABLED=false`. Record this in
   the character-groups design's rollback section and in
   `docs/operations/character-groups.md`.
+
+**Rejections (#738 phase 3).** Phase 3 adds a `skipped_rejected` outcome,
+checked before `linked`: a member whose pair with the root has a `rejected`
+row is skipped. Without it, a resubmitted application would keep re-adding a
+row that can't count. It joins the counts in `applicant_links`.
 
 **Expiry.** Seven days after `settled_at`, remaining members become `expired`
 and the application closes. The clock starts at settlement, not creation,
@@ -489,6 +498,12 @@ held) still alerts when it's first seen.
 - Web adds don't trigger a group recompute, and neither do these. The hourly
   maintenance cycle picks them up. Until then the replay shows `drift_pending`,
   which doesn't fail it.
+  - **Optionally,** the link step can call `recomputeGroupsOf` for both ends
+    after each `linked`, best effort, so the link reaches the group at once.
+    #738's phase 2 recommends this but doesn't require it.
+- **Phase 2's request field.** #738's phase 2 calls its own `POST start` field
+  `startedFrom: "page"`, not `origin`. So this spec's `origin` column keeps its
+  name, with no clash.
 - A burst of links during the phase 1 exit run would add `manual_added`
   coverage and pending drift. So linking ships behind
   `APPLICANT_LINKING_ENABLED` (default `false`). It is switched on outside
