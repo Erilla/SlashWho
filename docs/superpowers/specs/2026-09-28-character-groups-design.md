@@ -723,8 +723,8 @@ growth costs little new collection.
 
 ### Phase 1 exit record (2026-10-13)
 
-**Rebuild.** Ran on test on 2026-09-29 against
-`iriguchi.proxy.rlwy.net:29803/railway`: 43 observers, 310 links, 31 groups.
+**Rebuild.** Ran on 2026-09-29 against the test database: 43 observers, 310
+links, 31 groups.
 The window starts at 2026-09-29T10:29:20.789Z.
 
 **Replays.** Each had 0 failures.

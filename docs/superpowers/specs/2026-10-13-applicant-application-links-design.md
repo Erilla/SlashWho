@@ -64,7 +64,7 @@ The maintainer decided:
 - The watcher tick runs only inside `scheduleEvidenceResume`, a pg-boss cron
   at `*/5 * * * *`. Nothing can poll more often than that.
 - The due check, `Date.now() - last_polled_at >= cadenceMs`, compares against
-  a `last_polled_at` stamped inside `reconcileApplicantCounts`, *after* the
+  a `last_polled_at` stamped inside `reconcileApplicantCounts`, _after_ the
   Sheets read. When the cadence equals the cron period, a tick whose start is
   earlier than the previous read's duration falls just short and skips a
   whole period. That is the 10-minute spacing on test.
@@ -119,8 +119,7 @@ gate), so they start sooner but no more of them run.
 
 ### Data model (migration 0074)
 
-The migration is `0074`, journal idx 73, with a `when` greater than
-1792011600024. It creates the new tables first, then adds the column that
+The migration is `0074`, journal idx 73, with a `when` greater than 1792011600024. It creates the new tables first, then adds the column that
 references them.
 
 New tables:
@@ -153,6 +152,7 @@ the high-water mark described below.
   `applicant_source_applications(id) ON DELETE SET NULL`.
 
 **Retention.**
+
 - Member rows are deleted when their application closes. Only the counts
   stay, so the database doesn't keep a record of which characters were
   submitted together.
@@ -187,6 +187,7 @@ So applications don't use the occurrence index. They use the form's own
 timestamp, as a raw serial, against a high-water mark.
 
 **Reading column A.**
+
 - After the existing batchGet, the poll makes a second request: a batchGet
   of `'Form Responses'!A2:A` and the link column, with
   `valueRenderOption=UNFORMATTED_VALUE` and
@@ -206,6 +207,7 @@ timestamp, as a raw serial, against a high-water mark.
     reads.
 
 **The high-water mark.**
+
 - `applicant_source_state.submitted_serial_mark` is the largest column-A
   serial seen at the end of the last successful poll.
 - The baseline poll and each re-baselining poll set it without recording
@@ -222,12 +224,14 @@ timestamp, as a raw serial, against a high-water mark.
 
 **Choosing the row.** When an intent is inserted for identity X, the
 candidate rows are those where:
+
 - X is the **first** accepted link;
 - the serial is greater than the occurrence's carried mark;
 - the serial is greater than the `submitted_serial` of X's newest existing
   application, if X has one.
 
 Then:
+
 - **Exactly one candidate:** record an application from that row.
 - **None:** record nothing. The new occurrence came from another position
   (such as a reference in someone else's row), or from a row older than the
@@ -239,6 +243,7 @@ Then:
 **Edited responses.** If respondents can edit their responses, Google Forms
 may set the row's timestamp to the time of the edit. That isn't verified for
 this form. Either way, the rules above handle it:
+
 - An edited row rises above the mark, but it creates an application only if
   a newly inserted intent's identity is its first link. If the edit put a
   new character first, that is the applicant's updated application, and
@@ -257,6 +262,7 @@ If the root intent is inserted as `suppressed`, the intake transaction sets
 
 **Member intents.** Each member records the intent that belongs to this
 application in `member_intent_sequence`.
+
 - If the member's intent is inserted in the same intake transaction, record
   that sequence.
 - If the member's occurrence is deferred, leave it NULL. When an intent for
@@ -285,6 +291,7 @@ statement's transaction. The linking step considers only settled
 applications.
 
 **Selection:**
+
 - Open applications with `settled_at` set.
 - Ordered by `last_checked_at`, oldest first, so waiting applications don't
   starve newer ones. Each visit updates `last_checked_at`.
@@ -333,6 +340,7 @@ For each application:
    member rows.
 
 **The cross-group check.**
+
 - It runs only after the member's intent is settled and its character row
   exists, so it never decides on a member that hasn't been discovered.
 - It computes both components on the fly, from the same counting links as
@@ -391,11 +399,12 @@ until the applicant submits again.
 ### Origin and the reviewer's add
 
 **Writes.**
+
 - **Worker add:** `INSERT … origin = 'applicant_sheet' … ON CONFLICT DO
-  NOTHING`. An existing reviewer link stays a reviewer link.
+NOTHING`. An existing reviewer link stays a reviewer link.
 - **Web add:** `ON CONFLICT DO UPDATE SET origin = 'dossier',
-  applicant_application_id = NULL WHERE manual_dossier_connections.origin <>
-  'dossier' RETURNING (xmax = 0) AS inserted`.
+applicant_application_id = NULL WHERE manual_dossier_connections.origin <>
+'dossier' RETURNING (xmax = 0) AS inserted`.
   - A new row returns `inserted` true, so the result is `added`.
   - A conversion from `applicant_sheet` returns `inserted` false, so the
     result is `duplicate`.
@@ -410,6 +419,7 @@ until the applicant submits again.
 separate optional field carries the origin, and is used only to choose the
 label text. A new source value would fall through to wrong values in at
 least these places:
+
 - `applicant-dossier-service.ts:793-800` maps unknown sources to
   `raiderio_declared`.
 - `dossierSourceLabelSchema` in `packages/contracts/src/dossier.ts` is a
@@ -421,6 +431,7 @@ least these places:
 - `group-subjects.ts:60` and `:129` hard-code `manually_added`.
 
 So:
+
 - **Contracts:** the dossier character schema gains
   `origin: z.literal("application").optional()`.
 - **The manual-connections repository** returns `origin` from `list`.
@@ -486,6 +497,7 @@ held) still alerts when it's first seen.
 ### Tests
 
 **Intake**
+
 - One application with its members in cell order.
 - None for single-link rows, baselines or re-baselines.
 - None when the new occurrence isn't a first link.
@@ -510,6 +522,7 @@ held) still alerts when it's first seen.
 - A root inserted as `suppressed` is settled at intake.
 
 **The linking step**
+
 - Waits for an unsettled root, then for an undiscovered one.
 - Settlement is written when the drain moves the root intent to `done` or
   `suppressed`.
@@ -541,6 +554,7 @@ held) still alerts when it's first seen.
   the step off.
 
 **Origin**
+
 - A web add over a worker link becomes `dossier`, keeps `excluded_at`, and
   returns `duplicate`.
 - A web add over a reviewer link returns `duplicate` and changes nothing.
@@ -551,10 +565,12 @@ held) still alerts when it's first seen.
   link.
 
 **Resubmission**
+
 - After a reviewer removes a worker link, a new application links it again.
 - After a reviewer excludes one, it isn't re-linked in either direction.
 
 **Alert**
+
 - One alert per new multi-link row, with the root's dossier URL and the right
   text for each case.
 - No second alert when a deferred root's application is recorded.
@@ -565,6 +581,7 @@ held) still alerts when it's first seen.
 ### Docs
 
 `docs/operations/applicant-sheet-watcher.md`:
+
 - It says the watcher only starts discovery and evidence. Describe the
   linking, its safeguards and the flag.
 - Extend the "only … stored" list with the application tables and the
@@ -575,6 +592,7 @@ held) still alerts when it's first seen.
   appended rows fails the poll.
 
 Also update:
+
 - `docs/operations/character-groups.md` and the character-groups design's
   rollback section: set `APPLICANT_LINKING_ENABLED=false` before reverting
   phase 1.
