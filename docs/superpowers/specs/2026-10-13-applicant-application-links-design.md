@@ -1,8 +1,9 @@
 # Linking the characters in each application, and polling every minute
 
-**Status (2026-10-13): proposed, revision 3.** Nothing here is built. The
-design went through one review with the Manager before being written. This
-revision folds in its reviews of the written drafts (38bb2789 and cf2e9d6e),
+**Status (2026-10-13): implemented, revision 3.** Change 1 shipped in #909.
+Change 2 is implemented on `feat/applicant-application-links`, behind
+`APPLICANT_LINKING_ENABLED` (off by default). The design went through one
+review with the Manager before being written. This revision folds in its reviews of the written drafts (38bb2789 and cf2e9d6e),
 plus the maintainer's answers.
 
 ## Problem
@@ -197,8 +198,8 @@ timestamp, as a raw serial, against a high-water mark.
   the text in link cells.
 - Serials are compared only with each other and never converted to UTC, so
   the spreadsheet's time zone and daylight saving don't matter.
-- **Aligning the reads.** The link column from the second request must match
-  the first request's link column, cell for cell.
+- **Aligning the reads.** The parsed character links in each row of the
+  second request must match those in the same row of the first request.
   - The second read may have extra rows at the end, appended by Forms
     between the reads. Drop them.
   - Any other difference fails the whole poll without advancing any state,
