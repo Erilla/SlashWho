@@ -2456,7 +2456,6 @@ describe("worker runtime", () => {
         truncated: 0,
         newApplicants: []
       });
-      vi.mocked(drainApplicantIntents).mockClear();
       vi.mocked(drainApplicantIntents).mockResolvedValue({
         admitted: 0,
         suppressed: 0,
@@ -2528,22 +2527,32 @@ describe("worker runtime", () => {
           ([alert]) => alert.event === "applicant_poll_failed"
         );
 
-      // Back-off from a one-minute base: next attempts at +2, +4, +8 minutes.
+      // Back-off from a one-minute base: attempts land at 0, 2, 6, 14 and
+      // (next) 30 minutes. The alert must not wait for that 30: it is checked
+      // on every tick, so the skipped tick at 15 sends it.
       await tickAt(0);
       await tickAt(2);
       await tickAt(6);
-      expect(pollApplicantSheet).toHaveBeenCalledTimes(3);
+      await tickAt(14);
+      expect(pollApplicantSheet).toHaveBeenCalledTimes(4);
       expect(pollAlerts()).toEqual([]);
 
-      await tickAt(16);
+      await tickAt(15);
+      expect(pollApplicantSheet).toHaveBeenCalledTimes(4);
       expect(pollAlerts()).toEqual([
         [
           {
             event: "applicant_poll_failed",
-            details: { failures: 4, failingMinutes: 16 }
+            details: { failures: 4, failingMinutes: 15 }
           }
         ]
       ]);
+
+      // The hourly throttle: further ticks inside the hour send no second one.
+      await tickAt(16);
+      await tickAt(30);
+      await tickAt(74);
+      expect(pollAlerts()).toHaveLength(1);
       await runtime.stop();
     } finally {
       vi.useRealTimers();

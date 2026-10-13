@@ -1035,8 +1035,10 @@ function createApplicantSheetTick(
     } catch (error) {
       applicantPollFailures++;
       applicantFailingSince ??= Date.now();
+      // From the poll's start, so a slow failed read does not push the retry
+      // later still.
       applicantNextPollAttempt =
-        Date.now() +
+        pollStartedAtDate.getTime() +
         Math.min(
           3_600_000,
           config.applicantWatcher.cadenceMs *
@@ -1048,21 +1050,30 @@ function createApplicantSheetTick(
         durationMs: elapsedMs(clock, pollStartedAt),
         errorName: errorName(error)
       });
-      const failingMs = Date.now() - applicantFailingSince;
-      if (
-        failingMs >= pollFailureAlertMs &&
-        Date.now() - applicantAlertedAt > 3_600_000
-      ) {
-        applicantAlertedAt = Date.now();
-        await fingerprintAlertNotifier?.notify({
-          event: "applicant_poll_failed",
-          details: {
-            failures: applicantPollFailures,
-            failingMinutes: Math.floor(failingMs / 60_000)
-          }
-        });
-      }
     }
+  }
+
+  /**
+   * Alerts once polls have been failing for fifteen minutes. It runs on every
+   * tick, including those back-off skips: attempts land at about 0, 2, 6, 14
+   * and 30 minutes, so checking only when a poll runs would alert at 30.
+   */
+  async function alertOnLongFailure(): Promise<void> {
+    if (applicantFailingSince === null) return;
+    const failingMs = Date.now() - applicantFailingSince;
+    if (
+      failingMs < pollFailureAlertMs ||
+      Date.now() - applicantAlertedAt <= 3_600_000
+    )
+      return;
+    applicantAlertedAt = Date.now();
+    await fingerprintAlertNotifier?.notify({
+      event: "applicant_poll_failed",
+      details: {
+        failures: applicantPollFailures,
+        failingMinutes: Math.floor(failingMs / 60_000)
+      }
+    });
   }
 
   return async () => {
@@ -1085,6 +1096,7 @@ function createApplicantSheetTick(
       ) {
         await pollSheet();
       }
+      await alertOnLongFailure();
       if (Date.now() >= pointsBlockedUntil) {
         const drainStartedAt = clock();
         const wcl = evidenceGateway;

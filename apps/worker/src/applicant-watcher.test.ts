@@ -53,6 +53,27 @@ describe("isApplicantPollDue", () => {
     ).toBe(false);
   });
 
+  it("allows a tick a few seconds before the back-off deadline", () => {
+    // Break caught: the back-off compared with no tolerance, so a retry whose
+    // tick started 10 s early slipped a whole extra minute.
+    expect(
+      isApplicantPollDue({
+        now: at(11 * minute - 10_000),
+        lastPolledAt: last,
+        nextAttemptAt: at(11 * minute),
+        cadenceMs: minute
+      })
+    ).toBe(true);
+    expect(
+      isApplicantPollDue({
+        now: at(11 * minute - 16_000),
+        lastPolledAt: last,
+        nextAttemptAt: at(11 * minute),
+        cadenceMs: minute
+      })
+    ).toBe(false);
+  });
+
   it("reads last_polled_at as the string pg may return", () => {
     expect(
       isApplicantPollDue({
