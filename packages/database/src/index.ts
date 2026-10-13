@@ -8,6 +8,7 @@ export type {
 } from "./roster-profile-resolutions";
 export { StaleFingerprintDeliveryError } from "./fingerprint-delivery-error";
 export { createPostgresRepositories } from "./postgres-repositories";
+export { countingComponents } from "./character-connections";
 export { mergeRaiderIoFirstKills } from "./evidence/merge";
 export { loadCharacterGroupsAudit } from "./character-groups-audit";
 export type {
