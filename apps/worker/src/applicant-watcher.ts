@@ -30,8 +30,7 @@ export function isApplicantPollDue(input: {
   nextAttemptAt: number;
   cadenceMs: number;
 }): boolean {
-  if (input.now < input.nextAttemptAt - applicantPollToleranceMs)
-    return false;
+  if (input.now < input.nextAttemptAt - applicantPollToleranceMs) return false;
   if (!input.lastPolledAt) return true;
   return (
     input.now - new Date(input.lastPolledAt).getTime() >=

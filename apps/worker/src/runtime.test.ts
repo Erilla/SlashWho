@@ -2627,6 +2627,77 @@ describe("worker runtime", () => {
     }
   });
 
+  it("defers a numeric Warcraft Logs id on a low allowance and pauses the drain for five minutes", async () => {
+    // Break caught: the poll's own id check set no block, so each minute's
+    // poll probed the allowance again and the drain ran straight after it.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      const decisions: unknown[] = [];
+      vi.mocked(pollApplicantSheet).mockImplementation(async (input) => {
+        decisions.push(
+          await input.isSuppressed?.("warcraftlogs_id:42", new Date())
+        );
+        return {
+          baseline: false,
+          rebaselined: false,
+          created: 0,
+          backlog: 0,
+          invalid: 0,
+          truncated: 0,
+          newApplicants: []
+        };
+      });
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      const gateway = applicantGateway();
+      vi.mocked(gateway.getRateLimit).mockResolvedValue({
+        kind: "rate_limit",
+        limitPerHour: 3_600,
+        pointsSpentThisHour: 3_000,
+        pointsResetInSeconds: 600
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: () => gateway
+      });
+
+      await fakes.applicantSheetTickHandler?.();
+      expect(decisions).toEqual(["defer"]);
+      expect(gateway.getRateLimit).toHaveBeenCalledTimes(1);
+      expect(gateway.resolveCharacterById).not.toHaveBeenCalled();
+      expect(drainApplicantIntents).not.toHaveBeenCalled();
+
+      // Inside the block: the id check defers without another probe, and
+      // the drain stays paused.
+      vi.setSystemTime(start + 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(decisions).toEqual(["defer", "defer"]);
+      expect(gateway.getRateLimit).toHaveBeenCalledTimes(1);
+      expect(drainApplicantIntents).not.toHaveBeenCalled();
+
+      // The block has lapsed, so the poll probes again; the allowance is
+      // still low, so it blocks again and the drain stays paused.
+      vi.setSystemTime(start + 5 * 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(gateway.getRateLimit).toHaveBeenCalledTimes(2);
+      expect(drainApplicantIntents).not.toHaveBeenCalled();
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
   it("registers no applicant tick while the watcher is disabled", async () => {
     const fakes = runtimeFakes();
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
