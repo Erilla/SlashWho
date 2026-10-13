@@ -1,0 +1,11 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.guild-rankings",
+  "recordedOn": "2026-10-13",
+  "status": 422,
+  "body": {
+    "statusCode": 422,
+    "error": "Unprocessable Entity",
+    "message": "Could not find requested guild"
+  }
+}

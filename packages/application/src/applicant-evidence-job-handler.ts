@@ -528,6 +528,8 @@ function toCharacterMythicKillInput(
 }
 
 const MAX_RAIDER_IO_RANKING_REQUESTS_PER_RUN = 50;
+/** Checked nulls can resolve later, without paying again on every full run. */
+const HISTORIC_NULL_RANK_RECHECK_MS = 7 * 24 * 60 * 60_000;
 const RAIDER_IO_RANKING_CONCURRENCY = 4;
 
 /**
@@ -2244,9 +2246,17 @@ export function createApplicantEvidenceJobHandler(
           // stored rank whatever a new lookup returns, so a kill the last
           // published run already ranked is not worth a request. A stored
           // null is a no-match, which a later lookup can still resolve.
+          const rankCheckedAt = now();
           const storedRanks = new Set(
             (storedEvidence.parseOnlyKills ?? [])
-              .filter((kill) => kill.historicWorldRank != null)
+              .filter((kill) => {
+                if (kill.historicWorldRank != null) return true;
+                if (!kill.historicRankCheckedAt) return false;
+                const age =
+                  rankCheckedAt.getTime() -
+                  Date.parse(kill.historicRankCheckedAt);
+                return age >= 0 && age < HISTORIC_NULL_RANK_RECHECK_MS;
+              })
               .map((kill) => kill.fightUrl)
           );
           const requests = new Map<string, MythicBossRankingsOptions>();
@@ -2300,6 +2310,11 @@ export function createApplicantEvidenceJobHandler(
               for (const item of settled) {
                 if (item.result.kind === "rankings")
                   results.set(item.key, item.result.rows);
+                else if (
+                  item.result.code === "not_found" &&
+                  item.result.guildNotFound === true
+                )
+                  results.set(item.key, []);
                 else limitationCode ??= item.result.code;
               }
               for (let index = 0; index < publishedKills.length; index += 1) {
@@ -2312,7 +2327,7 @@ export function createApplicantEvidenceJobHandler(
                 if (rows) {
                   publishedKills[index] = {
                     ...kill,
-                    historicRankCheckedAt: new Date().toISOString(),
+                    historicRankCheckedAt: rankCheckedAt.toISOString(),
                     historicWorldRank: historicWorldRankForKill(
                       kill,
                       run.key.region,

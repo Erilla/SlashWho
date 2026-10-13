@@ -227,14 +227,23 @@ which they don't dent.
 - No committed recording has an `ignored` baseline yet; each gains one when
   it is next re-recorded.
 - Raider.IO: no 403 `profile_is_private`, no guildless character, no
-  `discord_profile: null`, no 429 or 5xx, and the guild rankings endpoints are
-  not recorded endpoints yet. The recorder and drift check do not yet fetch
-  `raid-progress` or logged encounters; their recordings were redacted by hand
+  `discord_profile: null`, no 429 or 5xx. Guild rankings/profile have error-only
+  recordings from #804; successful responses have not been recorded. The recorder
+  and drift check do not yet fetch guild endpoints, `raid-progress` or logged
+  encounters; their recordings were redacted by hand
   into the recorder's exact form.
 - The Blizzard token endpoint is deliberately not recordable: its body is a
   credential.
 
 ## Provenance
+
+The guild error recordings `raiderio/guild-rankings-unknown-guild.json` and
+`raiderio/guild-profile-unknown-guild.json` were captured on 13 October 2026
+outside the PR gate. Two unauthenticated requests used a synthetic nonexistent
+guild, a valid EU realm and a mapped raid. Rankings returned 422 and profile
+returned 400, both with the exact message `Could not find requested guild`.
+The envelopes retain no query string, key or guild identity; they were saved
+by hand and are verified by the closed endpoint policies in the PR gate.
 
 | File                                                                                                        | Recorded   | Notes                                                                                                                                                                                    |
 | ----------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
