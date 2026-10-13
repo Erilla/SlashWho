@@ -95,6 +95,22 @@ it("preserves schema drift as a limitation", async () => {
 
 const paths = ["/api/guilds/raid-rankings", "/api/v1/guilds/profile"];
 
+it("prefers a schema failure over a bare404 when both guild halves fail", async () => {
+  const client = createRaiderIoClient({
+    baseUrl: "https://raider.io",
+    timeoutMs: 1000,
+    fetch: async (input) =>
+      new URL(String(input)).pathname === paths[0]
+        ? new Response("missing", { status: 404 })
+        : Response.json({})
+  });
+  expect(await client.getMythicBossRankings(options)).toEqual({
+    kind: "limitation",
+    code: "schema_drift",
+    failureCode: "schema"
+  });
+});
+
 it.each([0, 1, 2])(
   "settles recorded guild no-match combination %i",
   async (failed) => {

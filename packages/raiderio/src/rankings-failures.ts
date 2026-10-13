@@ -67,7 +67,13 @@ export function guildPairLimitation(failures: readonly unknown[]): Limitation {
     (failure) => !(failure instanceof GuildNotFound)
   );
   if (real.length === 0) return rankingsLimitation(failures[0]);
-  const priority = (result: Limitation) => {
+  const priority = (result: Limitation, error: unknown) => {
+    if (
+      isUpstreamFailure(error) &&
+      error.kind === "transient" &&
+      error.status === 404
+    )
+      return 4;
     switch (result.failureCode) {
       case "throttled":
         return 0;
@@ -80,12 +86,18 @@ export function guildPairLimitation(failures: readonly unknown[]): Limitation {
         return 2;
       case "private":
         return 3;
-      default:
+      case "not_found":
+      case undefined:
         return 4;
     }
+    throw new Error("invalid_rankings_failure_code");
   };
   const results = real.map(rankingsLimitation);
-  const selected = [...results].sort((a, b) => priority(a) - priority(b))[0]!;
+  const selected = real
+    .map((error, index) => ({ error, result: results[index]! }))
+    .sort(
+      (a, b) => priority(a.result, a.error) - priority(b.result, b.error)
+    )[0]!.result;
   const delays = results
     .filter((item) => item.failureCode === "throttled")
     .flatMap((item) =>
