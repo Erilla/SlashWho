@@ -157,7 +157,7 @@ export function loadWorkerConfig(
     cadenceMs: integerInRange(
       environment.APPLICANT_POLL_CADENCE_MS,
       300_000,
-      300_000,
+      60_000,
       3_600_000,
       "invalid_applicant_poll_cadence"
     ),

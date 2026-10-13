@@ -120,6 +120,7 @@ describe("fingerprint resumption through the worker dispatcher", () => {
                 admissionWork = work;
               },
               scheduleEvidenceResume: async () => {},
+              scheduleApplicantSheetTick: async () => {},
               scheduleMaintenanceCleanup: async () => {},
               workCharacterEvidence: async () => {}
             }) satisfies DiscoveryQueue,

@@ -33,9 +33,13 @@ export function createApplicantSheetClient(
 ) {
   const fetch = options.fetch ?? globalThis.fetch;
   const range = `'Form Responses'!${options.column}2:${options.column}`;
+  // A token lasts an hour; minting one per read would be 1,440 a day.
+  let cachedToken: { value: string; refreshAt: number } | undefined;
   async function headersForRead(): Promise<Record<string, string>> {
     if (options.apiKey !== undefined)
       return { "x-goog-api-key": options.apiKey };
+    if (cachedToken && Date.now() < cachedToken.refreshAt)
+      return { authorization: `Bearer ${cachedToken.value}` };
     const now = Math.floor(Date.now() / 1000);
     const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
     const payload = base64url(
@@ -65,10 +69,21 @@ export function createApplicantSheetClient(
       throw new Error("applicant_google_auth_unavailable");
     }
     if (!response.ok) throw new Error("applicant_google_auth_rejected");
-    const token = ((await response.json()) as { access_token?: unknown })
-      .access_token;
+    const body = (await response.json()) as {
+      access_token?: unknown;
+      expires_in?: unknown;
+    };
+    const token = body.access_token;
     if (typeof token !== "string")
       throw new Error("applicant_google_auth_invalid");
+    const lifetimeSeconds =
+      typeof body.expires_in === "number" && body.expires_in > 0
+        ? body.expires_in
+        : 3_600;
+    cachedToken = {
+      value: token,
+      refreshAt: Date.now() + (lifetimeSeconds - 60) * 1_000
+    };
     return { authorization: `Bearer ${token}` };
   }
 
@@ -83,7 +98,13 @@ export function createApplicantSheetClient(
     } catch {
       throw new Error("applicant_sheet_unavailable");
     }
-    if (!response.ok) throw new Error("applicant_sheet_read_rejected");
+    if (!response.ok) {
+      // A revoked or expired token would otherwise fail every minute's read
+      // until its cached lifetime ran out.
+      if (response.status === 401 || response.status === 403)
+        cachedToken = undefined;
+      throw new Error("applicant_sheet_read_rejected");
+    }
     const raw = await response.text();
     if (raw.length > 2_000_000)
       throw new Error("applicant_sheet_bounds_exceeded");
