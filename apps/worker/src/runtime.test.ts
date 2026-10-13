@@ -3596,27 +3596,81 @@ it.each(["claim", "ack"] as const)(
   }
 );
 
-it.each(["active", "fresh"] as const)(
-  "fingerprint reader joins and repairs existing %s background work",
-  async (kind) => {
+it("fingerprint reader joins and repairs existing active background work", async () => {
+  const fakes = runtimeFakes();
+  let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+  fakes.dependencies.createHandler = (options) => {
+    handlerOptions = options;
+    return fakes.handler;
+  };
+  const run = {
+    id: "joined",
+    origin: "refresh",
+    status: "queued",
+    lightRefresh: true,
+    queueJobId: "waiting-job" as string | null
+  };
+  fakes.evidenceReserve.mockImplementation(async () => ({
+    kind: "active",
+    run,
+    active: run
+  }));
+  const promote = vi.spyOn(fakes.queue, "promoteCharacterEvidence");
+  const runtime = await createWorkerRuntime(config, fakes.dependencies);
+  try {
+    const root = { region: "eu", realm: "draenor", name: "root" } as const;
+    await handlerOptions!.enqueueFullEvidence!(
+      { ...root, name: "member" },
+      root
+    );
+    expect(promote).toHaveBeenCalledWith("waiting-job", 20);
+    expect(fakes.evidenceEnqueues).toEqual([]);
+    run.queueJobId = null;
+    await handlerOptions!.enqueueFullEvidence!(
+      { ...root, name: "member" },
+      root
+    );
+    expect(fakes.evidenceEnqueues).toEqual([
+      {
+        runId: "joined",
+        meta: expect.objectContaining({ priority: 20, mode: "light" })
+      }
+    ]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+it.each([true, false])(
+  "fingerprint admission reuses fresh evidence while promoting or repairing active work (queued job: %s)",
+  async (hasQueueJob) => {
     const fakes = runtimeFakes();
     let handlerOptions: DiscoveryJobHandlerOptions | undefined;
     fakes.dependencies.createHandler = (options) => {
       handlerOptions = options;
       return fakes.handler;
     };
-    const run = {
-      id: "joined",
-      origin: "refresh",
-      status: "queued",
-      lightRefresh: true,
-      queueJobId: "waiting-job" as string | null
+    const completedRun = {
+      id: "published",
+      mode: "full",
+      status: "complete",
+      lightRefresh: false,
+      completedAt: new Date()
     };
-    fakes.evidenceReserve.mockImplementation(async () => ({
-      kind,
-      run,
-      active: run
-    }));
+    const activeRun = {
+      id: "active",
+      origin: "refresh",
+      mode: "full",
+      status: "queued",
+      lightRefresh: false,
+      queueJobId: hasQueueJob ? "waiting-job" : null
+    };
+    fakes.evidenceReserve.mockResolvedValue({
+      kind: "fresh",
+      run: completedRun,
+      completed: { run: completedRun },
+      active: activeRun
+    } as never);
     const promote = vi.spyOn(fakes.queue, "promoteCharacterEvidence");
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
     try {
@@ -3625,17 +3679,170 @@ it.each(["active", "fresh"] as const)(
         { ...root, name: "member" },
         root
       );
-      expect(promote).toHaveBeenCalledWith("waiting-job", 20);
-      expect(fakes.evidenceEnqueues).toEqual([]);
-      run.queueJobId = null;
+
+      expect(fakes.evidenceReserve).toHaveBeenCalledOnce();
+      if (hasQueueJob) {
+        expect(promote).toHaveBeenCalledWith("waiting-job", 20);
+        expect(fakes.evidenceEnqueues).toEqual([]);
+        expect(fakes.evidenceMarkEnqueued).not.toHaveBeenCalled();
+      } else {
+        expect(promote).not.toHaveBeenCalled();
+        expect(fakes.evidenceEnqueues).toEqual([
+          {
+            runId: "active",
+            meta: expect.objectContaining({ priority: 20, mode: "full" })
+          }
+        ]);
+        expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
+          "active",
+          "active"
+        );
+      }
+    } finally {
+      await runtime.stop();
+    }
+  }
+);
+
+it("fingerprint admission reuses only fresh complete full evidence", async () => {
+  const fakes = runtimeFakes();
+  let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+  fakes.dependencies.createHandler = (options) => {
+    handlerOptions = options;
+    return fakes.handler;
+  };
+  const publishedRun = {
+    id: "published",
+    mode: "full",
+    status: "complete",
+    lightRefresh: false,
+    completedAt: new Date()
+  };
+  fakes.evidenceReserve.mockResolvedValue({
+    kind: "fresh",
+    run: publishedRun,
+    completed: { run: publishedRun },
+    active: null
+  } as never);
+  const runtime = await createWorkerRuntime(config, fakes.dependencies);
+  try {
+    const root = { region: "eu", realm: "draenor", name: "root" } as const;
+    await handlerOptions!.enqueueFullEvidence!(
+      { ...root, name: "member" },
+      root
+    );
+    expect(fakes.evidenceReserve).toHaveBeenCalledOnce();
+    const request = fakes.evidenceReserve.mock.calls[0]![0];
+    expect(
+      (request.at as Date).getTime() -
+        (request.freshnessCutoff as Date).getTime()
+    ).toBe(config.evidenceFreshnessHours * 60 * 60_000);
+    expect(fakes.evidenceEnqueues).toEqual([]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+it("fingerprint admission dispatches a complete full publication outside the freshness window", async () => {
+  const fakes = runtimeFakes();
+  let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+  fakes.dependencies.createHandler = (options) => {
+    handlerOptions = options;
+    return fakes.handler;
+  };
+  const staleRun = {
+    id: "stale",
+    mode: "full",
+    status: "complete",
+    lightRefresh: false,
+    completedAt: new Date(Date.now() - 48 * 60 * 60_000)
+  };
+  const newRun = {
+    id: "new-run",
+    origin: "fingerprint_admission",
+    status: "queued",
+    queueJobId: null,
+    mode: "full",
+    lightRefresh: false
+  };
+  fakes.evidenceReserve.mockResolvedValue({
+    kind: "reserved",
+    run: newRun,
+    completed: { run: staleRun },
+    active: newRun
+  } as never);
+  const runtime = await createWorkerRuntime(config, fakes.dependencies);
+  try {
+    const root = { region: "eu", realm: "draenor", name: "root" } as const;
+    await handlerOptions!.enqueueFullEvidence!(
+      { ...root, name: "member" },
+      root
+    );
+    expect(fakes.evidenceReserve).toHaveBeenCalledOnce();
+    expect(fakes.evidenceEnqueues).toEqual([
+      {
+        runId: "new-run",
+        meta: expect.objectContaining({ priority: 20, mode: "full" })
+      }
+    ]);
+  } finally {
+    await runtime.stop();
+  }
+});
+
+it.each([
+  { mode: "light", status: "complete", lightRefresh: true },
+  { mode: "full", status: "partial", lightRefresh: false }
+] as const)(
+  "fingerprint admission forces full evidence after a fresh $mode/$status publication",
+  async (publication) => {
+    const fakes = runtimeFakes();
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    fakes.dependencies.createHandler = (options) => {
+      handlerOptions = options;
+      return fakes.handler;
+    };
+    const previous = {
+      id: "published",
+      ...publication,
+      completedAt: new Date()
+    };
+    const newRun = {
+      id: "new-run",
+      origin: "fingerprint_admission",
+      status: "queued",
+      queueJobId: null,
+      mode: "full",
+      lightRefresh: false
+    };
+    fakes.evidenceReserve
+      .mockResolvedValueOnce({
+        kind: "fresh",
+        run: previous,
+        completed: { run: previous },
+        active: null
+      } as never)
+      .mockResolvedValueOnce({
+        kind: "reserved",
+        run: newRun,
+        completed: { run: previous },
+        active: newRun
+      } as never);
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    try {
+      const root = { region: "eu", realm: "draenor", name: "root" } as const;
       await handlerOptions!.enqueueFullEvidence!(
         { ...root, name: "member" },
         root
       );
+      expect(fakes.evidenceReserve).toHaveBeenCalledTimes(2);
+      expect(fakes.evidenceReserve.mock.calls[1]![0].freshnessCutoff).toEqual(
+        fakes.evidenceReserve.mock.calls[1]![0].at
+      );
       expect(fakes.evidenceEnqueues).toEqual([
         {
-          runId: "joined",
-          meta: expect.objectContaining({ priority: 20, mode: "light" })
+          runId: "new-run",
+          meta: expect.objectContaining({ priority: 20, mode: "full" })
         }
       ]);
     } finally {
