@@ -91,7 +91,11 @@ export async function restoreMissingHistoricRanks(options: {
     if (limitations.some((item) => item.code === result.code)) continue;
     const encounters = unrankedKills((key) => {
       const other = rankings.get(key);
-      return other?.kind === "limitation" && other.code === result.code;
+      return (
+        other?.kind === "limitation" &&
+        other.code === result.code &&
+        !(other.code === "not_found" && other.guildNotFound === true)
+      );
     });
     limitations.push({
       source: "raiderio",

@@ -2667,6 +2667,54 @@ describe("applicant dossier service", () => {
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["not_found", "unavailable"] as const)(
+    "attributes mixed %s failures only to unanswered bosses",
+    async (code) => {
+      const { dossiers, raiderio } = fixture({
+        snapshot: storedSnapshot(storedSnapshot().characters.slice(0, 1)),
+        historicWorldRank: null,
+        additionalKills: [
+          {
+            id: "10000000-0000-4000-8000-000000000099",
+            raidId: "42",
+            raidName: "Nerub-ar Palace",
+            bossId: "1233",
+            bossName: "The Silken Court",
+            journalBossId: null,
+            bossOrder: 7,
+            killedAt: "2024-09-30T20:00:00.000Z",
+            reportUrl: "https://www.warcraftlogs.com/reports/example",
+            fightUrl: "https://www.warcraftlogs.com/reports/example#fight=8",
+            guild: { name: "Outage", realm: "silvermoon" },
+            historicWorldRank: null,
+            historicRankCheckedAt: null,
+            parsesReadAt: null,
+            performance: {
+              damage: { state: "unavailable" },
+              healing: { state: "unavailable" },
+              bossDamage: { state: "unavailable" }
+            }
+          }
+        ]
+      });
+      vi.mocked(raiderio.getMythicBossRankings).mockImplementation(
+        async (request) =>
+          request.guild?.name === "Outage"
+            ? { kind: "limitation", code }
+            : { kind: "limitation", code: "not_found", guildNotFound: true }
+      );
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      const failures = result.dossier.limitations.filter(
+        (item) => item.source === "raiderio"
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.encounters).toEqual([
+        { raidName: "Nerub-ar Palace", bossName: "The Silken Court", kills: 1 }
+      ]);
+    }
+  );
+
   it.each([
     { kind: "limitation", code: "unavailable", failureCode: "http_4xx" },
     { kind: "limitation", code: "not_found" }
@@ -2695,8 +2743,11 @@ describe("applicant dossier service", () => {
   );
 
   it("retries confirmed no-match persistence when the write fails", async () => {
+    // One character: the default fixture reuses the same kill ID for both
+    // linked characters, producing two legitimate per-kill attempts per read.
     const { dossiers, raiderio, repositories } = fixture({
-      historicWorldRank: null
+      historicWorldRank: null,
+      snapshot: storedSnapshot(storedSnapshot().characters.slice(0, 1))
     });
     vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
       kind: "limitation",
@@ -2707,6 +2758,9 @@ describe("applicant dossier service", () => {
       new Error("write_failed")
     );
     await dossiers.read(root);
+    expect(
+      repositories.evidence.recordHistoricRankLookup
+    ).toHaveBeenCalledTimes(1);
     await dossiers.read(root);
     expect(
       vi
