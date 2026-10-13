@@ -934,6 +934,10 @@ function createApplicantSheetTick(
   const { config, pool, repositories, queue, clock, logger } = context;
   const { gateway, evidenceGateway, fingerprintAlertNotifier } = handlers;
   let applicantPollFailures = 0;
+  // When the current run of failed polls began. A count of failures is a poor
+  // stand-in at a one-minute cadence: three of them is only six minutes.
+  let applicantFailingSince: number | null = null;
+  const pollFailureAlertMs = 900_000;
   let applicantNextPollAttempt = 0;
   let applicantAlertedAt = 0;
   // A blocked WCL allowance stays blocked for a while; probing it again every
@@ -990,6 +994,7 @@ function createApplicantSheetTick(
         backlogLimit: config.applicantWatcher.backlog
       });
       applicantPollFailures = 0;
+      applicantFailingSince = null;
       applicantNextPollAttempt = 0;
       logger?.info({
         event: "applicant_sheet_poll",
@@ -1029,6 +1034,7 @@ function createApplicantSheetTick(
       }
     } catch (error) {
       applicantPollFailures++;
+      applicantFailingSince ??= Date.now();
       applicantNextPollAttempt =
         Date.now() +
         Math.min(
@@ -1042,14 +1048,18 @@ function createApplicantSheetTick(
         durationMs: elapsedMs(clock, pollStartedAt),
         errorName: errorName(error)
       });
+      const failingMs = Date.now() - applicantFailingSince;
       if (
-        applicantPollFailures >= 3 &&
+        failingMs >= pollFailureAlertMs &&
         Date.now() - applicantAlertedAt > 3_600_000
       ) {
         applicantAlertedAt = Date.now();
         await fingerprintAlertNotifier?.notify({
           event: "applicant_poll_failed",
-          details: { failures: applicantPollFailures }
+          details: {
+            failures: applicantPollFailures,
+            failingMinutes: Math.floor(failingMs / 60_000)
+          }
         });
       }
     }

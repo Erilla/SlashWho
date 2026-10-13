@@ -2485,6 +2485,137 @@ describe("worker runtime", () => {
     }
   });
 
+  it("alerts once polls have failed for fifteen minutes, however many attempts that took", async () => {
+    // Break caught: at a one-minute cadence, three failures came about six
+    // minutes in, and a short Sheets outage paged the maintainer.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      vi.mocked(pollApplicantSheet).mockRejectedValue(new Error("sheet_down"));
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      const notify = vi.fn(async (_alert: { event: string }) => undefined);
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(
+        {
+          ...applicantConfig,
+          applicantWatcher: {
+            ...applicantConfig.applicantWatcher,
+            cadenceMs: 60_000
+          }
+        },
+        {
+          ...fakes.dependencies,
+          createEvidenceGateway: applicantGateway,
+          createFingerprintAlertNotifier: () => ({ notify })
+        }
+      );
+      const tickAt = async (minutes: number) => {
+        vi.setSystemTime(start + minutes * 60_000);
+        await fakes.applicantSheetTickHandler?.();
+      };
+      const pollAlerts = () =>
+        notify.mock.calls.filter(
+          ([alert]) =>
+            (alert as { event: string }).event === "applicant_poll_failed"
+        );
+
+      // Back-off from a one-minute base: next attempts at +2, +4, +8 minutes.
+      await tickAt(0);
+      await tickAt(2);
+      await tickAt(6);
+      expect(pollApplicantSheet).toHaveBeenCalledTimes(3);
+      expect(pollAlerts()).toEqual([]);
+
+      await tickAt(16);
+      expect(pollAlerts()).toEqual([
+        [
+          {
+            event: "applicant_poll_failed",
+            details: { failures: 4, failingMinutes: 16 }
+          }
+        ]
+      ]);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("restarts the failure clock after a successful poll", async () => {
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      const ok = {
+        baseline: false,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        newApplicants: []
+      };
+      vi.mocked(pollApplicantSheet)
+        .mockRejectedValueOnce(new Error("sheet_down"))
+        .mockResolvedValueOnce(ok)
+        .mockRejectedValue(new Error("sheet_down"));
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      const notify = vi.fn(async (_alert: { event: string }) => undefined);
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(
+        {
+          ...applicantConfig,
+          applicantWatcher: {
+            ...applicantConfig.applicantWatcher,
+            cadenceMs: 60_000
+          }
+        },
+        {
+          ...fakes.dependencies,
+          createEvidenceGateway: applicantGateway,
+          createFingerprintAlertNotifier: () => ({ notify })
+        }
+      );
+      const tickAt = async (minutes: number) => {
+        vi.setSystemTime(start + minutes * 60_000);
+        await fakes.applicantSheetTickHandler?.();
+      };
+
+      await tickAt(0); // fails
+      await tickAt(2); // succeeds, so the streak ends
+      await tickAt(10); // fails: the streak starts again here
+      await tickAt(20); // 10 minutes into the new streak
+      expect(
+        notify.mock.calls.filter(
+          ([alert]) =>
+            (alert as { event: string }).event === "applicant_poll_failed"
+        )
+      ).toEqual([]);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
   it("registers no applicant tick while the watcher is disabled", async () => {
     const fakes = runtimeFakes();
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
