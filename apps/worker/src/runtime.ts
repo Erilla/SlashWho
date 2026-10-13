@@ -52,6 +52,7 @@ import { createApplicantSheetClient } from "./applicant-sheet";
 import { decodeApplicantIdentity } from "./applicant-identity";
 import {
   drainApplicantIntents,
+  isApplicantPollDue,
   pollApplicantSheet,
   wasSuppressedAt
 } from "./applicant-watcher";
@@ -945,11 +946,22 @@ function createApplicantSheetTick(
   const { config, pool, repositories, queue, clock, logger } = context;
   const { gateway, evidenceGateway, fingerprintAlertNotifier } = handlers;
   let applicantPollFailures = 0;
+  // When the current run of failed polls began. A count of failures is a poor
+  // stand-in at a one-minute cadence: three of them is only six minutes.
+  let applicantFailingSince: number | null = null;
+  const pollFailureAlertMs = 900_000;
   let applicantNextPollAttempt = 0;
   let applicantAlertedAt = 0;
+  // A blocked WCL allowance stays blocked for a while; probing it again every
+  // minute would spend a point a probe while points are already short.
+  const pointsBlockMs = 300_000;
+  let pointsBlockedUntil = 0;
 
   async function pollSheet(): Promise<void> {
     const pollStartedAt = clock();
+    // last_polled_at is this poll's start, so the next due check measures a
+    // whole cadence from when this tick began, however long the read took.
+    const pollStartedAtDate = new Date();
     try {
       let numericChecks = 0;
       let numericAllowance: boolean | undefined;
@@ -957,6 +969,7 @@ function createApplicantSheetTick(
       const poll = await pollApplicantSheet({
         pool: pool as Pool,
         readRows: () => applicantSheet.readRows(),
+        now: () => pollStartedAtDate,
         resolveDossierPath: (identity) => resolvedDossiers.get(identity),
         isSuppressed: async (identity, observedAt) => {
           const decoded = decodeApplicantIdentity(identity);
@@ -964,12 +977,15 @@ function createApplicantSheetTick(
             if (++numericChecks > 4 || !evidenceGateway.resolveCharacterById)
               return "defer";
             try {
+              if (Date.now() < pointsBlockedUntil) return "defer";
               if (numericAllowance === undefined) {
                 const allowance = await evidenceGateway.getRateLimit();
                 numericAllowance =
                   allowance.kind === "rate_limit" &&
                   allowance.limitPerHour - allowance.pointsSpentThisHour >=
                     config.applicantWatcher.minimumPoints;
+                if (!numericAllowance)
+                  pointsBlockedUntil = Date.now() + pointsBlockMs;
               }
               if (!numericAllowance) return "defer";
               const resolved = await evidenceGateway.resolveCharacterById(
@@ -990,6 +1006,7 @@ function createApplicantSheetTick(
         backlogLimit: config.applicantWatcher.backlog
       });
       applicantPollFailures = 0;
+      applicantFailingSince = null;
       applicantNextPollAttempt = 0;
       logger?.info({
         event: "applicant_sheet_poll",
@@ -1029,8 +1046,11 @@ function createApplicantSheetTick(
       }
     } catch (error) {
       applicantPollFailures++;
+      applicantFailingSince ??= Date.now();
+      // From the poll's start, so a slow failed read does not push the retry
+      // later still.
       applicantNextPollAttempt =
-        Date.now() +
+        pollStartedAtDate.getTime() +
         Math.min(
           3_600_000,
           config.applicantWatcher.cadenceMs *
@@ -1042,17 +1062,30 @@ function createApplicantSheetTick(
         durationMs: elapsedMs(clock, pollStartedAt),
         errorName: errorName(error)
       });
-      if (
-        applicantPollFailures >= 3 &&
-        Date.now() - applicantAlertedAt > 3_600_000
-      ) {
-        applicantAlertedAt = Date.now();
-        await fingerprintAlertNotifier?.notify({
-          event: "applicant_poll_failed",
-          details: { failures: applicantPollFailures }
-        });
-      }
     }
+  }
+
+  /**
+   * Alerts once polls have been failing for fifteen minutes. It runs on every
+   * tick, including those back-off skips: attempts land at about 0, 2, 6, 14
+   * and 30 minutes, so checking only when a poll runs would alert at 30.
+   */
+  async function alertOnLongFailure(): Promise<void> {
+    if (applicantFailingSince === null) return;
+    const failingMs = Date.now() - applicantFailingSince;
+    if (
+      failingMs < pollFailureAlertMs ||
+      Date.now() - applicantAlertedAt <= 3_600_000
+    )
+      return;
+    applicantAlertedAt = Date.now();
+    await fingerprintAlertNotifier?.notify({
+      event: "applicant_poll_failed",
+      details: {
+        failures: applicantPollFailures,
+        failingMinutes: Math.floor(failingMs / 60_000)
+      }
+    });
   }
 
   return async () => {
@@ -1064,35 +1097,42 @@ function createApplicantSheetTick(
         "SELECT last_polled_at FROM applicant_source_state WHERE source = $1",
         ["applicant_sheet"]
       );
-      const last = due.rows[0]?.last_polled_at;
       if (
-        (Date.now() >= applicantNextPollAttempt && !last) ||
-        (Date.now() >= applicantNextPollAttempt &&
-          Date.now() - new Date(last as string).getTime() >=
-            config.applicantWatcher.cadenceMs)
+        isApplicantPollDue({
+          now: Date.now(),
+          lastPolledAt: due.rows[0]?.last_polled_at as
+            Date | string | null | undefined,
+          nextAttemptAt: applicantNextPollAttempt,
+          cadenceMs: config.applicantWatcher.cadenceMs
+        })
       ) {
         await pollSheet();
       }
-      const drainStartedAt = clock();
-      const wcl = evidenceGateway;
-      if (!wcl.resolveCharacterById)
-        throw new Error("applicant_resolver_unavailable");
-      const drained = await drainApplicantIntents({
-        pool: pool as Pool,
-        config,
-        repositories,
-        queue,
-        raiderio: gateway,
-        warcraftlogs: {
-          getRateLimit: wcl.getRateLimit,
-          resolveCharacterById: wcl.resolveCharacterById
-        }
-      });
-      logger?.info({
-        event: "applicant_sheet_drain",
-        ...drained,
-        durationMs: elapsedMs(clock, drainStartedAt)
-      });
+      await alertOnLongFailure();
+      if (Date.now() >= pointsBlockedUntil) {
+        const drainStartedAt = clock();
+        const wcl = evidenceGateway;
+        if (!wcl.resolveCharacterById)
+          throw new Error("applicant_resolver_unavailable");
+        const drained = await drainApplicantIntents({
+          pool: pool as Pool,
+          config,
+          repositories,
+          queue,
+          raiderio: gateway,
+          warcraftlogs: {
+            getRateLimit: wcl.getRateLimit,
+            resolveCharacterById: wcl.resolveCharacterById
+          }
+        });
+        if (drained.pointsBlocked)
+          pointsBlockedUntil = Date.now() + pointsBlockMs;
+        logger?.info({
+          event: "applicant_sheet_drain",
+          ...drained,
+          durationMs: elapsedMs(clock, drainStartedAt)
+        });
+      }
     } catch (error) {
       logger?.info({
         event: "applicant_sheet_tick_failed",
@@ -1248,10 +1288,11 @@ export async function createWorkerRuntime(
     await initializedQueue.workFingerprintAdmissions(
       fingerprintAdmissionWork(context, dispatchAdmittedFingerprintRun)
     );
-    await initializedQueue.scheduleEvidenceResume(async () => {
-      await evidenceResumeSweep(context);
-      await applicantSheetTick?.();
-    });
+    await initializedQueue.scheduleEvidenceResume(() =>
+      evidenceResumeSweep(context)
+    );
+    if (applicantSheetTick)
+      await initializedQueue.scheduleApplicantSheetTick(applicantSheetTick);
     await initializedQueue.scheduleMaintenanceCleanup(() =>
       maintenanceCleanup(context)
     );
