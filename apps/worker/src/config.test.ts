@@ -458,6 +458,12 @@ it("keeps applicant linking off unless explicitly enabled", () => {
     loadWorkerConfig({ ...environment, APPLICANT_LINKING_ENABLED: "true" })
       .applicantWatcher.linkingEnabled
   ).toBe(true);
+  // An empty value is unset, as for APPLICANT_WATCHER_ENABLED: off, not a
+  // startup failure.
+  expect(
+    loadWorkerConfig({ ...environment, APPLICANT_LINKING_ENABLED: "" })
+      .applicantWatcher.linkingEnabled
+  ).toBe(false);
   expect(() =>
     loadWorkerConfig({ ...environment, APPLICANT_LINKING_ENABLED: "yes" })
   ).toThrow("invalid_applicant_linking_enabled");

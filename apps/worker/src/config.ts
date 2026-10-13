@@ -142,7 +142,8 @@ export function loadWorkerConfig(
   )
     throw new Error("invalid_applicant_watcher_enabled");
   if (
-    environment.APPLICANT_LINKING_ENABLED !== undefined &&
+    // An empty value is unset, as for APPLICANT_WATCHER_ENABLED: off.
+    environment.APPLICANT_LINKING_ENABLED &&
     !["true", "false"].includes(environment.APPLICANT_LINKING_ENABLED)
   )
     throw new Error("invalid_applicant_linking_enabled");
