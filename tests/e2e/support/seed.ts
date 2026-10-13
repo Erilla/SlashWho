@@ -357,13 +357,37 @@ export async function seedSyntheticEvidence(
       { ...phase, state: "active", startedAt: now, completedAt: null },
       { ...phase, state: "completed", startedAt: now, completedAt: now }
     ]);
+    const { raiderIoLoggedEncounters, ...generated } = syntheticEvidence(
+      key.name,
+      volume
+    );
+    if (raiderIoLoggedEncounters) {
+      await repositories.evidence.saveRaiderIoLoggedEncounters!(
+        raiderIoLoggedEncounters,
+        now
+      );
+    }
     await repositories.evidence.publish(runId, {
       state: "complete",
       limitationCode: null,
       parseLimitationCode: null,
       completedAt: now,
-      ...syntheticEvidence(key.name, volume)
+      ...generated
     });
+    if (generated.raiderIoFirstKills) {
+      const stored = await repositories.evidence.getCompleted(key);
+      const firsts = stored?.raiderIoFirstKills ?? [];
+      const memberCount = firsts.reduce(
+        (sum, first) => sum + (first.encounter?.members.length ?? 0),
+        0
+      );
+      if (
+        firsts.length !== volume.raiderIoFirstKills ||
+        memberCount !== volume.rosterMembers
+      ) {
+        throw new Error("e2e_synthetic_first_kill_publication_incomplete");
+      }
+    }
   } finally {
     await pool.end();
   }

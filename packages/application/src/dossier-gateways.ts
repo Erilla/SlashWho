@@ -7,7 +7,8 @@ import type {
 import type {
   RaiderIoGateway,
   MythicBossRankingsOptions,
-  MythicBossRankingsResult
+  MythicBossRankingsResult,
+  RankingsFailureCode
 } from "@slashwho/raiderio";
 
 import { awaitWithAbort } from "./abort";
@@ -68,6 +69,39 @@ class RankingLookupFailure extends Error {
     readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
   ) {
     super("rankings_unavailable");
+  }
+}
+
+const rankingFailureFields = new Map<RankingsFailureCode, string>([
+  ["not_found", "raiderIoRankingsFailureNotFound"],
+  ["http_4xx", "raiderIoRankingsFailureHttp4xx"],
+  ["http_5xx", "raiderIoRankingsFailureHttp5xx"],
+  ["timeout", "raiderIoRankingsFailureTimeout"],
+  ["network", "raiderIoRankingsFailureNetwork"],
+  ["schema", "raiderIoRankingsFailureSchema"],
+  ["throttled", "raiderIoRankingsFailureThrottled"],
+  ["private", "raiderIoRankingsFailurePrivate"]
+]);
+
+function rankingFailureField(
+  result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
+): string {
+  if (result.failureCode) {
+    const field = rankingFailureFields.get(result.failureCode);
+    if (field) return field;
+  }
+  switch (result.code) {
+    case "not_found":
+      return "raiderIoRankingsFailureNotFound";
+    case "private":
+      return "raiderIoRankingsFailurePrivate";
+    case "schema_drift":
+      return "raiderIoRankingsFailureSchema";
+    case "rate_limited":
+      return "raiderIoRankingsFailureThrottled";
+    case "unavailable":
+    case "request_cap":
+      return "raiderIoRankingsFailureNetwork";
   }
 }
 
@@ -147,7 +181,8 @@ export function createDossierGateways(options: {
     negativeTtlMs: options.config.NEGATIVE_CACHE_TTL_MS,
     cacheFailure: (error) =>
       error instanceof RankingLookupFailure &&
-      error.result.code === "unavailable",
+      (error.result.code === "unavailable" ||
+        error.result.code === "not_found"),
     observe: (event) => options.onCacheEvent?.("raiderio_rankings", event)
   });
   // The limiter instance is shared across every request so it actually
@@ -278,13 +313,20 @@ export function createDossierGateways(options: {
             );
           } catch (error) {
             signal?.throwIfAborted();
-            return error instanceof RankingLookupFailure
-              ? error.result
-              : {
-                  kind: "limitation" as const,
-                  code: "unavailable" as const,
-                  observedAt: new Date().toISOString()
-                };
+            const result =
+              error instanceof RankingLookupFailure
+                ? error.result
+                : {
+                    kind: "limitation" as const,
+                    code: "unavailable" as const,
+                    failureCode:
+                      error instanceof Error && error.name === "TimeoutError"
+                        ? ("timeout" as const)
+                        : ("network" as const),
+                    observedAt: new Date().toISOString()
+                  };
+            scope?.increment(rankingFailureField(result));
+            return result;
           }
         }
       }

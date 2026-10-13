@@ -1,0 +1,11 @@
+{
+  "provider": "raiderio",
+  "endpoint": "raiderio.guild-profile",
+  "recordedOn": "2026-10-13",
+  "status": 400,
+  "body": {
+    "statusCode": 400,
+    "error": "Bad Request",
+    "message": "Could not find requested guild"
+  }
+}
