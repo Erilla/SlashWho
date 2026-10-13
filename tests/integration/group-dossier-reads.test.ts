@@ -19,6 +19,7 @@ import { withConsistentRead } from "../../packages/database/src/sql";
 import { resolveSubjects } from "../../packages/application/src/dossier-subjects";
 import { createSearchService } from "../../packages/application/src/search-service";
 import { applicationConfigSchema } from "../../packages/application/src/config";
+import { createApplicantDossierService } from "../../packages/application/src/applicant-dossier-service";
 
 const third = { region: "eu", realm: "silvermoon", name: "third" } as const;
 
@@ -280,6 +281,35 @@ describe("consistent group dossier projection", () => {
     const root = await repositories.groupReads!.read(rootKey, new Date());
     const alt = await repositories.groupReads!.read(altKey, new Date());
     expect(root!.groupId).toBe(alt!.groupId);
+  });
+
+  it("a suppressed opened character cannot bypass the historic-alias membership guard", async () => {
+    await grouped();
+    await repositories.suppressions.suppress(rootKey, "privacy", null);
+    const unavailable = async (): Promise<never> => {
+      throw new Error("provider_not_expected");
+    };
+    const dossiers = createApplicantDossierService({
+      repositories,
+      queue: { enqueueCharacterEvidence: unavailable },
+      search: { create: unavailable },
+      blizzard: { getCompletedAchievements: unavailable },
+      raiderio: {
+        getCharacter: unavailable,
+        getMythicBossRankings: unavailable
+      },
+      config: applicationConfigSchema.parse({
+        BOT_API_KEY: "bot-secret-that-is-at-least-32-characters",
+        RATE_LIMIT_HASH_SECRET: "rate-secret-that-is-at-least-32-characters"
+      }),
+      evidenceJobCredentialEncryptionKey: Buffer.alloc(32, "a")
+    });
+    expect(
+      await dossiers.addHistoricAlias(rootKey, rootKey, {
+        ...rootKey,
+        name: "oldname"
+      })
+    ).toBe("missing");
   });
 
   it("keeps the opened snapshot's guild rather than an arbitrary containing snapshot", async () => {

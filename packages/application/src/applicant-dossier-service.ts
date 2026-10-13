@@ -1137,7 +1137,6 @@ export function createApplicantDossierService(options: {
     target: CharacterKey
   ): Promise<boolean> {
     const wanted = canonicalCharacterId(target);
-    if (wanted === canonicalCharacterId(root)) return true;
     if (repositories.groupReads) {
       const group = await repositories.groupReads.read(root, new Date());
       const origin = group?.graph.idOf(root);
@@ -1150,6 +1149,7 @@ export function createApplicantDossierService(options: {
         )
       );
     }
+    if (wanted === canonicalCharacterId(root)) return true;
     const snapshot = await repositories.snapshots.getCurrent(root);
     if (
       snapshot?.characters.some(
@@ -1526,7 +1526,8 @@ export function createApplicantDossierService(options: {
       const resolved = await resolveSubjects(
         key,
         scopedRepositories(scope),
-        options.config
+        options.config,
+        options.logger
       );
       const subjects = resolved
         ? [...resolved.selected, ...resolved.skipped]
@@ -1605,7 +1606,12 @@ export function createApplicantDossierService(options: {
 
     async read(key, signal, overrides, scope) {
       const repositories = scopedRepositories(scope);
-      const resolved = await resolveSubjects(key, repositories, options.config);
+      const resolved = await resolveSubjects(
+        key,
+        repositories,
+        options.config,
+        options.logger
+      );
       if (!resolved) {
         // Evidence is keyed by character, not by dossier. Reuse that already
         // public material here, while the ordinary assembly path below still
