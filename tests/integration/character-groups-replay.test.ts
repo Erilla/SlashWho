@@ -412,7 +412,9 @@ describe("character groups replay", () => {
       source: "manually_added",
       level: 0
     });
-    const legacyShape = { ...uniform(next.selected)! };
+    const legacyShape: Partial<
+      import("../../packages/application/src/dossier-subjects").RankedSubject
+    > = { ...uniform(next.selected)! };
     delete legacyShape.hasManualConnection;
     expect(uniform(today.selected)).toMatchObject(legacyShape);
     expect(report.failures).toEqual([]);
