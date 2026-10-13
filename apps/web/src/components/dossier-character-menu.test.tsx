@@ -94,6 +94,20 @@ it("links a historic name and realm from a discovered character's keyboard menu"
   );
 });
 
+it("focuses the historic alias action on the opened character's menu", async () => {
+  render(<DossierCharacterMenu character={character} root={character.key} />);
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "Actions for Ryalts" });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  expect(
+    screen.queryByRole("menuitem", { name: "Exclude" })
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("menuitem", { name: "Link historic alias…" })
+  ).toHaveFocus();
+});
+
 it("offers Exclude for a discovered character", async () => {
   const fetchMock = stubFetch();
   render(
@@ -179,7 +193,7 @@ it("confirms a removal by naming the exact character", async () => {
   await user.click(screen.getByRole("menuitem", { name: "Remove…" }));
 
   const dialog = screen.getByRole("dialog", {
-    name: "Remove connected character"
+    name: "Remove the manual connection to Ryalts"
   });
   expect(dialog).toBeVisible();
   expect(dialog).toHaveTextContent("Ryalts");
@@ -292,4 +306,30 @@ it("closes the menu on Escape and returns focus to its trigger", async () => {
 
   expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   expect(trigger).toHaveFocus();
+});
+
+it("hides Remove on the opened character even with a manual connection", async () => {
+  render(
+    <DossierCharacterMenu
+      character={{ ...character, hasManualConnection: true }}
+      root={character.key}
+    />
+  );
+  await openMenu();
+  expect(
+    screen.queryByRole("menuitem", { name: "Remove…" })
+  ).not.toBeInTheDocument();
+});
+
+it("does not infer a manual connection from source when the group explicitly denies one", async () => {
+  render(
+    <DossierCharacterMenu
+      character={{ ...character, hasManualConnection: false }}
+      root={root}
+    />
+  );
+  await openMenu();
+  expect(
+    screen.queryByRole("menuitem", { name: "Remove…" })
+  ).not.toBeInTheDocument();
 });

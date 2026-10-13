@@ -8,12 +8,17 @@ import {
 } from "@slashwho/contracts";
 import { z } from "zod";
 import type {
+  GroupRead,
   DiscoveryQueue,
   Repositories,
   SearchReservationResult
 } from "@slashwho/database";
+import { groupMemberFacts } from "@slashwho/domain";
 import {
   canonicalCharacterId,
+  MAX_CONTINUATION_NON_PROGRESS_CYCLES,
+  isFresh,
+  isSweepDue,
   parseRaiderIoCharacterUrl,
   toCharacterPath,
   type CharacterKey,
@@ -42,9 +47,11 @@ export type CreateSearchCommand = Readonly<{
   characterUrl: string;
   headers: Pick<Headers, "get">;
   correlationId?: string | undefined;
+  startedFrom?: "page" | undefined;
 }>;
 
 export type CreateSearchResult =
+  | { kind: "group_ready"; key: CharacterKey }
   | { kind: "character"; character: CharacterResource }
   | {
       kind: "job";
@@ -56,6 +63,7 @@ export type CreateSearchResult =
       joinedExistingRun: boolean;
     }
   | { kind: "not_found"; code: "character_not_found" | "suppressed_character" }
+  | { kind: "rejected"; code: "connection_rejected" }
   | { kind: "invalid"; code: "invalid_character_url" }
   | { kind: "unauthorized"; code: "unauthorized" }
   | { kind: "client_ip_unavailable"; code: "trusted_client_ip_unavailable" }
@@ -117,7 +125,8 @@ export interface SearchService {
   /** Queues a bounded connected-character refresh without blocking the dossier. */
   scheduleConnectedCharacterSweep?(
     key: CharacterKey,
-    scope?: MeasurementScope
+    scope?: MeasurementScope,
+    groupRead?: GroupRead
   ): Promise<void>;
   cleanupExpired(now?: Date): Promise<CleanupCounts>;
 }
@@ -243,7 +252,8 @@ export function createSearchService(options: {
       SearchReservationResult,
       { kind: "active" | "reserved" }
     >,
-    staleCharacter: CharacterResource | null
+    staleCharacter: CharacterResource | null,
+    openedKey: CharacterKey
   ): Extract<CreateSearchResult, { kind: "job" }> {
     if (
       reservation.run.status !== "queued" &&
@@ -258,7 +268,7 @@ export function createSearchService(options: {
       jobId: reservation.run.id,
       status,
       statusUrl: `/api/v1/searches/${reservation.run.id}`,
-      characterUrl: toCharacterPath(reservation.run.rootKey)
+      characterUrl: toCharacterPath(openedKey)
     });
     if (response.kind !== "job") throw new Error("invalid_job_response");
     return searchJobResultSchema.parse({
@@ -311,8 +321,35 @@ export function createSearchService(options: {
         });
       }
 
-      const current = await repositories.snapshots.getCurrent(key);
+      const group = await repositories.groupReads?.read(key, at);
+      const current = group
+        ? group.ownSnapshot
+        : await repositories.snapshots.getCurrent(key);
       if (
+        group &&
+        isFresh(
+          groupMemberFacts(group, key).runs.flatMap((run) =>
+            run.status === "complete" && run.completedAt
+              ? [run.completedAt]
+              : []
+          ),
+          at,
+          options.config.FRESHNESS_HOURS
+        )
+      ) {
+        return limitedRead(
+          caller,
+          scope,
+          current
+            ? {
+                kind: "character",
+                character: serializeCharacterResource(current)
+              }
+            : { kind: "group_ready", key }
+        );
+      }
+      if (
+        !repositories.groupReads &&
         current &&
         current.refreshedAt.getTime() >
           at.getTime() - options.config.FRESHNESS_HOURS * 60 * 60 * 1_000
@@ -323,12 +360,26 @@ export function createSearchService(options: {
         });
       }
 
-      if (!current && (await repositories.negativeCache.find(key, at))) {
+      if (await repositories.negativeCache.find(key, at)) {
         return limitedRead(caller, scope, {
           kind: "not_found",
           code: "character_not_found"
         });
       }
+
+      const searchPolicy = rateLimiter.searchReservation(caller);
+      const allowance = await repositories.searchReservations.checkAllowance?.({
+        callerBucketHash: searchPolicy.bucketHash,
+        limit: searchPolicy.limit,
+        at: searchPolicy.at
+      });
+      if (allowance && !allowance.allowed)
+        return {
+          kind: "rate_limited",
+          retryAfterSeconds:
+            rateLimiter.retryDecision(allowance, searchPolicy.at)
+              .retryAfterSeconds ?? 1
+        };
 
       try {
         await readRootCharacter(key, scope);
@@ -349,7 +400,6 @@ export function createSearchService(options: {
         });
       }
 
-      const searchPolicy = rateLimiter.searchReservation(caller);
       const reservation = await repositories.searchReservations.reserve({
         key,
         callerClass: caller.callerClass,
@@ -393,6 +443,8 @@ export function createSearchService(options: {
             character: serializeCharacterResource(fresh)
           });
         }
+        if (await repositories.groupReads?.read(key, at))
+          return limitedRead(caller, scope, { kind: "group_ready", key });
         return limitedRead(caller, scope, {
           kind: "not_found",
           code: (await repositories.suppressions.isActive(key, at))
@@ -400,12 +452,14 @@ export function createSearchService(options: {
             : "character_not_found"
         });
       }
+      if (reservation.kind === "not_due")
+        return { kind: "failed", code: "search_failed" };
 
       const staleCharacter = current
         ? serializeCharacterResource(current, reservation.run)
         : null;
       if (reservation.kind === "active") {
-        return jobResult(reservation, staleCharacter);
+        return jobResult(reservation, staleCharacter, key);
       }
 
       let queueJobId: string;
@@ -423,7 +477,7 @@ export function createSearchService(options: {
       await repositories.searchReservations
         .markEnqueued(reservation.run.id, queueJobId)
         .catch(() => undefined);
-      return jobResult(reservation, staleCharacter);
+      return jobResult(reservation, staleCharacter, key);
     },
 
     async authorizePublicRead(headers, scope) {
@@ -520,13 +574,57 @@ export function createSearchService(options: {
         : null;
     },
 
-    async scheduleConnectedCharacterSweep(key, scope) {
+    async scheduleConnectedCharacterSweep(key, scope, groupRead) {
       const repositories = scope
         ? measuredRepositories(options.repositories, scope)
         : options.repositories;
       const sweeps = repositories.fingerprintSweeps;
-      if (!sweeps.isDueForVisit) return;
       const at = now();
+      const cadenceCutoff = new Date(
+        at.getTime() -
+          options.config.FINGERPRINT_SWEEP_CADENCE_HOURS * 3_600_000
+      );
+      if (repositories.groupReads) {
+        const group =
+          groupRead ?? (await repositories.groupReads.read(key, at));
+        if (!group) return;
+        const facts = groupMemberFacts(group, key);
+        if (
+          !isSweepDue(
+            facts.sweepStates,
+            facts.runs,
+            cadenceCutoff,
+            MAX_CONTINUATION_NON_PROGRESS_CYCLES
+          )
+        )
+          return;
+        const reservation = await repositories.searchReservations.reserve({
+          key,
+          callerClass: "anonymous",
+          callerBucketHash: "fingerprint-sweep-visit",
+          limit: 1_000_000,
+          expiresAt: new Date(at.getTime() + 3_600_000),
+          at,
+          freshnessCutoff: at,
+          ignoreFreshness: true,
+          sweepDue: {
+            cadenceCutoff,
+            maxFailures: MAX_CONTINUATION_NON_PROGRESS_CYCLES
+          }
+        });
+        if (reservation.kind !== "reserved") return;
+        const queueJobId = await options.queue.enqueue({
+          runId: reservation.run.id,
+          key: reservation.run.rootKey,
+          enqueuedAt: at.toISOString()
+        });
+        await repositories.searchReservations.markEnqueued(
+          reservation.run.id,
+          queueJobId
+        );
+        return;
+      }
+      if (!sweeps.isDueForVisit) return;
       const due = await sweeps.isDueForVisit(
         key,
         new Date(

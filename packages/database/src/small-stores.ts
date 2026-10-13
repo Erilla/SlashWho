@@ -4,6 +4,7 @@ import { activeRunSql } from "./discovery-runs";
 import { lockRoot } from "./locks";
 import type { Repositories } from "./repositories";
 import { one, withTransaction } from "./sql";
+import { createGroupEdits } from "./group-edits";
 
 export function createSmallStoreRepositories(
   pool: Pool
@@ -17,6 +18,7 @@ export function createSmallStoreRepositories(
 > {
   return {
     manualConnections: {
+      ...createGroupEdits(pool),
       async listDiscoveredExclusions(root) {
         const result = await pool.query<{
           region: CharacterKey["region"];

@@ -1181,6 +1181,15 @@ describe("worker runtime", () => {
       ready: true
     });
   });
+  it("identifies both worker database pools to PostgreSQL", async () => {
+    const fakes = runtimeFakes();
+    const pool = vi.spyOn(fakes.dependencies, "createPool");
+    const queue = vi.spyOn(fakes.dependencies, "createQueue");
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    expect(pool).toHaveBeenCalledWith(config.databaseUrl, "slashwho-worker");
+    expect(queue).toHaveBeenCalledWith(config.databaseUrl, "slashwho-worker");
+    await runtime.stop();
+  });
 
   it("reports aggregate worker progress without run or character identity", async () => {
     // Break caught: the probe could report readiness alone, or select and

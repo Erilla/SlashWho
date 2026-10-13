@@ -6,6 +6,7 @@ import {
 } from "@slashwho/contracts";
 import { evidenceRunPriority } from "@slashwho/database/evidence-priority";
 import type {
+  CharacterGroupMerge,
   DiscoveryQueue,
   EvidenceReservationResult,
   CompletedCharacterEvidence,
@@ -18,11 +19,15 @@ import type {
   StoredCharacterMythicWipe,
   StoredCharacterTierBestParse
 } from "@slashwho/database";
+import { groupMemberFacts } from "@slashwho/domain";
 import {
   buildApplicantDossier,
   collectGuildRaidNights,
   formatCharacterDisplayName,
   canonicalCharacterId,
+  groupPageMembers,
+  isFresh,
+  hasFailureBackoff,
   isAccountWideCuttingEdgeAchievement,
   parseApplicantCharacterUrl,
   summarizeLimitationEncounters,
@@ -67,7 +72,7 @@ import {
   searchDossierTier,
   type SearchDossierTierResult
 } from "./search-dossier-tier";
-import { legacyResolveSubjects, type DossierSubject } from "./dossier-subjects";
+import { resolveSubjects, type DossierSubject } from "./dossier-subjects";
 import { dossierRaiderIoFirstKill } from "./raiderio-first-kill-evidence";
 import {
   TIER_SEARCH_SPACING_MS,
@@ -890,6 +895,10 @@ function serializeDossierSubject(
           : character.source === "fingerprint"
             ? ("fingerprint_derived" as const)
             : ("raiderio_declared" as const),
+    ...(character.hasManualConnection !== undefined
+      ? { hasManualConnection: character.hasManualConnection }
+      : {}),
+    ...(character.origin ? { origin: character.origin } : {}),
     ...(excluded ? { excluded: true as const } : {}),
     ...(evidence
       ? {
@@ -1204,8 +1213,14 @@ function parseTarget(url: string): CharacterKey | null {
 export function createApplicantDossierService(options: {
   repositories: Pick<
     Repositories,
-    "snapshots" | "evidence" | "manualConnections" | "recentSearches" | "runs"
-  >;
+    | "snapshots"
+    | "evidence"
+    | "manualConnections"
+    | "recentSearches"
+    | "runs"
+    | "groupReads"
+  > &
+    Partial<Pick<Repositories, "suppressions">>;
   queue: Pick<
     DiscoveryQueue,
     "enqueueCharacterEvidence" | "promoteCharacterEvidence"
@@ -1230,12 +1245,42 @@ export function createApplicantDossierService(options: {
     if (!scope) return options.repositories;
     return measuredRepositories(options.repositories, scope);
   }
+  function logWebMerges(merges: readonly CharacterGroupMerge[]) {
+    if (merges.length === 0) return;
+    try {
+      options.logger?.info({
+        event: "character_groups_merged",
+        stage: "web",
+        mergedGroups: merges.reduce(
+          (count, merge) => count + merge.groupSizes.length - 1,
+          0
+        ),
+        groupSizes: merges.flatMap((merge) => merge.groupSizes)
+      });
+    } catch {
+      /* Logging cannot fail a committed edit. */
+    }
+  }
   async function isConnectedToDossier(
     repositories: typeof options.repositories,
     root: CharacterKey,
     target: CharacterKey
   ): Promise<boolean> {
     const wanted = canonicalCharacterId(target);
+    if (repositories.groupReads) {
+      if (wanted === canonicalCharacterId(root))
+        return !(await repositories.suppressions?.isActive(root, new Date()));
+      const group = await repositories.groupReads.read(root, new Date());
+      const origin = group?.graph.idOf(root);
+      return (
+        !!group &&
+        !!origin &&
+        [...groupPageMembers(origin, group.graph)].some(
+          (id) =>
+            canonicalCharacterId(group.graph.characters.get(id)!.key) === wanted
+        )
+      );
+    }
     if (wanted === canonicalCharacterId(root)) return true;
     const snapshot = await repositories.snapshots.getCurrent(root);
     if (
@@ -1271,6 +1316,16 @@ export function createApplicantDossierService(options: {
     target: CharacterKey
   ): Promise<readonly CharacterKey[]> {
     if (!repositories.evidence.warcraftLogsCharacterIds) return [];
+    if (repositories.groupReads) {
+      const group = await repositories.groupReads.read(root, new Date());
+      const originId = group?.graph.idOf(root);
+      const targetId = group?.graph.idOf(target);
+      if (!group || !originId || !targetId) return [];
+      const members = groupPageMembers(originId, group.graph);
+      return [...group.graph.sharedIdentity(targetId)]
+        .filter((id) => members.has(id) && id !== targetId && id !== originId)
+        .map((id) => group.graph.characters.get(id)!.key);
+    }
     const snapshot = await repositories.snapshots.getCurrent(root);
     const keys = [...(snapshot?.characters.map((item) => item.key) ?? [])];
     for (const connection of await repositories.manualConnections.list(root)) {
@@ -1448,7 +1503,12 @@ export function createApplicantDossierService(options: {
       // Only a search that opened a dossier is listed; a refused, suppressed
       // or unknown character is not. The list is a convenience, so failing to
       // record the search must not fail the search itself.
-      if (result.kind === "job" || result.kind === "character") {
+      if (
+        input.startedFrom !== "page" &&
+        (result.kind === "job" ||
+          result.kind === "character" ||
+          result.kind === "group_ready")
+      ) {
         await scopedRepositories(scope)
           .recentSearches?.record(key)
           .catch(() => {
@@ -1459,9 +1519,28 @@ export function createApplicantDossierService(options: {
     },
 
     async listRecentSearches(limit, scope) {
-      return (
+      const searches =
         (await scopedRepositories(scope).recentSearches?.listRecent(limit)) ??
-        []
+        [];
+      const groups = scopedRepositories(scope).groupReads;
+      if (!groups) return searches;
+      return Promise.all(
+        searches.map(async (search) => {
+          const group = await groups.read(search.key, new Date());
+          if (!group) return search;
+          const facts = groupMemberFacts(group, search.key);
+          return {
+            ...search,
+            inProgress:
+              facts.runs.some((run) =>
+                ["queued", "running", "retrying"].includes(run.status)
+              ) ||
+              group.activeEvidenceKeys.some((key) => {
+                const id = group.graph.idOf(key);
+                return id !== undefined && facts.ids.has(id);
+              })
+          };
+        })
       );
     },
 
@@ -1470,6 +1549,14 @@ export function createApplicantDossierService(options: {
       if (!target) return { kind: "invalid", code: "invalid_character_url" };
       if (canonicalCharacterId(root) === canonicalCharacterId(target))
         return { kind: "duplicate" };
+      if (
+        options.repositories.manualConnections.canAddGroupConnection &&
+        !(await options.repositories.manualConnections.canAddGroupConnection(
+          root,
+          target
+        ))
+      )
+        return { kind: "rejected", code: "connection_rejected" };
       const connectedCommand = {
         ...input,
         characterUrl: toRaiderIoUrl(target)
@@ -1481,11 +1568,18 @@ export function createApplicantDossierService(options: {
       // key, so this survives until discovery creates the character and the
       // dossier resolves it without a second attempt. Anything other than a
       // started search — invalid, suppressed, rate limited — links nothing.
-      if (result.kind !== "character" && result.kind !== "job") return result;
-      const connection = await options.repositories.manualConnections.add(
-        root,
-        target
-      );
+      if (
+        result.kind !== "character" &&
+        result.kind !== "job" &&
+        result.kind !== "group_ready"
+      )
+        return result;
+      const connections = options.repositories.manualConnections;
+      const connection = connections.addGroupConnection
+        ? await connections.addGroupConnection(root, target, logWebMerges)
+        : await connections.add(root, target);
+      if (connection === "rejected")
+        return { kind: "rejected", code: "connection_rejected" };
       if (result.kind === "job") return result;
       return { kind: connection === "added" ? "linked" : "duplicate" };
     },
@@ -1494,6 +1588,23 @@ export function createApplicantDossierService(options: {
       const target = parseTarget(input.characterUrl);
       if (!target) return { kind: "invalid", code: "invalid_character_url" };
       const repositories = scopedRepositories(scope);
+      if (repositories.manualConnections.setGroupExcluded) {
+        const group = await repositories.groupReads?.read(root, new Date());
+        const targetId = group?.graph.idOf(target);
+        const keys =
+          targetId && group
+            ? [...group.graph.sharedIdentity(targetId)].flatMap((id) => {
+                const c = group.graph.characters.get(id);
+                return c ? [c.key] : [];
+              })
+            : [target];
+        const result = await repositories.manualConnections.setGroupExcluded(
+          root,
+          keys,
+          input.excluded
+        );
+        return { kind: result === "updated" ? "updated" : "missing" };
+      }
       const exclude = async (key: CharacterKey) => {
         const result = await repositories.manualConnections.setExcluded(
           root,
@@ -1524,10 +1635,10 @@ export function createApplicantDossierService(options: {
     async removeConnectedCharacter(root, input, scope) {
       const target = parseTarget(input.characterUrl);
       if (!target) return { kind: "invalid", code: "invalid_character_url" };
-      const result = await scopedRepositories(scope).manualConnections.remove(
-        root,
-        target
-      );
+      const connections = scopedRepositories(scope).manualConnections;
+      const result = connections.removeGroupConnection
+        ? await connections.removeGroupConnection(root, target, logWebMerges)
+        : await connections.remove(root, target);
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
     },
 
@@ -1544,10 +1655,11 @@ export function createApplicantDossierService(options: {
     async searchTier(key, raidId, scope, overrides) {
       // The same characters the dossier researches, before its display cap:
       // a character the list has no room for still has gaps to fill.
-      const resolved = await legacyResolveSubjects(
+      const resolved = await resolveSubjects(
         key,
         scopedRepositories(scope),
-        options.config
+        options.config,
+        options.logger
       );
       const subjects = resolved
         ? [...resolved.selected, ...resolved.skipped]
@@ -1583,8 +1695,13 @@ export function createApplicantDossierService(options: {
         // active: the one case the web client asks for the initial scope in.
         // Without that, a direct call queued a full collection at public-read
         // limits and left no search behind (#709).
-        if (!(await repositories.runs.findActive(key)))
-          return { kind: "not_ready" };
+        const group = await repositories.groupReads?.read(key, new Date());
+        const active = group
+          ? groupMemberFacts(group, key).runs.some((run) =>
+              ["queued", "running", "retrying"].includes(run.status)
+            )
+          : await repositories.runs.findActive(key);
+        if (!active) return { kind: "not_ready" };
         // Initial evidence precedes the worker's snapshot filter. Completed
         // evidence is already public dossier material; without it, one bounded
         // lookup prevents a tournament root from appearing before the current
@@ -1621,10 +1738,11 @@ export function createApplicantDossierService(options: {
 
     async read(key, signal, overrides, scope) {
       const repositories = scopedRepositories(scope);
-      const resolved = await legacyResolveSubjects(
+      const resolved = await resolveSubjects(
         key,
         repositories,
-        options.config
+        options.config,
+        options.logger
       );
       if (!resolved) {
         // Evidence is keyed by character, not by dossier. Reuse that already
@@ -1647,39 +1765,77 @@ export function createApplicantDossierService(options: {
       // dispatch must not turn a usable cached dossier into an HTTP failure.
       // Do not retain the request's measurement scope after the response ends.
       void Promise.resolve()
-        .then(() => options.search.scheduleConnectedCharacterSweep?.(key))
+        .then(() =>
+          resolved.group
+            ? options.search.scheduleConnectedCharacterSweep?.(
+                key,
+                undefined,
+                resolved.group
+              )
+            : options.search.scheduleConnectedCharacterSweep?.(key)
+        )
         .catch(() => {
           options.logger?.info({ event: "fingerprint_sweep_schedule_failed" });
         });
 
+      const at = new Date();
+      const facts = resolved.group
+        ? groupMemberFacts(resolved.group, key)
+        : null;
+      const groupStale =
+        !!facts &&
+        !resolved.group!.negativeUntil &&
+        !facts.runs.some((run) =>
+          ["queued", "running", "retrying"].includes(run.status)
+        ) &&
+        !isFresh(
+          facts.runs.flatMap((run) =>
+            run.status === "complete" && run.completedAt
+              ? [run.completedAt]
+              : []
+          ),
+          at,
+          options.config.FRESHNESS_HOURS
+        ) &&
+        !hasFailureBackoff(
+          facts.runs,
+          at,
+          options.config.FRESHNESS_HOURS,
+          options.config.FINGERPRINT_SWEEP_CADENCE_HOURS
+        );
       return {
         kind: "ready",
-        dossier: await assembleDossier({
-          root: snapshot.rootKey,
-          evidenceOrigin: "dossier_read",
-          subjects: selected,
-          skippedSubjects: skipped,
-          excludedSubjects: excludedOrdered,
-          research: provisional
-            ? {
-                state: "provisional",
-                message:
-                  "Linked characters are shown from an existing dossier while this character's own research runs; the list may change."
-              }
-            : snapshot.state === "complete"
-              ? {
-                  state: "complete",
-                  message: "Linked-character research is complete."
-                }
-              : {
-                  state: "partial",
-                  message:
-                    snapshot.limitationCode === "privacy_hidden"
-                      ? "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive."
-                      : "Additional linked characters may exist; this dossier is not exhaustive."
-                },
-          ...assemblyContext(repositories, signal, overrides, scope)
-        })
+        dossier: {
+          ...(await assembleDossier({
+            root: key,
+            evidenceOrigin: "dossier_read",
+            subjects: selected,
+            skippedSubjects: skipped,
+            excludedSubjects: excludedOrdered,
+            research:
+              resolved.research ??
+              (provisional
+                ? {
+                    state: "provisional",
+                    message:
+                      "Linked characters are shown from an existing dossier while this character's own research runs; the list may change."
+                  }
+                : snapshot?.state === "complete"
+                  ? {
+                      state: "complete",
+                      message: "Linked-character research is complete."
+                    }
+                  : {
+                      state: "partial",
+                      message:
+                        snapshot?.limitationCode === "privacy_hidden"
+                          ? "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive."
+                          : "Additional linked characters may exist; this dossier is not exhaustive."
+                    }),
+            ...assemblyContext(repositories, signal, overrides, scope)
+          })),
+          ...(groupStale ? { groupStale: true } : {})
+        }
       };
     }
   };

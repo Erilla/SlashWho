@@ -4,6 +4,7 @@ import type {
   DiscoveryWorkContext,
   JobTelemetry,
   ObservationWriteInput,
+  CharacterGroupMerge,
   Repositories
 } from "@slashwho/database";
 import type {
@@ -12,6 +13,7 @@ import type {
 } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
+  MAX_CONTINUATION_NON_PROGRESS_CYCLES,
   characterGroupsErrorCode,
   deduplicateCharacters,
   discoverCharacter,
@@ -23,6 +25,7 @@ import {
 } from "@slashwho/domain";
 
 import { bestEffort } from "./best-effort";
+import { notifyGroupMerges } from "./group-merge-alert";
 import { excludeBlizzardSlotWait } from "./blizzard-slot-wait";
 import { createBlizzardFingerprintAdapter } from "./blizzard-fingerprint-adapter";
 import { measuredRepositories } from "./measured-repositories";
@@ -162,7 +165,8 @@ export type FingerprintAlertNotifier = {
       | "applicant_poll_failed"
       | "applicant_new_intents"
       | "applicant_backlog_pressure"
-      | "applicant_input_truncated";
+      | "applicant_input_truncated"
+      | "character_groups_merged";
     details: Record<string, number>;
     applicant?: {
       battletag?: string | undefined;
@@ -318,7 +322,6 @@ function isFingerprintReleaseRetryableError(
  * Giving up leaves the cursor set, so the next natural sweep of this root
  * resumes from where the chain stopped instead of restarting at candidate one.
  */
-const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
 
 /**
  * How long a continuation cycle that failed waits before the next one may be
@@ -467,10 +470,13 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
     }
     if (signal.aborted) return;
     let mergedGroups: number;
+    let merges: readonly CharacterGroupMerge[];
     try {
-      ({ mergedGroups } = await connections.recomputeGroupsOf(
+      const recomputed = await connections.recomputeGroupsOf(
         result.changedCharacterIds
-      ));
+      );
+      mergedGroups = recomputed.mergedGroups;
+      merges = recomputed.merges ?? [];
     } catch (error) {
       logObservationFailure("recompute", error);
       return;
@@ -481,12 +487,14 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
         options.logger?.info({
           event: "character_groups_merged",
           stage: "publication",
-          mergedGroups
+          mergedGroups,
+          ...(merges.length ? { merges } : {})
         });
       } catch {
         // Best effort only, as below.
       }
     }
+    await notifyGroupMerges(options.fingerprintAlertNotifier, merges);
   }
 
   function logObservationFailure(

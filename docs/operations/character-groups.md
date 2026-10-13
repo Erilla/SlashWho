@@ -1,4 +1,23 @@
-# Character groups (phase 1)
+# Character groups
+
+## Phase 2 reads and deployment gate
+
+Phase 2 reads membership from groups, with the opened character's own latest completed snapshot folded in. A sibling keeps its own URL and root. A fresh group reuses completed discovery; stale searches share one member's active run. A stale page sends one automatic start per load, silently keeping its dossier after refusal or failure. Include and Remove clear the stored group's rows, including suppressed makers; Exclude uses visible makers.
+
+Observation writes remain best effort after the publication commits. A lost recompute is healed by maintenance. A lost observation write is detected by replay and needs a rebuild or another publication; the opened page's snapshot fold-in still preserves its characters.
+
+The Manager must have all four records on the implementation PR before merging or deploying phase 2:
+
+1. Run the replay against the exact deployment commit, with the environment's actual `DOSSIER_CHARACTER_CEILING`. Preserve P1–P7, ledger, drift and path coverage output. Rebuild before replay if phase 1 was reverted.
+2. For the seven days immediately preceding deployment, reconcile **every** completed `maintenance-cleanup` job in `pgboss.job` with an `evidence_cache_cleanup` event in Railway's worker logs. Record the UTC interval, job ids and completion times, the matching log events and zero unmatched jobs. A point-in-time connection check cannot replace this reconciliation. Both worker pools use `application_name=slashwho-worker`; use that to identify foreign connections as supporting evidence. Never start a local worker against test or production.
+3. Inspect fingerprint observations from chains started before `2026-09-29T11:33:00Z` (#753). Either record an empty list or show every named root's post-#753 chain rerun and a rebuild after those reruns. Check tournament profiles and use chain/run start time rather than observation time. Keep suppressed keys out of published output.
+4. Record `APPLICANT_LINKING_ENABLED` from the deployed worker. When enabled, the replay's `applicant_link` coverage must be non-zero. When disabled, record that fact; fixture tests still cover applicant-origin labels.
+
+Keep commit, environment and UTC interval with each record. Do not paste connection strings, passwords or raw provider responses. An approved plan, green CI or clean review does not satisfy these gates.
+
+Worker and web may deploy in either order because publication writes are unchanged. Continue periodic replay after deployment; retain the independent legacy page comparison until phase 3. `drift_pending`, `drift_stale_pending` and `maintenance_stale` retain their existing meanings.
+
+Roll phase 2 back by reverting its code; phase 1's writes continue. Before reverting phase 1 itself or emptying its tables, turn `APPLICANT_LINKING_ENABLED` off as described under Rollback below.
 
 ## What phase 1 is
 

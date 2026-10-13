@@ -115,6 +115,8 @@ export const dossierCharacterSchema = z
      */
     guild: dossierGuildSchema.nullable().optional(),
     source: dossierSourceLabelSchema,
+    hasManualConnection: z.boolean().optional(),
+    origin: z.literal("application").optional(),
     evidenceState: dossierEvidenceStateSchema.optional(),
     /**
      * When the next read may collect this character's evidence again (#663).
@@ -394,7 +396,7 @@ export const dossierResearchSchema = z
   .strict();
 
 export const createDossierRequestSchema = z
-  .object({ characterUrl: z.url() })
+  .object({ characterUrl: z.url(), startedFrom: z.literal("page").optional() })
   .strict();
 
 /**
@@ -470,6 +472,7 @@ export const dossierGuildHistoryEntrySchema = z
 export const applicantDossierSchema = z
   .object({
     root: characterKeySchema,
+    groupStale: z.boolean().optional(),
     research: dossierResearchSchema,
     characters: z.array(dossierCharacterSchema),
     raids: z.array(dossierRaidSchema),

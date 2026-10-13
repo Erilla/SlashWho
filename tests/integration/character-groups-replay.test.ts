@@ -1,5 +1,8 @@
 import {
   canonicalCharacterId,
+  DISCOVERY_SOURCES,
+  familyOf,
+  type ObservationSource,
   deduplicateCharacters,
   type CharacterKey,
   type DiscoverySource
@@ -225,6 +228,124 @@ describe("character groups replay", () => {
   const details = (report: ReplayReport) =>
     [...report.failures, ...report.reports].map((finding) => finding.detail);
 
+  it.each([
+    "raiderio",
+    "not_due",
+    "privacy_hidden",
+    "first_cycle",
+    "continuation",
+    "seal",
+    "live_completion"
+  ] as const)(
+    "pins direct snapshot observations across %s publication",
+    async (path) => {
+      const builders: Record<ObservationSource, () => SnapshotCharacterInput> =
+        {
+          claimed: () => member("claimed", "claimed"),
+          declared_main: () => member("declared", "declared_main"),
+          profile_guess: () => member("guessed", "profile_guess"),
+          fingerprint: () => member("swept", "fingerprint")
+        };
+      const sources = DISCOVERY_SOURCES.filter(
+        (source): source is ObservationSource => source !== "input"
+      );
+      const all = sources.map((source) => builders[source]());
+      const raider = all.filter(
+        (c) => familyOf(c.source as ObservationSource) === "raiderio"
+      );
+      const swept = all.filter(
+        (c) => familyOf(c.source as ObservationSource) === "fingerprint"
+      );
+      const root = key("origin");
+      if (path === "raiderio" || path === "privacy_hidden") {
+        const runId = await startRun(root);
+        const characters = [observation(root, "Origin"), ...raider];
+        const limitationCode =
+          path === "privacy_hidden" ? "privacy_hidden" : null;
+        await repositories.snapshots.create({
+          runId,
+          rootKey: root,
+          state: limitationCode ? "partial" : "complete",
+          limitationCode,
+          refreshedAt: new Date(),
+          characters
+        });
+        await write(
+          raiderIoPublicationWrite({
+            runId,
+            rootKey: root,
+            characters,
+            limitationCode
+          })
+        );
+      } else {
+        const first = await publishFirstCycle(
+          "origin",
+          raider,
+          { kind: "capped", characters: swept, skippedHistoricalGuilds: 0 },
+          { resumeAfter: "cursor" }
+        );
+        if (path === "not_due") await publishRaiderIo("origin", raider);
+        if (path === "continuation" || path === "seal") {
+          const reservation = await admitSweep(repositories, first.runId, root);
+          const later = [member("later", "fingerprint")];
+          const sealed = path === "seal";
+          await repositories.snapshots.amendAndFinishFingerprintSweep(
+            first.snapshotId,
+            later,
+            {
+              ...reservation,
+              runId: first.runId,
+              limitationCode: sealed ? null : "fingerprint_sweep_capped"
+            },
+            {
+              resumeAfter: sealed ? null : "later",
+              limitationCode: null,
+              advanced: true
+            }
+          );
+          await write(
+            continuationCycleWrite({
+              runId: first.runId,
+              rootKey: root,
+              excludedTournamentIds: new Set(),
+              sweep: {
+                kind: sealed ? "matched" : "capped",
+                characters: later,
+                skippedHistoricalGuilds: 0
+              },
+              reservationId: reservation.reservationId
+            })
+          );
+        }
+        if (path === "live_completion") {
+          const runId = await startRun(root);
+          await repositories.runs.completeWithLiveSweepSnapshot(
+            runId,
+            first.snapshotId
+          );
+          await write(
+            liveSweepCompletionWrite({
+              runId,
+              rootKey: root,
+              characters: [observation(root, "Origin"), ...raider]
+            })
+          );
+        }
+      }
+      const snapshot = (await repositories.snapshots.getCurrent(root))!;
+      const observerId = await characterId("origin");
+      const missing = await pool.query(
+        `SELECT m.character_id FROM snapshot_characters m WHERE m.snapshot_id = $1 AND m.character_id <> $2
+      AND NOT EXISTS (SELECT 1 FROM character_connections c WHERE c.kind = 'observed' AND c.observed_from_character_id = $2
+        AND c.character_low_id = LEAST($2::uuid, m.character_id) AND c.character_high_id = GREATEST($2::uuid, m.character_id))`,
+        [snapshot.id, observerId]
+      );
+      expect(missing.rows).toEqual([]);
+      expect(snapshot.characters.length).toBeGreaterThan(1);
+    }
+  );
+
   it("1. passes two roots whose snapshots hold the same three characters", async () => {
     await publishRaiderIo("alpha", [
       member("bravo", "claimed"),
@@ -291,7 +412,11 @@ describe("character groups replay", () => {
       source: "manually_added",
       level: 0
     });
-    expect(uniform(today.selected)).toMatchObject(uniform(next.selected)!);
+    const legacyShape: { key: CharacterKey; hasManualConnection?: boolean } = {
+      ...uniform(next.selected)!
+    };
+    delete legacyShape.hasManualConnection;
+    expect(uniform(today.selected)).toMatchObject(legacyShape);
     expect(report.failures).toEqual([]);
     expect(report.coverage).toMatchObject({ manual_added: 2 });
   });
@@ -414,19 +539,27 @@ describe("character groups replay", () => {
     // fingerprint observation was never recorded. The write must record both
     // families, and presence must pass on either, since the snapshot keeps
     // only one source.
-    await publishFirstCycle("oscar", [member("alpha", "claimed")], {
-      kind: "matched",
-      characters: [member("alpha", "fingerprint")],
-      skippedHistoricalGuilds: 0
-    });
+    const sourcesBeforeDeduplication = DISCOVERY_SOURCES.filter(
+      (source): source is ObservationSource => source !== "input"
+    );
+    await publishFirstCycle(
+      "oscar",
+      sourcesBeforeDeduplication
+        .filter((source) => familyOf(source) === "raiderio")
+        .map((source) => member("alpha", source)),
+      {
+        kind: "matched",
+        characters: [member("alpha", "fingerprint")],
+        skippedHistoricalGuilds: 0
+      }
+    );
 
     const sources = await pool.query<{ source: string }>(
       `SELECT source FROM character_connections WHERE kind = 'observed' ORDER BY source`
     );
-    expect(sources.rows.map((row) => row.source)).toEqual([
-      "claimed",
-      "fingerprint"
-    ]);
+    expect(sources.rows.map((row) => row.source)).toEqual(
+      [...sourcesBeforeDeduplication].sort()
+    );
     const stored = await repositories.snapshots.getCurrent(key("oscar"));
     expect(
       stored!.characters.find((character) => character.key.name === "alpha")

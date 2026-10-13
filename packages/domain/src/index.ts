@@ -103,3 +103,13 @@ export type {
   FingerprintSweepOutcome
 } from "./fingerprint-discovery";
 export * from "./character-connections";
+export {
+  isFresh,
+  hasFailureBackoff,
+  isSweepDue,
+  MAX_CONTINUATION_NON_PROGRESS_CYCLES
+} from "./group-freshness";
+export type { GroupRunFact, GroupSweepState } from "./group-freshness";
+export { groupPageMembers } from "./character-connections";
+export { DISCOVERY_SOURCES } from "./deduplicate";
+export { groupMemberFacts } from "./group-freshness";

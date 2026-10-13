@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import type { CharacterKey } from "@slashwho/domain";
+import { describe, expect, it, vi } from "vitest";
+import type { CharacterKey, DiscoverySource } from "@slashwho/domain";
+import { groupMemberFacts } from "@slashwho/domain";
 import {
   pageMembers,
   resolveGroupSubjects,
@@ -42,11 +43,125 @@ function graph(
     suppressed: overrides.suppressed ?? new Set(),
     warcraftLogsIds: overrides.warcraftLogsIds ?? new Map(),
     sharedIdentity: overrides.sharedIdentity ?? ((id) => new Set([id])),
-    latestSnapshot: overrides.latestSnapshot ?? new Map()
+    latestSnapshot: overrides.latestSnapshot ?? new Map(),
+    snapshotMembers: overrides.snapshotMembers ?? new Map(),
+    snapshotSources: overrides.snapshotSources ?? new Map()
   };
 }
 
 describe("page members", () => {
+  it.each(["fingerprint", "manual"] as const)(
+    "keeps a committed claimed label above an older %s path after a lost write",
+    (strength) => {
+      const g = graph({
+        names: ["o", "a"],
+        links: [{ a: "o", b: "a", strength }],
+        snapshotMembers: new Map([["o", ["o", "a"]]]),
+        snapshotSources: new Map([["o", new Map([["a", "claimed"]])]])
+      });
+      const subjects = resolveGroupSubjects(key("o"), g, {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!;
+      expect(subjects.selected[1]!.source).toBe("claimed");
+    }
+  );
+  it("a reviewer row on an alias prevents an application label on the merged manual row", () => {
+    const g = graph({
+      names: ["o", "a", "b"],
+      links: [
+        { a: "o", b: "a", strength: "manual" },
+        { a: "o", b: "b", strength: "manual" }
+      ],
+      manual: [
+        {
+          makerId: "o",
+          targetId: "a",
+          excluded: false,
+          origin: "applicant_sheet"
+        },
+        { makerId: "o", targetId: "b", excluded: false, origin: "reviewer" }
+      ],
+      warcraftLogsIds: new Map([
+        ["a", 42],
+        ["b", 42]
+      ])
+    });
+    const row = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!.selected[1]!;
+    expect(row.source).toBe("manually_added");
+    expect(row.origin).toBeUndefined();
+    expect(row.hasManualConnection).toBe(true);
+  });
+  it("keeps Remove on a merged identity when its alias has the manual row", () => {
+    const g = graph({
+      names: ["o", "a", "b"],
+      links: [
+        { a: "o", b: "a", strength: "raiderio" },
+        { a: "o", b: "b", strength: "manual" }
+      ],
+      manual: [{ makerId: "o", targetId: "b", excluded: false }],
+      warcraftLogsIds: new Map([
+        ["a", 42],
+        ["b", 42]
+      ])
+    });
+    expect(
+      resolveGroupSubjects(key("o"), g, { DOSSIER_CHARACTER_CEILING: 50 })!
+        .selected[1]
+    ).toMatchObject({
+      key: key("a"),
+      source: "claimed",
+      hasManualConnection: true
+    });
+  });
+  it("folds snapshot members in without a path and keeps their labels", () => {
+    const g = graph({
+      names: ["o", "a"],
+      groupOf: new Map([["o", "g"]]),
+      links: [],
+      snapshotMembers: new Map([["o", ["o", "a"]]]),
+      snapshotSources: new Map([["o", new Map([["a", "claimed"]])]])
+    });
+    const subjects = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!;
+    expect(subjects.selected.map((c) => [c.key.name, c.source])).toEqual([
+      ["o", "input"],
+      ["a", "claimed"]
+    ]);
+  });
+  it("labels applicant-only manual paths and retains the removal flag on provider paths", () => {
+    const g = graph({
+      names: ["o", "a"],
+      links: [{ a: "o", b: "a", strength: "manual" }],
+      manual: [
+        {
+          makerId: "o",
+          targetId: "a",
+          excluded: false,
+          origin: "applicant_sheet"
+        }
+      ]
+    });
+    expect(
+      resolveGroupSubjects(key("o"), g, { DOSSIER_CHARACTER_CEILING: 50 })!
+        .selected[1]
+    ).toMatchObject({
+      source: "manually_added",
+      origin: "application",
+      hasManualConnection: true
+    });
+    const provider = {
+      ...g,
+      links: [...g.links, { a: "o", b: "a", strength: "raiderio" as const }]
+    };
+    expect(
+      resolveGroupSubjects(key("o"), provider, {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!.selected[1]
+    ).toMatchObject({ source: "claimed", hasManualConnection: true });
+  });
   it("never walks through a suppressed character", () => {
     const g = graph({
       names: ["o", "s", "x"],
@@ -73,6 +188,142 @@ describe("page members", () => {
 });
 
 describe("resolveGroupSubjects", () => {
+  it("never folds a suppressed snapshot member into rows, research or freshness facts", () => {
+    const g = graph({
+      names: ["o", "c"],
+      links: [],
+      suppressed: new Set(["c"]),
+      snapshotMembers: new Map([["o", ["o", "c"]]]),
+      snapshotSources: new Map([["o", new Map([["c", "claimed"]])]]),
+      latestSnapshot: new Map([
+        ["o", { state: "complete", limitationCode: null }],
+        ["c", { state: "partial", limitationCode: "privacy_hidden" }]
+      ])
+    });
+    const subjects = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!;
+    expect(subjects.selected.map((row) => row.key.name)).toEqual(["o"]);
+    expect(subjects.research).toEqual({
+      state: "complete",
+      limitationCodes: []
+    });
+    expect(
+      groupMemberFacts(
+        { graph: g, runs: [{ rootKey: key("c") }], sweepStates: [] },
+        key("o")
+      ).runs
+    ).toEqual([]);
+  });
+
+  it("reports explicit removal facts for roots, reverse manual paths and pending targets", () => {
+    const g = graph({
+      names: ["o", "a"],
+      links: [{ a: "o", b: "a", strength: "manual" }],
+      manual: [{ makerId: "a", targetId: "o", excluded: false }],
+      undiscoveredManualTargets: [
+        { makerId: "o", targetKey: key("pending"), excluded: false }
+      ]
+    });
+    const rows = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!.selected;
+    expect(rows.map((row) => [row.key.name, row.hasManualConnection])).toEqual([
+      ["o", true],
+      ["a", false],
+      ["pending", true]
+    ]);
+    expect(
+      resolveGroupSubjects(key("o"), graph({ names: ["o"], links: [] }), {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!.selected[0]!.hasManualConnection
+    ).toBe(false);
+  });
+
+  it("uses the newest page member snapshot for a fallback label, ignoring suppressed roots", () => {
+    const g = graph({
+      names: ["o", "a", "b", "s", "x"],
+      links: [
+        { a: "o", b: "a", strength: "manual" },
+        { a: "o", b: "b", strength: "manual" }
+      ],
+      suppressed: new Set(["s"]),
+      snapshotMembers: new Map([["o", ["o", "x"]]]),
+      snapshotSources: new Map<string, ReadonlyMap<string, DiscoverySource>>([
+        ["s", new Map([["x", "declared_main"]])],
+        ["a", new Map([["x", "claimed"]])],
+        ["b", new Map([["x", "profile_guess"]])]
+      ]),
+      latestSnapshot: new Map([
+        [
+          "a",
+          {
+            state: "complete",
+            limitationCode: null,
+            refreshedAt: new Date("2026-01-01")
+          }
+        ],
+        [
+          "b",
+          {
+            state: "complete",
+            limitationCode: null,
+            refreshedAt: new Date("2026-02-01")
+          }
+        ],
+        [
+          "s",
+          {
+            state: "complete",
+            limitationCode: null,
+            refreshedAt: new Date("2026-03-01")
+          }
+        ]
+      ])
+    });
+    expect(
+      resolveGroupSubjects(key("o"), g, {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!.selected.find((row) => row.key.name === "x")!.source
+    ).toBe("profile_guess");
+  });
+
+  it("logs only unreachable members outside O's snapshot and weakened live paths", () => {
+    const logger = { info: vi.fn() };
+    const g = graph({
+      names: ["o", "a"],
+      links: [],
+      snapshotMembers: new Map([["o", ["o", "a"]]]),
+      snapshotSources: new Map([["o", new Map([["a", "claimed"]])]])
+    });
+    resolveGroupSubjects(
+      key("o"),
+      g,
+      { DOSSIER_CHARACTER_CEILING: 50 },
+      logger
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+    resolveGroupSubjects(
+      key("o"),
+      { ...g, snapshotSources: new Map() },
+      { DOSSIER_CHARACTER_CEILING: 50 },
+      logger
+    );
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith({
+      event: "group_member_unreachable"
+    });
+    logger.info.mockClear();
+    resolveGroupSubjects(
+      key("o"),
+      { ...g, links: [{ a: "o", b: "a", strength: "manual" }] },
+      { DOSSIER_CHARACTER_CEILING: 50 },
+      logger
+    );
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith({
+      event: "group_label_weakened"
+    });
+  });
+
   it("labels the opened character as today's root and others by path", () => {
     const g = graph({
       names: ["o", "f", "c"],
@@ -317,6 +568,7 @@ describe("resolveGroupSubjects", () => {
       DOSSIER_CHARACTER_CEILING: 50
     })!;
     const pendingSubject = (name: string) => ({
+      hasManualConnection: true,
       key: key(name),
       displayName: name,
       className: null,
