@@ -1,6 +1,6 @@
 # Stable web error diagnostics (#858) implementation plan
 
-Status: approved at `177a574c` in review `5506778671`; implementation underway after merging PR #908 (`d6597a80`).
+Status: approved at `177a574c` in review `5506778671`; implementation verified after merging PR #908 (`d6597a80`) and #907 (`cf394e6d`); Manager implementation review and deployed acceptance remain pending.
 
 **Goal:** Web request and escaped-process failures expose readable names and safe codes in the production build, without recording messages or identity data.
 
@@ -42,7 +42,7 @@ PR #908 does not change `error-fields.ts`: its fixture registry is separate. Pre
 - [x] Implement the registry and stable-name selection in `error-fields.ts`; export `errorFields` and `ErrorFields` from `packages/application/src/index.ts`. Re-run the focused suite and existing evidence-job/retry-policy suites to identify intentional compatibility changes before committing `fix(application): expose safe stable error diagnostics`.
 - [x] Add upstream factory and gateway regressions that rename constructor functions and prove literal names survive. Test actual factory provider/kind messages against the registry; arbitrary provider text must not become a code. Add literal names without altering classification, timeouts or cache behaviour; test existing gateway and upstream suites before committing `fix(errors): retain explicit names through minification`.
 - [x] Extend `apps/web/src/server/http.test.ts`, `process-errors.test.ts` and `logger.test.ts`: action failure and response-counting failure each produce both fields, first cause wins, escaped exception/rejection and non-error rejection are covered, serialized records drop URL/body/message, and unknown snake_case codes remain absent/null. Assert dossier/error responses still use `Cache-Control: no-store`. Include a renamed-constructor error with stable name and registered code. Observe these tests fail before wiring `http.ts`, `process-errors.ts`, `error-name.ts`, and the allowlist. Re-run focused tests and commit `fix(web): log stable failure names and bounded codes`.
-- [ ] Run full gate with Docker available: `corepack pnpm format:check`, `lint`, `typecheck`, `test:unit`, `test:integration`, `build`, `test:e2e`. Read output; skipped suites do not pass. Self-review against `origin/main`, fix confirmed findings, fetch and merge current `origin/main`, then repeat the full gate. Never merge the PR or enable auto-merge.
+- [x] Run full gate with Docker available: `corepack pnpm format:check`, `lint`, `typecheck`, `test:unit`, `test:integration`, `build`, `test:e2e`. Read output; skipped suites do not pass. Self-review against `origin/main`, fix confirmed findings, fetch and merge current `origin/main`, then repeat the full gate. Never merge the PR or enable auto-merge.
 - [ ] Convert this draft to an implementation PR only after those gates and review; update its body with actual checks and risk, retain `Refs #858` while deployment acceptance remains, and report the link to the coordinator.
 
 ## Review focus
@@ -78,3 +78,21 @@ Disabling minification would affect bundle size and container/runtime overlap wi
   481 Docker integration tests in 21 files; production build; 60 browser tests.
   Fresh whole-branch review and current-main integration gate remain next.
 - Fresh read-only whole-branch review against `d6597a80`: no actionable findings. Deployment acceptance correctly remains outside local verification.
+- Repeated integration gate on `d6597a80` failed two unchanged queue retry
+  timestamp assertions: 83 ms and 79 ms below the existing 100 ms allowance.
+  The first gate passed. Isolated queue suite passed all 17 tests afterwards.
+  Fresh test PostgreSQL samples were within 1 ms of host time after warm-up;
+  persistent skew is not established. Queue adapter, queue tests and PostgreSQL
+  harness blobs exactly match current main. No tolerance or scheduler changes.
+- Fetched/merged `cf394e6d` (#907) following coordinator instruction. Repeating
+  the gate on this new tree; any load/clock explanation remains an inference
+  until measurements establish it.
+- Final current-main gate on `cf394e6d` passed: format, lint, typecheck;
+  3,384 unit tests in 210 files; 481 Docker integration tests in 21 files;
+  production build; 61 browser tests. No suites skipped.
+- Concurrent clock measurement collected 2,434 samples: PostgreSQL timestamp
+  minus host-before-query ranged from -4 ms to +55 ms, with zero negative
+  50 ms outliers. Persistent skew is not established. Prior queue timing
+  discrepancy remains unconfirmed and is disclosed in the PR body.
+- Implementation PR hand-off uses `Refs #858`, retaining the issue for test
+  deployment acceptance. No deployed measurements, merge or auto-merge claimed.
