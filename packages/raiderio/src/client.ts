@@ -8,6 +8,8 @@ import {
   classifyResponse,
   createUpstreamError,
   isUpstreamFailure,
+  reportThrottle,
+  retryAfterMs,
   type ThrottleObserver,
   type UpstreamError,
   type UpstreamFailure
@@ -516,10 +518,28 @@ export function createRaiderIoClient(
       // Raider.IO answers 403 for a user profile its owner has made private.
       // That is a permanent answer about visibility, not an outage, so it is
       // never retried as one, and it never fires onThrottle.
-      const failure = classifyResponse(response, options.onThrottle);
       const guildPath =
         url.pathname === "/api/guilds/raid-rankings" ||
         url.pathname === "/api/v1/guilds/profile";
+      // The shared classifier treats 403/404 as final for other endpoints.
+      // A guild endpoint explicitly asking for backoff remains retryable.
+      const guildBackoff =
+        guildPath && (response.status === 403 || response.status === 404)
+          ? retryAfterMs(response)
+          : undefined;
+      let failure: UpstreamFailure;
+      if (guildBackoff !== undefined) {
+        reportThrottle(options.onThrottle, guildBackoff);
+        failure = {
+          kind: "transient",
+          status: response.status,
+          retryAfterMs: guildBackoff
+        };
+      } else {
+        failure = classifyResponse(response, options.onThrottle);
+        if (guildPath && response.status === 404)
+          failure = { kind: "transient", status: 404 };
+      }
       if (
         guildPath &&
         (response.status === 400 || response.status === 422) &&
@@ -528,10 +548,20 @@ export function createRaiderIoClient(
         let body: unknown;
         try {
           body = await response.json();
-        } catch {
-          /* Malformed failures retain HTTP classification. */
+        } catch (error) {
+          if (signal?.aborted) throw signal.reason;
+          if (requestSignal.aborted || !(error instanceof SyntaxError)) {
+            throw Object.assign(createRaiderIoError({ kind: "transient" }), {
+              rankingTimeout: timeoutSignal.aborted
+            });
+          }
+          // Only malformed JSON retains the status classification.
         }
         signal?.throwIfAborted();
+        if (requestSignal.aborted)
+          throw Object.assign(createRaiderIoError({ kind: "transient" }), {
+            rankingTimeout: timeoutSignal.aborted
+          });
         if (
           typeof body === "object" &&
           body !== null &&
@@ -541,11 +571,7 @@ export function createRaiderIoClient(
           throw new GuildNotFound();
         }
       }
-      throw createRaiderIoError(
-        guildPath && response.status === 404
-          ? { kind: "transient", status: 404 }
-          : failure
-      );
+      throw createRaiderIoError(failure);
     }
 
     let value: unknown;

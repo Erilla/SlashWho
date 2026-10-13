@@ -95,6 +95,81 @@ it("preserves schema drift as a limitation", async () => {
 
 const paths = ["/api/guilds/raid-rankings", "/api/v1/guilds/profile"];
 
+it("distinguishes error-body transport failure from malformed JSON", async () => {
+  const client = createRaiderIoClient({
+    baseUrl: "https://raider.io",
+    timeoutMs: 1000,
+    fetch: async (input) => {
+      if (new URL(String(input)).pathname !== paths[0])
+        return Response.json(profile);
+      const response = new Response("pending", { status: 422 });
+      response.json = async () => {
+        throw new TypeError("connection_reset");
+      };
+      return response;
+    }
+  });
+  expect(await client.getMythicBossRankings(options)).toEqual({
+    kind: "limitation",
+    code: "unavailable",
+    failureCode: "network"
+  });
+});
+
+it.each([403, 404])(
+  "preserves guild %i Retry-After over a schema failure",
+  async (status) => {
+    const onThrottle = vi.fn();
+    const client = createRaiderIoClient({
+      baseUrl: "https://raider.io",
+      timeoutMs: 1000,
+      onThrottle,
+      fetch: async (input) =>
+        new URL(String(input)).pathname === paths[0]
+          ? new Response("backoff", { status, headers: { "Retry-After": "8" } })
+          : Response.json({})
+    });
+    expect(await client.getMythicBossRankings(options)).toEqual({
+      kind: "limitation",
+      code: "unavailable",
+      failureCode: "throttled",
+      retryAfterMs: 8000
+    });
+    expect(onThrottle).toHaveBeenCalledTimes(1);
+  }
+);
+
+it.each(["reject", "late_literal"])(
+  "counts an internal error-body timeout (%s)",
+  async (mode) => {
+    const client = createRaiderIoClient({
+      baseUrl: "https://raider.io",
+      timeoutMs: 1,
+      fetch: async (input, init) => {
+        if (new URL(String(input)).pathname !== paths[0])
+          return Response.json(profile);
+        const response = new Response("pending", { status: 422 });
+        response.json = () =>
+          new Promise((resolve, reject) => {
+            const aborted = () =>
+              mode === "reject"
+                ? reject(init?.signal?.reason)
+                : resolve(unknownRanks.body);
+            if (init?.signal?.aborted) aborted();
+            else
+              init?.signal?.addEventListener("abort", aborted, { once: true });
+          });
+        return response;
+      }
+    });
+    expect(await client.getMythicBossRankings(options)).toEqual({
+      kind: "limitation",
+      code: "unavailable",
+      failureCode: "timeout"
+    });
+  }
+);
+
 it("prefers a schema failure over a bare404 when both guild halves fail", async () => {
   const client = createRaiderIoClient({
     baseUrl: "https://raider.io",

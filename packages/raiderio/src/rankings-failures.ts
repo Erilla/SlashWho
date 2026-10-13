@@ -71,7 +71,8 @@ export function guildPairLimitation(failures: readonly unknown[]): Limitation {
     if (
       isUpstreamFailure(error) &&
       error.kind === "transient" &&
-      error.status === 404
+      error.status === 404 &&
+      error.retryAfterMs === undefined
     )
       return 4;
     switch (result.failureCode) {
