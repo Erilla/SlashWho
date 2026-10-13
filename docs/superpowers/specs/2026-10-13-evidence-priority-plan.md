@@ -151,8 +151,11 @@ member evidence, group joins and worker discovery follow-ups on its actual code.
 Report incompatible interfaces or any expansion of this plan to the coordinator.
 
 #909 changes queue.ts/runtime.ts textually; integrate and reverify its scheduler
-without changing poll behaviour. Coordinate the repository read split with #787
-through the coordinator before overlapping implementation. Plan revision can
+without changing poll behaviour. The coordinator confirmed #787 has no substantive interface overlap with this
+seam. Queued #819 (lock-free/set-based evidence reads) is the stronger later
+overlap; its area owner has been notified to inspect and reuse this seam before
+starting #819. Keep the shared reservation and hydration change bounded and
+retain the seam regression tests below. Plan revision can
 proceed now; product implementation remains held until revised-plan acceptance.
 
 ## Test-first implementation and verification
