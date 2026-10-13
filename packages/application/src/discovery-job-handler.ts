@@ -470,7 +470,7 @@ export function createDiscoveryJobHandler(options: DiscoveryJobHandlerOptions) {
     }
     if (signal.aborted) return;
     let mergedGroups: number;
-    let merges: readonly CharacterGroupMerge[] = [];
+    let merges: readonly CharacterGroupMerge[];
     try {
       const recomputed = await connections.recomputeGroupsOf(
         result.changedCharacterIds

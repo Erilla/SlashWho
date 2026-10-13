@@ -94,6 +94,20 @@ it("links a historic name and realm from a discovered character's keyboard menu"
   );
 });
 
+it("focuses the historic alias action on the opened character's menu", async () => {
+  render(<DossierCharacterMenu character={character} root={character.key} />);
+  const user = userEvent.setup();
+  const trigger = screen.getByRole("button", { name: "Actions for Ryalts" });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  expect(
+    screen.queryByRole("menuitem", { name: "Exclude", exact: true })
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("menuitem", { name: "Link historic alias…" })
+  ).toHaveFocus();
+});
+
 it("offers Exclude for a discovered character", async () => {
   const fetchMock = stubFetch();
   render(

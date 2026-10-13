@@ -249,6 +249,11 @@ export function DossierCharacterMenu({
               setOpen(false);
               setLinkingAlias(true);
             }}
+            ref={
+              canonicalCharacterId(character.key) === canonicalCharacterId(root)
+                ? firstItemRef
+                : undefined
+            }
             role="menuitem"
             type="button"
           >
@@ -312,7 +317,8 @@ export function DossierCharacterMenu({
             Remove the manual connection to {character.displayName}
           </h2>
           <p>
-            Remove the manual connection to {character.displayName}?
+            Remove the manual connection to {character.displayName} (
+            {character.key.region.toUpperCase()} · {character.key.realm})?
             {character.source !== "manually_added"
               ? " This character stays in the dossier through its provider link."
               : " The character can be added again."}

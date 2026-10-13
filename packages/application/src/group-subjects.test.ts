@@ -49,6 +49,34 @@ function graph(
 }
 
 describe("page members", () => {
+  it("a reviewer row on an alias prevents an application label on the merged manual row", () => {
+    const g = graph({
+      names: ["o", "a", "b"],
+      links: [
+        { a: "o", b: "a", strength: "manual" },
+        { a: "o", b: "b", strength: "manual" }
+      ],
+      manual: [
+        {
+          makerId: "o",
+          targetId: "a",
+          excluded: false,
+          origin: "applicant_sheet"
+        },
+        { makerId: "o", targetId: "b", excluded: false, origin: "reviewer" }
+      ],
+      warcraftLogsIds: new Map([
+        ["a", 42],
+        ["b", 42]
+      ])
+    });
+    const row = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!.selected[1]!;
+    expect(row.source).toBe("manually_added");
+    expect(row.origin).toBeUndefined();
+    expect(row.hasManualConnection).toBe(true);
+  });
   it("keeps Remove on a merged identity when its alias has the manual row", () => {
     const g = graph({
       names: ["o", "a", "b"],

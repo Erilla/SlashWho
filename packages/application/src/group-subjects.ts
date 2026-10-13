@@ -194,11 +194,13 @@ export function resolveGroupSubjects(
     const manual = [primary, ...aliases]
       .map((candidate) => manualFacts(candidate.key))
       .filter((fact) => fact.present);
+    const primaryWithoutOrigin = { ...primary };
+    delete primaryWithoutOrigin.origin;
     const row =
       aliases.length === 0
         ? primary
         : {
-            ...primary,
+            ...primaryWithoutOrigin,
             ...(manual.length ? { hasManualConnection: true } : {}),
             ...(primary.source === "manually_added" &&
             manual.length &&
