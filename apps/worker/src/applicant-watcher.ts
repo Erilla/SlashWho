@@ -1,8 +1,13 @@
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import type { DiscoveryQueue, Repositories } from "@slashwho/database";
 import { startApplicantCollection } from "@slashwho/application";
 import type { CharacterKey, RaiderIoGateway } from "@slashwho/domain";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
+import {
+  applicationLinkCap,
+  chooseApplicationRow,
+  type IntakeRow
+} from "./applicant-applications";
 import {
   applicantParserVersion,
   parseApplicantCandidates
@@ -71,9 +76,20 @@ export async function wasSuppressedAt(
 type CountRow = {
   identity: string;
   occurrence_count: number;
-  deferred_observed_ats: (string | { at: string; index: number })[];
+  deferred_observed_ats: (
+    string | { at: string; index: number; mark?: number | null }
+  )[];
 };
-type DeferredObservation = { at: Date; index: number };
+/**
+ * `mark` is the submitted-serial mark when the occurrence was first seen:
+ * `"unmarked"` for an entry written before marks existed, `null` for one first
+ * seen while the mark was NULL. Only a numeric mark can record an application.
+ */
+type DeferredObservation = {
+  at: Date;
+  index: number;
+  mark: number | null | "unmarked";
+};
 type IntentRow = {
   sequence: string;
   identity: string;
@@ -96,13 +112,20 @@ export async function reconcileApplicantCounts(
     identity: string,
     observedAt: Date
   ) => Promise<boolean | "defer">,
-  parserVersion = applicantParserVersion
+  parserVersion = applicantParserVersion,
+  intake?: { rows: readonly IntakeRow[] }
 ): Promise<{
   baseline: boolean;
   rebaselined: boolean;
   created: number;
   backlog: number;
   newOccurrences: { identity: string; index: number }[];
+  startMark: number | null;
+  /** Identities whose occurrence count rose in this poll (recorded or deferred). */
+  risen: ReadonlySet<string>;
+  /** New occurrences from deferred entries written before marks existed. */
+  unmarkedOccurrences: { identity: string; index: number }[];
+  applications: { recorded: number; ambiguous: number; overCap: number };
 }> {
   const client = await pool.connect();
   try {
@@ -111,14 +134,29 @@ export async function reconcileApplicantCounts(
       "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
       [source]
     );
-    const state = await client.query<{ parser_version: number }>(
-      "SELECT parser_version FROM applicant_source_state WHERE source = $1",
+    const state = await client.query<{
+      parser_version: number;
+      submitted_serial_mark: number | null;
+    }>(
+      "SELECT parser_version, submitted_serial_mark FROM applicant_source_state WHERE source = $1",
       [source]
+    );
+    const startMark = state.rows[0]?.submitted_serial_mark ?? null;
+    const maxSerial = Math.max(
+      Number.NEGATIVE_INFINITY,
+      ...(intake?.rows ?? []).flatMap((row) =>
+        row.submittedSerial === undefined ? [] : [row.submittedSerial]
+      )
     );
     if (state.rowCount === 0) {
       await client.query(
-        "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at, parser_version) VALUES ($1, $2, $2, $3)",
-        [source, at, parserVersion]
+        "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at, parser_version, submitted_serial_mark) VALUES ($1, $2, $2, $3, $4)",
+        [
+          source,
+          at,
+          parserVersion,
+          Number.isFinite(maxSerial) ? maxSerial : null
+        ]
       );
       for (const [identity, count] of counts)
         await client.query(
@@ -131,7 +169,11 @@ export async function reconcileApplicantCounts(
         rebaselined: false,
         created: 0,
         backlog: 0,
-        newOccurrences: []
+        newOccurrences: [],
+        startMark: null,
+        risen: new Set(),
+        unmarkedOccurrences: [],
+        applications: { recorded: 0, ambiguous: 0, overCap: 0 }
       };
     }
     const rebaselined = state.rows[0]?.parser_version !== parserVersion;
@@ -152,10 +194,17 @@ export async function reconcileApplicantCounts(
     let backlog = Number(pending.rows[0]?.count ?? 0);
     let created = 0;
     const newOccurrences: { identity: string; index: number }[] = [];
+    const unmarkedOccurrences: { identity: string; index: number }[] = [];
+    const applicationCounts = { recorded: 0, ambiguous: 0, overCap: 0 };
+    const risen = new Set<string>();
+    // Identity to the latest intent sequence inserted in this transaction.
+    const insertedThisPoll = new Map<string, string>();
     for (const identity of new Set([...previous.keys(), ...counts.keys()])) {
       const current = counts.get(identity) ?? 0;
       const deferred = deferredAt.get(identity) ?? [];
       const counted = previous.get(identity) ?? 0;
+      if (!rebaselined && current > counted + deferred.length)
+        risen.add(identity);
       // Occurrences the new parser reads for the first time, taken to sit
       // ahead of the deferred ones, whose stored indexes shift past them.
       const shift = rebaselined
@@ -169,11 +218,26 @@ export async function reconcileApplicantCounts(
               .slice(0, current - before)
               .map((value, index): DeferredObservation =>
                 typeof value === "string"
-                  ? { at: new Date(value), index: before + index }
-                  : { at: new Date(value.at), index: value.index + shift }
+                  ? {
+                      at: new Date(value),
+                      index: before + index,
+                      mark: "unmarked" as const
+                    }
+                  : {
+                      at: new Date(value.at),
+                      index: value.index + shift,
+                      mark:
+                        value.mark === undefined
+                          ? ("unmarked" as const)
+                          : value.mark
+                    }
               );
       while (pendingTimes.length < current - before)
-        pendingTimes.push({ at, index: before + pendingTimes.length });
+        pendingTimes.push({
+          at,
+          index: before + pendingTimes.length,
+          mark: startMark
+        });
       const remaining: DeferredObservation[] = [];
       let admitted = 0;
       let suppressedCount = 0;
@@ -188,8 +252,8 @@ export async function reconcileApplicantCounts(
           continue;
         }
         const suppressed = decision === true;
-        await client.query(
-          "INSERT INTO applicant_source_intents (source, identity, observed_at, state) VALUES ($1, $2, $3, $4)",
+        const inserted = await client.query<{ sequence: string }>(
+          "INSERT INTO applicant_source_intents (source, identity, observed_at, state) VALUES ($1, $2, $3, $4) RETURNING sequence",
           [
             source,
             identity,
@@ -197,35 +261,156 @@ export async function reconcileApplicantCounts(
             suppressed ? "suppressed" : "pending"
           ]
         );
+        const sequence = inserted.rows[0]!.sequence;
+        insertedThisPoll.set(identity, sequence);
+        // A member waiting for this identity's intent is tied to this one.
+        await client.query(
+          `UPDATE applicant_source_application_members member
+              SET member_intent_sequence = $2
+             FROM applicant_source_applications application
+            WHERE member.application_id = application.id
+              AND application.closed_at IS NULL
+              AND member.identity = $1
+              AND member.member_intent_sequence IS NULL`,
+          [identity, sequence]
+        );
+        if (occurrence.mark === "unmarked")
+          unmarkedOccurrences.push({ identity, index: occurrence.index });
+        if (
+          intake &&
+          !rebaselined &&
+          occurrence.mark !== "unmarked" &&
+          occurrence.mark !== null
+        )
+          await recordApplication(client, {
+            rows: intake.rows,
+            rootIdentity: identity,
+            rootSequence: sequence,
+            rootSuppressed: suppressed,
+            rootObservedAt: occurrence.at,
+            carriedMark: occurrence.mark,
+            insertedThisPoll,
+            counts: applicationCounts
+          });
         newOccurrences.push({ identity, index: occurrence.index });
         if (suppressed) suppressedCount++;
         else backlog++;
         admitted++;
       }
       const recorded = current < before ? current : before + admitted;
+      // An entry from before marks existed keeps its stored shape.
+      const stored = remaining.map(({ at, index, mark }) =>
+        mark === "unmarked" ? { at, index } : { at, index, mark }
+      );
       if (previous.has(identity))
         await client.query(
           "UPDATE applicant_source_counts SET occurrence_count = $3, deferred_observed_ats = $4::jsonb WHERE source = $1 AND identity = $2",
-          [source, identity, recorded, JSON.stringify(remaining)]
+          [source, identity, recorded, JSON.stringify(stored)]
         );
       else
         await client.query(
           "INSERT INTO applicant_source_counts (source, identity, occurrence_count, deferred_observed_ats) VALUES ($1, $2, $3, $4::jsonb)",
-          [source, identity, recorded, JSON.stringify(remaining)]
+          [source, identity, recorded, JSON.stringify(stored)]
         );
       created += admitted;
     }
     await client.query(
-      "UPDATE applicant_source_state SET last_polled_at = $2, parser_version = $3 WHERE source = $1",
-      [source, at, parserVersion]
+      "UPDATE applicant_source_state SET last_polled_at = $2, parser_version = $3, submitted_serial_mark = GREATEST(submitted_serial_mark, $4::double precision) WHERE source = $1",
+      [source, at, parserVersion, Number.isFinite(maxSerial) ? maxSerial : null]
     );
     await client.query("COMMIT");
-    return { baseline: false, rebaselined, created, backlog, newOccurrences };
+    return {
+      baseline: false,
+      rebaselined,
+      created,
+      backlog,
+      newOccurrences,
+      startMark,
+      risen,
+      unmarkedOccurrences,
+      applications: applicationCounts
+    };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function recordApplication(
+  client: PoolClient,
+  input: {
+    rows: readonly IntakeRow[];
+    rootIdentity: string;
+    rootSequence: string;
+    rootSuppressed: boolean;
+    rootObservedAt: Date;
+    carriedMark: number;
+    insertedThisPoll: ReadonlyMap<string, string>;
+    counts: { recorded: number; ambiguous: number; overCap: number };
+  }
+): Promise<void> {
+  const last = await client.query<{ serial: number | null }>(
+    "SELECT max(submitted_serial) AS serial FROM applicant_source_applications WHERE root_identity = $1",
+    [input.rootIdentity]
+  );
+  const { row, ambiguous } = chooseApplicationRow({
+    rows: input.rows,
+    rootIdentity: input.rootIdentity,
+    carriedMark: input.carriedMark,
+    lastApplicationSerial: last.rows[0]?.serial ?? undefined
+  });
+  input.counts.ambiguous += ambiguous;
+  if (!row || row.identities.length < 2) return;
+  const overCap = row.identities.length > applicationLinkCap;
+  const created = await client.query<{ id: string }>(
+    `INSERT INTO applicant_source_applications
+       (source, root_intent_sequence, root_identity, submitted_serial, over_cap,
+        settled_at, closed_at)
+     VALUES ($1, $2, $3, $4, $5,
+             CASE WHEN $6::boolean THEN now() END,
+             CASE WHEN $5::boolean THEN now() END)
+     RETURNING id`,
+    [
+      source,
+      input.rootSequence,
+      input.rootIdentity,
+      row.submittedSerial,
+      overCap,
+      input.rootSuppressed
+    ]
+  );
+  if (overCap) {
+    input.counts.overCap++;
+    return;
+  }
+  input.counts.recorded++;
+  for (const [offset, identity] of row.identities.slice(1).entries()) {
+    // The member's own intent: one inserted in this transaction, or -- when
+    // the root was deferred and recorded in a later poll -- the one inserted
+    // when this response was first seen (observed at or after the root's
+    // first sighting). None yet means the member is still deferred; its
+    // insert fills this in.
+    const existing = input.insertedThisPoll.has(identity)
+      ? undefined
+      : await client.query<{ sequence: string | null }>(
+          "SELECT max(sequence)::text AS sequence FROM applicant_source_intents WHERE source = $1 AND identity = $2 AND observed_at >= $3",
+          [source, identity, input.rootObservedAt]
+        );
+    await client.query(
+      `INSERT INTO applicant_source_application_members
+         (application_id, ordinal, identity, member_intent_sequence)
+       VALUES ($1, $2, $3, $4)`,
+      [
+        created.rows[0]!.id,
+        offset + 1,
+        identity,
+        input.insertedThisPoll.get(identity) ??
+          existing?.rows[0]?.sequence ??
+          null
+      ]
+    );
   }
 }
 
@@ -262,8 +447,17 @@ export async function pollApplicantSheet(input: {
   const occurrences = new Map<string, NewApplicant[]>();
   let invalid = 0;
   let truncated = 0;
+  const intakeRows: IntakeRow[] = [];
   for (const row of rows) {
     const parsed = parseApplicantCandidates(row.linkCell);
+    intakeRows.push({
+      row: row.row,
+      submittedSerial:
+        "submittedSerial" in row && typeof row.submittedSerial === "number"
+          ? row.submittedSerial
+          : undefined,
+      identities: parsed.candidates.map((candidate) => candidate.identity)
+    });
     invalid += parsed.invalid;
     truncated += Number(parsed.truncated);
     for (const candidate of parsed.candidates) {
@@ -292,7 +486,8 @@ export async function pollApplicantSheet(input: {
     input.backlogLimit,
     input.now?.(),
     input.isSuppressed,
-    input.parserVersion
+    input.parserVersion,
+    { rows: intakeRows }
   );
   const { newOccurrences, ...state } = reconciliation;
   return {

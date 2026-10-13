@@ -681,3 +681,254 @@ it("stamps last_polled_at with the time the poll was given", async () => {
   );
   expect(state.rows[0]?.last_polled_at).toEqual(startedAt);
 });
+
+async function resetApplicantSource() {
+  await pool.query(
+    "TRUNCATE applicant_source_application_members, applicant_source_applications, applicant_source_intents, applicant_source_counts, applicant_source_state CASCADE"
+  );
+}
+const tp = "https://raider.io/characters/eu/hyjal/tropipe";
+const tc = "https://raider.io/characters/eu/hyjal/tropicos";
+const tx = "https://raider.io/characters/eu/hyjal/tropixa";
+const tpId = 'character:["eu","hyjal","tropipe"]';
+const tcId = 'character:["eu","hyjal","tropicos"]';
+async function pollRows(rows: Array<[number | undefined, string]>) {
+  return pollApplicantSheet({
+    pool,
+    readRows: async () =>
+      rows.map(([serial, linkCell], index) => ({
+        row: index + 2,
+        battletag: "tag#1",
+        discordId: "1",
+        characterName: "Name",
+        linkCell,
+        submittedSerial: serial
+      })),
+    backlogLimit: 100,
+    isSuppressed: async () => false
+  });
+}
+async function applications() {
+  const result = await pool.query<{
+    root_identity: string;
+    submitted_serial: number;
+    over_cap: boolean;
+    members: string[] | null;
+  }>(
+    `SELECT a.root_identity, a.submitted_serial, a.over_cap,
+            array_agg(m.identity ORDER BY m.ordinal) FILTER (WHERE m.identity IS NOT NULL) AS members
+       FROM applicant_source_applications a
+       LEFT JOIN applicant_source_application_members m ON m.application_id = a.id
+      GROUP BY a.id ORDER BY a.created_at, a.submitted_serial`
+  );
+  return result.rows;
+}
+
+it("records an application, with members in cell order, for a new multi-link response", async () => {
+  await resetApplicantSource();
+  await pollRows([[10, tx]]); // baseline: sets the mark to 10
+  await pollRows([
+    [10, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(await applications()).toEqual([
+    {
+      root_identity: tpId,
+      submitted_serial: 20,
+      over_cap: false,
+      members: [tcId]
+    }
+  ]);
+});
+
+it("records nothing on the first poll after deploy, and only sets the mark", async () => {
+  await resetApplicantSource();
+  await pollRows([[10, tx]]);
+  await pool.query(
+    "UPDATE applicant_source_state SET submitted_serial_mark = NULL"
+  );
+  const result = await pollRows([
+    [10, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(await applications()).toEqual([]);
+  expect(result.newApplicants.length).toBeGreaterThan(0); // per-occurrence alerts, as today
+  const mark = await pool.query(
+    "SELECT submitted_serial_mark FROM applicant_source_state"
+  );
+  expect(mark.rows[0].submitted_serial_mark).toBe(20);
+});
+
+it("records nothing for single-link responses or a pre-mark response's later reference", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, `${tp} ${tc}`]]); // baseline
+  await pollRows([
+    [5, `${tp} ${tc}`],
+    [20, `${tx} ${tp}`],
+    [21, tc]
+  ]);
+  const rows = await applications();
+  expect(rows.map((row) => row.root_identity)).toEqual([
+    'character:["eu","hyjal","tropixa"]'
+  ]);
+});
+
+it("chooses the response by serial after the sheet is sorted", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollRows([
+    [20, `${tp} ${tc}`],
+    [5, tx]
+  ]);
+  expect((await applications())[0]).toMatchObject({
+    root_identity: tpId,
+    submitted_serial: 20
+  });
+});
+
+it("records an over-cap response without members", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  const six = ["a", "b", "c", "d", "e", "f"]
+    .map((name) => `https://raider.io/characters/eu/hyjal/over${name}`)
+    .join(" ");
+  await pollRows([
+    [5, tx],
+    [20, six]
+  ]);
+  expect(await applications()).toEqual([
+    {
+      root_identity: 'character:["eu","hyjal","overa"]',
+      submitted_serial: 20,
+      over_cap: true,
+      members: null
+    }
+  ]);
+  const closed = await pool.query(
+    "SELECT closed_at FROM applicant_source_applications"
+  );
+  expect(closed.rows[0].closed_at).not.toBeNull();
+});
+
+it("records a deferred root's application in a later poll, from the mark it carried", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => (identity === tpId ? "defer" : false)
+  });
+  expect(await applications()).toEqual([]);
+  await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(await applications()).toEqual([
+    {
+      root_identity: tpId,
+      submitted_serial: 20,
+      over_cap: false,
+      members: [tcId]
+    }
+  ]);
+  // The member was inserted a poll before its root, and is still tied to it.
+  const member = await pool.query(
+    "SELECT member_intent_sequence FROM applicant_source_application_members"
+  );
+  expect(member.rows[0]?.member_intent_sequence).not.toBeNull();
+});
+
+it("ties each member to its own intent, filling a deferred member in later", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => (identity === tcId ? "defer" : false)
+  });
+  const before = await pool.query(
+    "SELECT member_intent_sequence FROM applicant_source_application_members"
+  );
+  expect(before.rows).toEqual([{ member_intent_sequence: null }]);
+  await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  const after = await pool.query<{
+    member_intent_sequence: string;
+    sequence: string;
+  }>(
+    `SELECT m.member_intent_sequence, i.sequence
+       FROM applicant_source_application_members m
+       JOIN applicant_source_intents i ON i.identity = m.identity`
+  );
+  expect(after.rows[0]?.member_intent_sequence).toBe(after.rows[0]?.sequence);
+});
+
+it("settles an application at intake when its root is inserted suppressed", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => identity === tpId
+  });
+  const settled = await pool.query(
+    "SELECT settled_at FROM applicant_source_applications"
+  );
+  expect(settled.rows[0].settled_at).not.toBeNull();
+});
