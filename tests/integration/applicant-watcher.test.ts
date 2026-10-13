@@ -850,10 +850,80 @@ it("records a deferred root's application in a later poll, from the mark it carr
     }
   ]);
   // The member was inserted a poll before its root, and is still tied to it.
-  const member = await pool.query(
+  const member = await pool.query<{ member_intent_sequence: string }>(
     "SELECT member_intent_sequence FROM applicant_source_application_members"
   );
-  expect(member.rows[0]?.member_intent_sequence).not.toBeNull();
+  const intent = await pool.query<{ sequence: string }>(
+    "SELECT sequence FROM applicant_source_intents WHERE identity = $1",
+    [tcId]
+  );
+  expect(intent.rows).toHaveLength(1);
+  expect(member.rows[0]?.member_intent_sequence).toBe(intent.rows[0]?.sequence);
+});
+
+it("ties a deferred root's member to its first intent, not a later resubmission's", async () => {
+  // Break caught: max(sequence) tied R's member to the intent M's later
+  // response (S30, Q's application) created, not the one from R's response.
+  await resetApplicantSource();
+  const tq = "https://raider.io/characters/eu/hyjal/tropiqua";
+  const tqId = 'character:["eu","hyjal","tropiqua"]';
+  const sheetRow = (row: number, serial: number, linkCell: string) => ({
+    row,
+    battletag: "t",
+    discordId: "1",
+    characterName: "N",
+    linkCell,
+    submittedSerial: serial
+  });
+  const first = [sheetRow(2, 5, tx), sheetRow(3, 20, `${tp} ${tc}`)];
+  const later = [...first, sheetRow(4, 30, `${tq} ${tc}`)];
+  const pollAt = (
+    rows: ReturnType<typeof sheetRow>[],
+    at: string,
+    deferred: string[]
+  ) =>
+    pollApplicantSheet({
+      pool,
+      readRows: async () => rows,
+      backlogLimit: 100,
+      now: () => new Date(at),
+      isSuppressed: async (identity) =>
+        deferred.includes(identity) ? "defer" : false
+    });
+  await pollAt([sheetRow(2, 5, tx)], "2026-10-13T10:00:00.000Z", []);
+  // t1: R (tropipe) and M (tropicos) both deferred.
+  await pollAt(first, "2026-10-13T10:01:00.000Z", [tpId, tcId]);
+  // M's deferred occurrence is admitted, observed at t1; R still waits.
+  await pollAt(first, "2026-10-13T10:02:00.000Z", [tpId]);
+  // t3: S30 [Q, M] arrives; Q's application takes M's new intent.
+  await pollAt(later, "2026-10-13T10:03:00.000Z", [tpId]);
+  // R is finally admitted, with its first sighting at t1.
+  await pollAt(later, "2026-10-13T10:04:00.000Z", []);
+  const memberIntents = await pool.query<{ sequence: string }>(
+    "SELECT sequence FROM applicant_source_intents WHERE identity = $1 ORDER BY sequence",
+    [tcId]
+  );
+  expect(memberIntents.rows).toHaveLength(2);
+  const members = await pool.query<{
+    root_identity: string;
+    member_intent_sequence: string;
+  }>(
+    `SELECT a.root_identity, m.member_intent_sequence
+       FROM applicant_source_application_members m
+       JOIN applicant_source_applications a ON a.id = m.application_id
+      ORDER BY a.root_identity`
+  );
+  // tropipe sorts before tropiqua.
+  expect(members.rows).toEqual([
+    {
+      root_identity: tpId,
+      member_intent_sequence: memberIntents.rows[0]?.sequence
+    },
+    {
+      root_identity: tqId,
+      member_intent_sequence: memberIntents.rows[1]?.sequence
+    }
+  ]);
 });
 
 it("ties each member to its own intent, filling a deferred member in later", async () => {

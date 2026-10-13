@@ -352,8 +352,8 @@ async function recordApplication(
   }
 ): Promise<void> {
   const last = await client.query<{ serial: number | null }>(
-    "SELECT max(submitted_serial) AS serial FROM applicant_source_applications WHERE root_identity = $1",
-    [input.rootIdentity]
+    "SELECT max(submitted_serial) AS serial FROM applicant_source_applications WHERE root_identity = $1 AND source = $2",
+    [input.rootIdentity, source]
   );
   const { row, ambiguous } = chooseApplicationRow({
     rows: input.rows,
@@ -389,13 +389,14 @@ async function recordApplication(
   for (const [offset, identity] of row.identities.slice(1).entries()) {
     // The member's own intent: one inserted in this transaction, or -- when
     // the root was deferred and recorded in a later poll -- the one inserted
-    // when this response was first seen (observed at or after the root's
-    // first sighting). None yet means the member is still deferred; its
-    // insert fills this in.
+    // when this response was first seen: the earliest observed at or after the
+    // root's first sighting, since an identity's occurrences are inserted
+    // oldest first and a later one belongs to a later response. None yet
+    // means the member is still deferred; its insert fills this in.
     const existing = input.insertedThisPoll.has(identity)
       ? undefined
       : await client.query<{ sequence: string | null }>(
-          "SELECT max(sequence)::text AS sequence FROM applicant_source_intents WHERE source = $1 AND identity = $2 AND observed_at >= $3",
+          "SELECT min(sequence)::text AS sequence FROM applicant_source_intents WHERE source = $1 AND identity = $2 AND observed_at >= $3",
           [source, identity, input.rootObservedAt]
         );
     await client.query(
