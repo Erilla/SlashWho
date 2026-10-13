@@ -2497,10 +2497,11 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
-  it("times and names a failed applicant poll and a failed tick", async () => {
+  it("times and names a failed applicant poll and a failed drain", async () => {
     // Break caught (#507): a failed poll said only how many times it had
     // failed, and a failed tick said nothing but that it failed -- not what
-    // threw, nor how long it ran first.
+    // threw, nor how long it ran first. A failed drain is now caught on its
+    // own, so settlement and linking still run, and is timed from its start.
     vi.mocked(pollApplicantSheet).mockRejectedValueOnce(
       new TypeError("private-value")
     );
@@ -2528,11 +2529,9 @@ describe("worker runtime", () => {
         durationMs: 25,
         errorName: "TypeError"
       },
-      // Timed from the start of the tick: the due check, the failed poll and
-      // the drain that threw.
       {
-        event: "applicant_sheet_tick_failed",
-        durationMs: 100,
+        event: "applicant_sheet_drain_failed",
+        durationMs: 25,
         errorName: "RangeError"
       }
     ]);
@@ -2651,6 +2650,51 @@ describe("worker runtime", () => {
       expect(records.map((record) => record.event)).not.toContain(
         "applicant_sheet_tick_failed"
       );
+      expect(linkApplicantApplications).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+        "private-value"
+      );
+      await runtime.stop();
+    } finally {
+      resetPoll();
+    }
+  });
+
+  it("still settles and links applications when the drain throws", async () => {
+    // Break caught: a drain throw jumped to the tick's outer catch, so a
+    // failing drain stopped settlement and linking for as long as it failed.
+    resetPoll();
+    try {
+      quietPoll();
+      vi.mocked(drainApplicantIntents).mockRejectedValueOnce(
+        new RangeError("private-value")
+      );
+      vi.mocked(settleApplicantApplications).mockClear();
+      vi.mocked(linkApplicantApplications).mockClear();
+      const fakes = runtimeFakes();
+      const logger = { info: vi.fn() };
+      const runtime = await createWorkerRuntime(
+        linkingConfig,
+        {
+          ...fakes.dependencies,
+          createEvidenceGateway: applicantGateway,
+          clock: steppingClock()
+        },
+        logger
+      );
+      await fakes.applicantSheetTickHandler?.();
+      const records = logger.info.mock.calls.map(
+        ([record]) => record as Record<string, unknown>
+      );
+      expect(records).toContainEqual({
+        event: "applicant_sheet_drain_failed",
+        durationMs: 25,
+        errorName: "RangeError"
+      });
+      expect(records.map((record) => record.event)).not.toContain(
+        "applicant_sheet_tick_failed"
+      );
+      expect(settleApplicantApplications).toHaveBeenCalledTimes(1);
       expect(linkApplicantApplications).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
         "private-value"

@@ -1112,8 +1112,8 @@ function createApplicantSheetTick(
   }
 
   return async () => {
-    // Outside the try, so a tick that fails anywhere -- the due check, the
-    // poll's alerts or the drain -- still reports how long it ran.
+    // Outside the try, so a tick that fails anywhere -- the due check or the
+    // poll's alerts -- still reports how long it ran.
     const tickStartedAt = clock();
     try {
       const due = await pool.query(
@@ -1134,27 +1134,38 @@ function createApplicantSheetTick(
       await alertOnLongFailure();
       if (Date.now() >= pointsBlockedUntil) {
         const drainStartedAt = clock();
-        const wcl = evidenceGateway;
-        if (!wcl.resolveCharacterById)
-          throw new Error("applicant_resolver_unavailable");
-        const drained = await drainApplicantIntents({
-          pool: pool as Pool,
-          config,
-          repositories,
-          queue,
-          raiderio: gateway,
-          warcraftlogs: {
-            getRateLimit: wcl.getRateLimit,
-            resolveCharacterById: wcl.resolveCharacterById
-          }
-        });
-        if (drained.pointsBlocked)
-          pointsBlockedUntil = Date.now() + pointsBlockMs;
-        logger?.info({
-          event: "applicant_sheet_drain",
-          ...drained,
-          durationMs: elapsedMs(clock, drainStartedAt)
-        });
+        // Its own try/catch: a failing drain must never skip settlement or
+        // linking below.
+        try {
+          const wcl = evidenceGateway;
+          if (!wcl.resolveCharacterById)
+            throw new Error("applicant_resolver_unavailable");
+          const drained = await drainApplicantIntents({
+            pool: pool as Pool,
+            config,
+            repositories,
+            queue,
+            raiderio: gateway,
+            warcraftlogs: {
+              getRateLimit: wcl.getRateLimit,
+              resolveCharacterById: wcl.resolveCharacterById
+            }
+          });
+          if (drained.pointsBlocked)
+            pointsBlockedUntil = Date.now() + pointsBlockMs;
+          logger?.info({
+            event: "applicant_sheet_drain",
+            ...drained,
+            durationMs: elapsedMs(clock, drainStartedAt)
+          });
+        } catch (error) {
+          // The name only: an error message can carry identities.
+          logger?.info({
+            event: "applicant_sheet_drain_failed",
+            durationMs: elapsedMs(clock, drainStartedAt),
+            errorName: errorName(error)
+          });
+        }
       }
       try {
         // Whatever the linking flag says: expiry must run from when each root
