@@ -647,16 +647,39 @@ route: `pageMembers`, labels and research state.
   - a first sweep cycle (`createAndFinishFingerprintSweep`);
   - a continuation cycle;
   - a seal;
-  - a live-sweep completion;
+  - a live-sweep completion, covered by tests rather than by the window (see
+    below);
   - a `not_due` refresh;
   - a privacy-hidden run;
   - a capped sweep;
   - a manual connection added and one removed.
 
   Test's volume is low, about 8 discovery runs in three days. So the phase 1
-  plan lists how to trigger each path deliberately (for example a stale root
-  with a live chain, a capped sweep, a `not_due` refresh), and the replay
-  reports which paths the window covered.
+  plan lists how to trigger each path deliberately (for example a capped
+  sweep, a `not_due` refresh), and the replay reports which paths the window
+  covered.
+
+  **The live-sweep completion is covered by tests, not by the window on
+  test.** The path needs a sweep chain still holding its cursor more than
+  `FRESHNESS_HOURS` (24 h) after its first cycle. A healthy chain on test
+  seals within about 15 minutes, so no operator step can produce one; the
+  path arises only after a fault such as a stranded chain, which has
+  happened on test once, on 2026-09-26. Agreed on 2026-10-13 (#738), the
+  path is instead covered by two tests:
+  - **Handler:** "only adds Raider.IO observations on a live-sweep
+    completion", in `packages/application/src/discovery-job-handler.test.ts`.
+    It drives a real `not_due` run against a live chain through the discovery
+    job handler, through to the ledger write `raiderio` / `added_only` /
+    `live_sweep_completion`.
+  - **Replay:** "7. accounts for a live-sweep completion that finds a new
+    alt", in `tests/integration/character-groups-replay.test.ts`. It runs
+    `completeWithLiveSweepSnapshot`, then the observation write, then the
+    replay's accounting, including `coverage.live_sweep_completion`.
+
+  The replay's coverage counter keeps reporting `live_sweep_completion`, as
+  it counts every ledger reason in the window. So if the path occurs
+  naturally on test or production later, the first replay after it checks it
+  for real.
 
 - **Fixtures.** It also passes in the integration suite, on seeded fixtures
   with:

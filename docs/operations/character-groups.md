@@ -172,12 +172,15 @@ Each path needs at least one publication in the window, and the replay's
   a newer run holds the observer, while a capped cycle that skipped a guild
   is also `skipped_guild`. Watch the admission logs for
   `fingerprint_admission` records.
-- **A live-sweep completion.** More than `FRESHNESS_HOURS` (24 h) after the
-  capped search above, while its chain is still continuing, search the same
-  character again. The run completes against the live snapshot, writing a
-  Raider.IO-only, no-reservation row. Coverage: `live_sweep_completion` only
-  — it carries no `sweepReservationId`, so it never counts towards
-  `sweep_publication`.
+- **A live-sweep completion.** This cannot be triggered on test. The path is
+  a search made more than `FRESHNESS_HOURS` (24 h) after a capped search,
+  while that search's chain is still continuing: the run completes against
+  the live snapshot, writing a Raider.IO-only, no-reservation row. A healthy
+  chain on test seals within about 15 minutes, so the path arises only after
+  a fault such as a stranded chain. It is covered by tests instead (see
+  [Exit criteria](#exit-criteria)). If it does occur, coverage shows
+  `live_sweep_completion` only — the row carries no `sweepReservationId`, so
+  it never counts towards `sweep_publication`.
 - **A `not_due` refresh.** Search a character swept within the last 7 days
   whose dossier is over 24 hours old; for example, repeat a first-cycle
   search the next day. Coverage: `not_due_refresh`, alongside the row's own
@@ -218,7 +221,15 @@ From the spec:
   `a_completeness` finding — a `stage: "recompute"` record heals through the
   maintenance cycle and blocks only if the replay then reports
   `drift_stale_pending`;
-- every path above appears in `coverage`;
+- every path above appears in `coverage`, except the live-sweep completion,
+  which chains on test never reach because they seal within minutes. That
+  path is covered by the handler test "only adds Raider.IO observations on a
+  live-sweep completion" in
+  `packages/application/src/discovery-job-handler.test.ts` and the
+  integration test "7. accounts for a live-sweep completion that finds a new
+  alt" in `tests/integration/character-groups-replay.test.ts`. The replay
+  still counts `live_sweep_completion`, so the first replay after the path
+  occurs naturally checks it for real;
 - the integration suite passing.
 
 ### `drift_pending` versus `drift_stale_pending`
