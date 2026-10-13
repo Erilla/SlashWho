@@ -394,12 +394,26 @@ const warcraftLogsBossAliases = new Map<string, readonly string[]>([
   ["2644", ["One-Armed Bandit"]]
 ]);
 
-function normalizedName(value: string): string {
-  return value
+// Upstream names are unbounded input. Retain a fixed number of pure results,
+// evicting the oldest rather than growing the process with every spelling.
+function boundedMemo<T>(compute: (key: string) => T): (key: string) => T {
+  const cache = new Map<string, T>();
+  return (key) => {
+    if (cache.has(key)) return cache.get(key)!;
+    const value = compute(key);
+    if (cache.size >= 4096) cache.delete(cache.keys().next().value!);
+    cache.set(key, value);
+    return value;
+  };
+}
+
+const normalizedName = boundedMemo((value: string): string =>
+  value
     .normalize("NFKD")
     .replace(/[^\p{L}\p{N}]+/gu, "")
-    .toLocaleLowerCase("en-US");
-}
+    .toLocaleLowerCase("en-US")
+);
+const combinedMidnightZone = normalizedName("VS / DR / MQD");
 
 /**
  * Journal encounters that are a faction's copy of an earlier one, keyed to the
@@ -718,15 +732,15 @@ export function raidContentWindowOpenedBetween(since: Date, at: Date): boolean {
   });
 }
 
-function raiderIoBossSlug(bossName: string): string {
-  return bossName
+const raiderIoBossSlug = boundedMemo((bossName: string): string =>
+  bossName
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[’']/g, "")
     .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
-    .toLocaleLowerCase("en-US");
-}
+    .toLocaleLowerCase("en-US")
+);
 
 /**
  * Whether a kill falls inside its raid's current-content window.
@@ -894,28 +908,71 @@ export function lookupRaiderIoBoss(
   raidName: string,
   bossName: string
 ): Readonly<{ raidSlug: string; bossSlug: string }> | null {
-  // WCL stores the opening Midnight raids as a combined zone. Resolve only
-  // bosses belonging to that tier; do not reinterpret arbitrary zone labels.
-  if (normalizedName(raidName) === normalizedName("VS / DR / MQD")) {
-    const encounter = lookupUniqueRaidBossByName(bossName);
-    if (!encounter || raiderIoRaidSlugs.get(encounter.raidId) !== "tier-mn-1")
-      return null;
-    return lookupRaiderIoBoss(encounter.raidName, encounter.bossName);
-  }
-  const raid = lookupRaidByName(raidName);
-  if (!raid?.raiderIoRaidSlug) return null;
-  // Resolved as the dossier resolves the kill, so the rank is asked about the
-  // boss the kill is shown under. Raider.IO slugs the Journal name, not Warcraft
-  // Logs' spelling of it; only a boss the catalogue cannot place falls back to
-  // the name as given.
-  const encounter =
-    lookupRaidBossByName(raidName, bossName) ??
-    lookupRaidBossByLegacyName(raid.raidId, bossName);
-  const bossSlug =
-    encounter?.raiderIoBossSlug ??
-    raiderIoBossSlug(encounter?.bossName ?? bossName);
-  return bossSlug ? { raidSlug: raid.raiderIoRaidSlug, bossSlug } : null;
+  return raiderIoBossByNames(JSON.stringify([raidName, bossName]));
 }
+
+const raiderIoBossByNames = boundedMemo(
+  (key: string): Readonly<{ raidSlug: string; bossSlug: string }> | null => {
+    const [raidName, bossName] = JSON.parse(key) as [string, string];
+    // WCL stores the opening Midnight raids as a combined zone. Resolve only
+    // bosses belonging to that tier; do not reinterpret arbitrary zone labels.
+    if (normalizedName(raidName) === combinedMidnightZone) {
+      const encounter = lookupUniqueRaidBossByName(bossName);
+      if (!encounter || raiderIoRaidSlugs.get(encounter.raidId) !== "tier-mn-1")
+        return null;
+      return lookupRaiderIoBoss(encounter.raidName, encounter.bossName);
+    }
+    const raid = lookupRaidByName(raidName);
+    if (!raid?.raiderIoRaidSlug) return null;
+    // Resolved as the dossier resolves the kill, so the rank is asked about the
+    // boss the kill is shown under. Raider.IO slugs the Journal name, not Warcraft
+    // Logs' spelling of it; only a boss the catalogue cannot place falls back to
+    // the name as given.
+    const encounter =
+      lookupRaidBossByName(raidName, bossName) ??
+      lookupRaidBossByLegacyName(raid.raidId, bossName);
+    const bossSlug =
+      encounter?.raiderIoBossSlug ??
+      raiderIoBossSlug(encounter?.bossName ?? bossName);
+    return bossSlug
+      ? Object.freeze({ raidSlug: raid.raiderIoRaidSlug, bossSlug })
+      : null;
+  }
+);
+
+// Built once, using the same stable boss-order and ambiguity rule as the
+// forward lookup. A shared slug is not necessarily a shared encounter.
+const encountersByRaiderIoSlugs = (() => {
+  const buckets = new Map<string, RaidCatalogueEncounter[]>();
+  for (const encounter of encounters.values()) {
+    const raidSlug = raiderIoRaidSlugs.get(encounter.raidId);
+    if (!raidSlug) continue;
+    const bossSlug =
+      encounter.raiderIoBossSlug ?? raiderIoBossSlug(encounter.bossName);
+    const key = JSON.stringify([raidSlug, bossSlug]);
+    const bucket = buckets.get(key) ?? [];
+    bucket.push(encounter);
+    buckets.set(key, bucket);
+  }
+  return new Map(
+    [...buckets].map(([key, bucket]) => {
+      bucket.sort((a, b) => a.bossOrder - b.bossOrder);
+      const first = bucket[0]!;
+      const [, bossSlug] = JSON.parse(key) as [string, string];
+      return [
+        key,
+        bucket.length === 1 ||
+        bucket.every(
+          (encounter) =>
+            encounter.raidId === first.raidId &&
+            encounter.raiderIoBossSlug === bossSlug
+        )
+          ? first
+          : null
+      ] as const;
+    })
+  );
+})();
 
 /**
  * The encounter Raider.IO names by its own raid and boss slugs: the reverse of
@@ -932,24 +989,9 @@ export function lookupRaidEncounterByRaiderIoSlugs(
   raidSlug: string,
   bossSlug: string
 ): RaidCatalogueEncounter | null {
-  const matches = [...encounters.values()]
-    .filter(
-      (encounter) =>
-        raiderIoRaidSlugs.get(encounter.raidId) === raidSlug &&
-        (encounter.raiderIoBossSlug ?? raiderIoBossSlug(encounter.bossName)) ===
-          bossSlug
-    )
-    .sort((a, b) => a.bossOrder - b.bossOrder);
-  const first = matches[0];
-  if (!first) return null;
-  if (matches.length === 1) return first;
-  return matches.every(
-    (encounter) =>
-      encounter.raidId === first.raidId &&
-      encounter.raiderIoBossSlug === bossSlug
-  )
-    ? first
-    : null;
+  return (
+    encountersByRaiderIoSlugs.get(JSON.stringify([raidSlug, bossSlug])) ?? null
+  );
 }
 
 /**

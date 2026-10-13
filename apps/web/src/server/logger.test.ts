@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { throttleFields } from "@slashwho/application";
+import { createDossierGateways } from "../../../../packages/application/src/dossier-gateways";
+import { withHttpRequest } from "./http";
 import { expect, it } from "vitest";
 
 import { allowedFields, createWebLogger } from "./logger";
@@ -35,6 +37,14 @@ const expectedPerformanceFields = [
   "raiderIoRankingsMs",
   "raiderIoRankingsCalls",
   "raiderIoRankingsMaxCallMs",
+  "raiderIoRankingsFailureNotFound",
+  "raiderIoRankingsFailureHttp4xx",
+  "raiderIoRankingsFailureHttp5xx",
+  "raiderIoRankingsFailureTimeout",
+  "raiderIoRankingsFailureNetwork",
+  "raiderIoRankingsFailureSchema",
+  "raiderIoRankingsFailureThrottled",
+  "raiderIoRankingsFailurePrivate",
   "raiderIoRankingLogicalKeys",
   "raiderIoRankingPhysicalCalls",
   "raiderIoCharacterMs",
@@ -76,6 +86,44 @@ const expectedPerformanceFields = [
   "cacheFailures",
   "cacheCapacity"
 ];
+
+it("serializes closed rankings failures on http_request without lookup or response data", async () => {
+  const output = new PassThrough();
+  let captured = "";
+  output.on("data", (chunk) => {
+    captured += chunk.toString();
+  });
+  const { gatewaysFor } = createDossierGateways({
+    blizzard: { getCompletedAchievements: async () => [] },
+    raiderio: {
+      getMythicBossRankings: async () => {
+        throw new Error("https://private/PRIVATE_GUILD PRIVATE_BODY");
+      }
+    },
+    config: { NEGATIVE_CACHE_TTL_MS: 300_000, DOSSIER_PROVIDER_CONCURRENCY: 4 }
+  });
+  const response = await withHttpRequest(
+    "dossier",
+    async (scope) => {
+      await gatewaysFor(undefined, scope).raiderio.getMythicBossRankings({
+        raidSlug: "nerub-ar-palace",
+        bossSlug: "queen-ansurek",
+        guild: { name: "PRIVATE_GUILD", realm: "silvermoon", region: "eu" }
+      });
+      return Response.json({ ok: true });
+    },
+    createWebLogger(output)
+  );
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.status).toBe(200);
+  const record = JSON.parse(captured) as Record<string, unknown>;
+  expect(record).toMatchObject({
+    event: "http_request",
+    endpoint: "dossier",
+    raiderIoRankingsFailureNetwork: 1
+  });
+  expect(captured).not.toMatch(/PRIVATE_|https:/);
+});
 
 it("logs only operational fields and redacts request and upstream secrets", async () => {
   // Break caught: HTTP diagnostics could persist credentials or private lookup data.

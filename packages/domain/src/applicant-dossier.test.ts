@@ -2085,6 +2085,102 @@ describe("Raider.IO-logged first kills (#732)", () => {
     expect(after.bestParses).toEqual(before.bestParses);
   });
 
+  it.each([
+    ["nearest", "2026-07-21T00:15:00.000Z", "2026-07-21T00:15:00.000Z"],
+    [
+      "equal-distance evidence tie",
+      "2026-07-21T00:30:00.000Z",
+      "2026-07-20T23:30:00.000Z"
+    ]
+  ])(
+    "lends the roster only to the selected %s kill across midnight",
+    (_name, later, expected) => {
+      const dossier = buildApplicantDossier({
+        root: alfaKey,
+        characters: [alfa],
+        limitations: [],
+        kills: [
+          midnightFallsKill(alfaKey, { killedAt: later }),
+          midnightFallsKill(alfaKey, { killedAt: "2026-07-20T23:30:00.000Z" })
+        ],
+        raiderIoFirstKills: [
+          raiderIoKill({ killedAt: "2026-07-21T00:00:00.000Z" })
+        ]
+      });
+      const events = verifiedKill(boss(dossier)).firstKills;
+      expect(events).toHaveLength(2);
+      expect(
+        events.filter((event) => event.roster).map((event) => event.killedAt)
+      ).toEqual([expected]);
+    }
+  );
+
+  it.each([
+    ["2026-07-20T22:00:00.000Z", true],
+    ["2026-07-20T21:59:59.999Z", false]
+  ])("matches the inclusive two-hour bound at %s", (killedAt, matched) => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      limitations: [],
+      kills: [midnightFallsKill(alfaKey, { killedAt })],
+      raiderIoFirstKills: [
+        raiderIoKill({
+          killedAt: "2026-07-21T00:00:00.000Z",
+          encounter: { state: "none" }
+        })
+      ]
+    });
+    expect(verifiedKill(boss(dossier)).firstKill.roster !== undefined).toBe(
+      matched
+    );
+  });
+
+  it("does not reuse a replaced kill when repeated first kills consume the same bucket", () => {
+    const first = raiderIoKill({ killedAt: "2026-07-21T00:00:00.000Z" });
+    const second = raiderIoKill({
+      killedAt: first.killedAt,
+      encounter: { state: "not_read" }
+    });
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [alfa],
+      limitations: [],
+      kills: [
+        midnightFallsKill(alfaKey, { killedAt: "2026-07-20T23:30:00.000Z" }),
+        midnightFallsKill(alfaKey, { killedAt: "2026-07-21T00:30:00.000Z" })
+      ],
+      raiderIoFirstKills: [first, second]
+    });
+    expect(
+      verifiedKill(boss(dossier)).firstKills.map((event) => [
+        event.killedAt,
+        event.roster?.state
+      ])
+    ).toEqual([
+      ["2026-07-21T00:30:00.000Z", "unavailable"],
+      ["2026-07-20T23:30:00.000Z", "available"]
+    ]);
+  });
+
+  it("preserves verbatim dossier-key membership against lowercased roster members", () => {
+    const dossier = buildApplicantDossier({
+      root: alfaKey,
+      characters: [
+        { ...alfa, key: { ...alfaKey, name: alfaKey.name.toUpperCase() } }
+      ],
+      limitations: [],
+      kills: [],
+      raiderIoFirstKills: [raiderIoKill()]
+    });
+    const roster = verifiedKill(boss(dossier)).firstKill.roster;
+    expect(roster?.state).toBe("available");
+    if (roster?.state === "available")
+      expect(roster.members.every((member) => !member.isDossierCharacter)).toBe(
+        true
+      );
+  });
+
   it("keeps a kill just outside the tolerance in the same-date event, dated by the earlier", () => {
     // 2 h 1 min after Raider.IO's time: not the same kill, but the dossier's
     // same-region, same-date grouping still shows one event for the night.

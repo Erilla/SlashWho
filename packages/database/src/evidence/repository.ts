@@ -749,16 +749,22 @@ export function createEvidenceRepositories(
         const result = await pool.query<{
           id: string;
           status: CharacterEvidenceRun["status"];
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
           deferred: boolean;
-          phase_states: string[];
+          phases: Pick<EvidenceRunPhase, "id" | "state" | "limitationCode">[];
         }>(
-          `SELECT runs.id, runs.status,
+          `SELECT runs.id, runs.status, runs.region, runs.realm_slug, runs.normalized_name,
                   runs.limitation_code IS NOT NULL AS deferred,
                   COALESCE(
-                    array_agg(phases.state ORDER BY phases.ordinal)
+                    jsonb_agg(jsonb_build_object(
+                      'id', phases.phase_id, 'state', phases.state,
+                      'limitationCode', phases.limitation_code
+                    ) ORDER BY phases.ordinal)
                       FILTER (WHERE phases.state IS NOT NULL),
-                    '{}'
-                  ) AS phase_states
+                    '[]'::jsonb
+                  ) AS phases
              FROM character_evidence_runs runs
              LEFT JOIN character_evidence_run_phases phases
                ON phases.run_id = runs.id
@@ -776,9 +782,14 @@ export function createEvidenceRepositories(
         );
         return result.rows.map((row) => ({
           id: row.id,
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          },
           status: row.status,
           deferred: row.deferred,
-          phaseStates: row.phase_states
+          phases: row.phases
         }));
       },
 
