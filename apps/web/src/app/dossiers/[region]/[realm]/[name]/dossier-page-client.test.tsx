@@ -145,6 +145,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   push.mockReset();
   clearStoredCredentials();
   void takeEarlyDossierRead(dossierPath);
@@ -1823,22 +1824,325 @@ describe("DossierPageClient staged research", () => {
     );
     await flushAsyncWork();
 
-    // Asks at 0, 1, 3 and 7 s fail quietly; the fifth, at 15 s, is shown.
+    // Fast asks still wait for both five failures and 15 continuous seconds.
     await advance(7_000);
-    expect(page.statusCalls()).toBe(4);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    await advance(8_000);
     expect(page.statusCalls()).toBe(5);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(7_999);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(1);
+    expect(page.statusCalls()).toBe(9);
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Refused: upstream_unavailable."
     );
-
-    // It goes on asking, and the answer that finally comes clears the notice.
     failing = false;
-    await advance(10_000);
-    expect(page.statusCalls()).toBe(6);
+    await advance(2_000);
+    expect(page.statusCalls()).toBe(10);
     expect(screen.getByText("Expanded evidence")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  function jobVisibility(initialState: DocumentVisibilityState = "visible") {
+    const getter = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue(initialState);
+    return (state: DocumentVisibilityState) => {
+      getter.mockReturnValue(state);
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+  }
+
+  it("keeps job reads within two seconds through the first 90 seconds", async () => {
+    vi.useFakeTimers();
+    const readTimes: number[] = [];
+    const startedAt = performance.now();
+    renderJobPage(() => {
+      readTimes.push(performance.now() - startedAt);
+      return Promise.resolve(Response.json({ status: "running", error: null }));
+    });
+    await flushAsyncWork();
+    await advance(89_000);
+    expect(readTimes.slice(0, 4)).toEqual([0, 1_000, 3_000, 5_000]);
+    expect(readTimes).toHaveLength(46);
+    expect(readTimes.at(-1)).toBe(89_000);
+    await advance(2_000);
+    await advance(4_000);
+    await advance(8_000);
+    expect(readTimes.slice(-3)).toEqual([91_000, 95_000, 103_000]);
+  });
+
+  it("requires at least five failed asks even after 15 seconds", async () => {
+    vi.useFakeTimers();
+    const page = renderJobPage(() =>
+      Promise.resolve(refusal("rate_limited", 429, { "retry-after": "10" }))
+    );
+    await flushAsyncWork();
+    await advance(30_000);
+    expect(page.statusCalls()).toBe(4);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(10_000);
+    expect(page.statusCalls()).toBe(5);
+    expect(screen.getByRole("alert")).toBeVisible();
+  });
+
+  it("resets the continuous failure clock on a successful active answer", async () => {
+    vi.useFakeTimers();
+    let failing = true;
+    renderJobPage(() =>
+      Promise.resolve(
+        failing
+          ? refusal("upstream_unavailable", 503)
+          : Response.json({ status: "running", error: null })
+      )
+    );
+    await flushAsyncWork();
+    await advance(7_000);
+    failing = false;
+    await advance(2_000);
+    failing = true;
+    await advance(16_000);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await advance(2_000);
+    expect(screen.getByRole("alert")).toBeVisible();
+  });
+
+  it("schedules no job asks while initially hidden and resumes immediately", async () => {
+    vi.useFakeTimers();
+    const visibility = jobVisibility("hidden");
+    const page = renderJobPage(() =>
+      Promise.resolve(Response.json({ status: "running", error: null }))
+    );
+    await flushAsyncWork();
+    await advance(60_000);
+    expect(page.statusCalls()).toBe(0);
+    await act(async () => visibility("visible"));
+    await advance(0);
+    expect(page.statusCalls()).toBe(1);
+  });
+
+  it("cancels a scheduled ask while hidden without restarting the fast window", async () => {
+    vi.useFakeTimers();
+    const visibility = jobVisibility();
+    const page = renderJobPage(() =>
+      Promise.resolve(Response.json({ status: "running", error: null }))
+    );
+    await flushAsyncWork();
+    await act(async () => visibility("hidden"));
+    await advance(120_000);
+    expect(page.statusCalls()).toBe(1);
+    await act(async () => visibility("visible"));
+    await advance(0);
+    expect(page.statusCalls()).toBe(2);
+    await advance(3_999);
+    expect(page.statusCalls()).toBe(2);
+    await advance(1);
+    expect(page.statusCalls()).toBe(3);
+  });
+
+  it.each(["5", "Tue, 13 Oct 2026 12:00:05 GMT"])(
+    "retains Retry-After %s across hidden replies and resume",
+    async (retryAfter) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+      const visibility = jobVisibility();
+      let resolveStatus!: (response: Response) => void;
+      const page = renderJobPage((call) =>
+        call === 1
+          ? new Promise<Response>((resolve) => {
+              resolveStatus = resolve;
+            })
+          : Promise.resolve(Response.json({ status: "complete", error: null }))
+      );
+      await flushAsyncWork();
+      await act(async () => {
+        visibility("hidden");
+        resolveStatus(
+          refusal("rate_limited", 429, { "retry-after": retryAfter })
+        );
+      });
+      await advance(2_000);
+      await act(async () => visibility("visible"));
+      await advance(2_999);
+      expect(page.statusCalls()).toBe(1);
+      await advance(1);
+      expect(page.statusCalls()).toBe(2);
+      expect(screen.getByText("Expanded evidence")).toBeVisible();
+    }
+  );
+
+  it("serializes one pending resume and honours a late in-flight Retry-After", async () => {
+    vi.useFakeTimers();
+    const visibility = jobVisibility();
+    let resolveStatus!: (response: Response) => void;
+    const page = renderJobPage((call) =>
+      call === 1
+        ? new Promise<Response>((resolve) => {
+            resolveStatus = resolve;
+          })
+        : Promise.resolve(Response.json({ status: "complete", error: null }))
+    );
+    await flushAsyncWork();
+    await act(async () => {
+      visibility("hidden");
+      visibility("visible");
+      visibility("hidden");
+      visibility("visible");
+    });
+    await advance(2_000);
+    expect(page.statusCalls()).toBe(1);
+    await act(async () =>
+      resolveStatus(refusal("rate_limited", 429, { "retry-after": "5" }))
+    );
+    await advance(4_999);
+    expect(page.statusCalls()).toBe(1);
+    await advance(1);
+    expect(page.statusCalls()).toBe(2);
+    await act(async () => {
+      visibility("hidden");
+      visibility("visible");
+    });
+    await advance(30_000);
+    expect(page.statusCalls()).toBe(2);
+  });
+
+  function renderCompletionJob(
+    status: (call: number) => Promise<Response>,
+    full: () => Promise<Response>
+  ) {
+    let statusCalls = 0;
+    let fullReads = 0;
+    vi.stubGlobal("fetch", (input: string) => {
+      if (input === `${dossierPath}?scope=initial`)
+        return Promise.resolve(Response.json(initial));
+      if (input === `/api/dossiers/jobs/${jobId}`) return status(++statusCalls);
+      if (input === dossierPath)
+        return ++fullReads === 1
+          ? Promise.resolve(discoveryNotReady())
+          : full();
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    const page = render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={jobId}
+      />
+    );
+    return {
+      ...page,
+      statusCalls: () => statusCalls,
+      fullReads: () => fullReads
+    };
+  }
+
+  it("defers a hidden completion's full read until visible", async () => {
+    vi.useFakeTimers();
+    const visibility = jobVisibility();
+    let resolveStatus!: (response: Response) => void;
+    const page = renderCompletionJob(
+      (call) =>
+        call === 1
+          ? new Promise<Response>((resolve) => {
+              resolveStatus = resolve;
+            })
+          : Promise.resolve(Response.json({ status: "complete", error: null })),
+      () => Promise.resolve(Response.json(expanded))
+    );
+    await flushAsyncWork();
+    expect(page.fullReads()).toBe(1);
+    await act(async () => {
+      visibility("hidden");
+      resolveStatus(Response.json({ status: "complete", error: null }));
+    });
+    await advance(10_000);
+    expect(page.fullReads()).toBe(1);
+    expect(screen.queryByText("Expanded evidence")).not.toBeInTheDocument();
+    await act(async () => visibility("visible"));
+    await advance(0);
+    expect(page.statusCalls()).toBe(2);
+    expect(page.fullReads()).toBe(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+  });
+
+  it("does not overlap or restart a completion read on visibility changes", async () => {
+    vi.useFakeTimers();
+    const visibility = jobVisibility();
+    let resolveFull!: (response: Response) => void;
+    const page = renderCompletionJob(
+      () => Promise.resolve(Response.json({ status: "complete", error: null })),
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFull = resolve;
+        })
+    );
+    await flushAsyncWork();
+    expect(page.fullReads()).toBe(2);
+    await act(async () => {
+      visibility("hidden");
+      visibility("visible");
+    });
+    await advance(500);
+    expect(page.statusCalls()).toBe(1);
+    expect(page.fullReads()).toBe(2);
+    await act(async () => resolveFull(Response.json(expanded)));
+    await advance(10_000);
+    await act(async () => {
+      visibility("hidden");
+      visibility("visible");
+    });
+    await advance(10_000);
+    expect(page.statusCalls()).toBe(1);
+    expect(page.fullReads()).toBe(2);
+  });
+
+  it("retains a completion-read Retry-After without polling while hidden", async () => {
+    vi.useFakeTimers();
+    const visibility = jobVisibility();
+    let resolveFull!: (response: Response) => void;
+    let completionReads = 0;
+    const page = renderCompletionJob(
+      () => Promise.resolve(Response.json({ status: "complete", error: null })),
+      () =>
+        ++completionReads === 1
+          ? new Promise<Response>((resolve) => {
+              resolveFull = resolve;
+            })
+          : Promise.resolve(Response.json(expanded))
+    );
+    await flushAsyncWork();
+    await act(async () => {
+      visibility("hidden");
+      resolveFull(refusal("rate_limited", 429, { "retry-after": "5" }));
+    });
+    await advance(10_000);
+    expect(page.statusCalls()).toBe(1);
+    await act(async () => visibility("visible"));
+    await advance(0);
+    expect(page.statusCalls()).toBe(2);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+  });
+
+  it("does not revive a disposed job after a late reply or visibility event", async () => {
+    vi.useFakeTimers();
+    const visibility = jobVisibility();
+    let resolveStatus!: (response: Response) => void;
+    const page = renderCompletionJob(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveStatus = resolve;
+        }),
+      () => Promise.resolve(Response.json(expanded))
+    );
+    await flushAsyncWork();
+    page.unmount();
+    await act(async () => {
+      resolveStatus(Response.json({ status: "running", error: null }));
+      visibility("hidden");
+      visibility("visible");
+    });
+    await advance(10_000);
+    expect(page.statusCalls()).toBe(1);
+    expect(page.fullReads()).toBe(1);
   });
 
   it("follows research through a dropped connection", async () => {
