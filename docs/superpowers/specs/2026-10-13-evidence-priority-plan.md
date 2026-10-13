@@ -1,6 +1,6 @@
 # Plan for #844: prioritise reader-facing evidence
 
-Status: revised after Manager review 5506068235; awaiting acceptance before implementation.
+Status: approved at 63e7ce04 by Manager review 5506163348; implementation in progress.
 
 ## Purpose and current evidence
 
@@ -32,16 +32,18 @@ Checked against origin/main at 7c21c89f and the actual #906 review:
 ## Priority policy
 
 Use one exported, exhaustive origin-to-priority helper in the database queue
-module and optional numeric `priority` in evidence enqueue metadata. The adapter
+package and optional numeric `priority` in evidence enqueue metadata. The adapter
 copies it into pg-boss send options, never into job JSON. Omitted priority stays
-0 for compatibility with older callers and existing jobs.
+0 for compatibility with older callers and existing jobs. The pure policy has a
+dedicated `@slashwho/database/evidence-priority` export so application imports do
+not load database migrations into Playwright's CommonJS test loader.
 
-| Priority | Origins |
-| --- | --- |
-| 30 | dossier_initial, applicant_sheet |
-| 20 | dossier_read, fingerprint_admission, tier_search |
-| 10 | resume_sweep, discovery |
-| 0 | refresh, rebuild, historic_alias, unknown |
+| Priority | Origins                                          |
+| -------- | ------------------------------------------------ |
+| 30       | dossier_initial, applicant_sheet                 |
+| 20       | dossier_read, fingerprint_admission, tier_search |
+| 10       | resume_sweep, discovery                          |
+| 0        | refresh, rebuild, historic_alias, unknown        |
 
 Use a newly reserved run's durable origin for its send-time priority. Ordinary
 repair uses that original origin too. Treat unclassified `discovery` as band 10;
@@ -92,6 +94,32 @@ there is no blanket backlog rewrite or operational deletion.
 
 ## Root scheduling barrier and concurrent reads
 
+Self-review reproduced an owner/joiner race: a new dossier reservation was visible
+while its owner was still deciding light/full policy. A joining reader could
+repair it as full, then the owner's light send would reuse that wrong job; a
+worker claim could also make the late markLightRefresh fail.
+
+`reserveForScheduling(input, prepareNewRun)` now chooses that policy inside the
+same shared locked transaction as `reserve`. Preparation runs only for a new
+full reservation, after alias invalidation and before INSERT/visibility; fresh,
+active and targeted-continuation results skip it. The callback receives selected
+completed metadata, its version-current flag and a read-only view bound to the
+same transaction. It must use only those reads, with no external provider calls,
+queue operations, pool reads or side effects. Return a boolean light policy;
+`light_refresh` is persisted on INSERT before any join or repair can see the run.
+The PostgreSQL dossier path must not perform a later markLightRefresh write.
+
+Settlement reads use only tier/progress metadata, three kill settlement columns
+and hydration flags from the selected snapshot; display payloads hydrate later.
+Terminal/recovery/zone reads and hydration predicates are shared with existing
+repository paths. Full `reserve()` callers retain their existing contract.
+
+A Docker regression holds preparation while a second reader attempts to join,
+proves the join cannot complete before preparation commits, and verifies both
+readers see the same run with its persisted light policy. A dossier regression
+proves that already-fixed light metadata sends a light job without a later mode
+write. Manager must review this self-review refinement and callback contract.
+
 Split scheduling from evidence hydration. Introduce a metadata-only reservation
 path for dossier assembly, sharing the existing locked reservation decision and
 freshness/continuation/alias-invalidation logic with `reserve()`. It must avoid
@@ -101,8 +129,8 @@ Return the chosen completed-run metadata/version and active reservation needed
 for freshness and light/full mode decisions; hydrate the selected stored evidence
 once afterwards. Preserve completed-run selection and publication consistency.
 
-The root scheduling step reserves, decides light/full only if newly reserved,
-marks light refresh when needed, enqueues and marks enqueued; or promotes/repairs
+The root scheduling step reserves with its light/full preparation callback,
+enqueues and marks enqueued; or promotes/repairs
 joined waiting work. Await only this scheduling step before member/alias
 scheduling. Do not await root evidence hydration, phases, rankings or dossier
 assembly. If the root is fresh or already active, skip the new-enqueue barrier;
@@ -137,10 +165,11 @@ fresh dossier latency being investigated under #787; cover it explicitly.
 
 ## Coordination and integration order
 
-Coordinator's updated order is #902 first, then #844 integrates its merged changes
-and rechecks the overlapping behaviour before final implementation review. Manager
-still controls merge order. Await confirmation through the coordinator; do not
-message Manager directly or treat the proposed order as plan acceptance.
+Manager review 5506163348 overrides the earlier #902-first proposal: whichever
+implementation PR is reviewed and green first may land. Do not wait for #902's
+seven-day ship evidence. The branch landing second integrates and reverifies the
+other's overlapping behaviour. Manager controls merge order. #844 is authorised
+to implement now in its existing isolated worktree.
 
 #904/#902 phase 2 rewrites reservations and joins in applicant-dossier-service.ts,
 start-applicant-collection.ts and worker runtime.ts, and adds a queue application
@@ -155,8 +184,7 @@ without changing poll behaviour. The coordinator confirmed #787 has no substanti
 seam. Queued #819 (lock-free/set-based evidence reads) is the stronger later
 overlap; its area owner has been notified to inspect and reuse this seam before
 starting #819. Keep the shared reservation and hydration change bounded and
-retain the seam regression tests below. Plan revision can
-proceed now; product implementation remains held until revised-plan acceptance.
+retain the seam regression tests below. Implementation follows the approved bounded seam and its regression tests.
 
 ## Test-first implementation and verification
 
@@ -184,7 +212,7 @@ proceed now; product implementation remains held until revised-plan acceptance.
    priority retained on retry, and no promotion of active or settled jobs.
 6. Implement the helper, queue send/promotion operations, shared metadata
    reservation seam, caller dispatch/join handling and scheduling-only barrier.
-7. Integrate freshly fetched origin/main including #902 and #909 as they land;
+7. Integrate freshly fetched origin/main including #902 and #909 if they land first;
    recheck current group interfaces and opened-member root semantics. Run
    format:check, lint, typecheck, test:unit, test:integration, build and test:e2e
    with Docker and inspect actual output. Self-review against origin/main,
@@ -214,7 +242,7 @@ first rather than generating unbounded WCL work.
 ## Review decisions
 
 Please review the revised raise-only reader join promotion, discovery fallback at
-10, metadata-only root scheduling path, explicit new-resume demotion and #902-first
+10, metadata-only root scheduling path, explicit new-resume demotion and the Manager-approved first-green
 integration order. This work changes scheduling and its necessary read seam;
 character-group discovery and evidence publication semantics remain governed by
 #902 and the existing repository contracts.

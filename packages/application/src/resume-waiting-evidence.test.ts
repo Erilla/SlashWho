@@ -66,6 +66,10 @@ describe("resumeWaitingEvidence", () => {
       ]
     });
     expect(queue.enqueueCharacterEvidence).toHaveBeenCalledTimes(2);
+    expect(queue.enqueueCharacterEvidence).toHaveBeenCalledWith(
+      "r-1",
+      expect.objectContaining({ priority: 10 })
+    );
     expect(evidence.markEnqueued).toHaveBeenCalledWith("r-1", "job-1");
   });
 

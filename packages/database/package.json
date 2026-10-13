@@ -3,6 +3,7 @@
   "private": true,
   "exports": {
     ".": "./src/index.ts",
+    "./evidence-priority": "./src/evidence-priority.ts",
     "./fingerprint-delivery-error": "./src/fingerprint-delivery-error.ts"
   },
   "scripts": {

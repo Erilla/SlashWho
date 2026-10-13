@@ -58,6 +58,115 @@ describe("durable discovery queue", () => {
     await stopPostgres();
   });
 
+  it("promotes waiting pg-boss 12.27.0 jobs without changing active or completed jobs", async () => {
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    const ids = await Promise.all(
+      ["created", "retry", "active", "completed"].map((state) =>
+        queue.enqueueCharacterEvidence(`promote-${state}`, { priority: 0 })
+      )
+    );
+    for (let index = 0; index < ids.length; index++) {
+      const state = ["created", "retry", "active", "completed"][index];
+      await applicationPool.query(
+        "UPDATE pgboss.job SET state = $2::pgboss.job_state, start_after = now() + interval '1 hour' WHERE id = $1",
+        [ids[index], state]
+      );
+    }
+    expect(queue.promoteCharacterEvidence).toBeTypeOf("function");
+    for (const id of ids) {
+      await Promise.all([
+        queue.promoteCharacterEvidence(id, 30),
+        queue.promoteCharacterEvidence(id, 10)
+      ]);
+    }
+    const { rows } = await applicationPool.query(
+      "SELECT state, priority, start_after > now() AS deferred, data FROM pgboss.job WHERE id = ANY($1::uuid[]) ORDER BY data->>'runId'",
+      [ids]
+    );
+    expect(rows).toEqual([
+      {
+        state: "active",
+        priority: 0,
+        deferred: true,
+        data: { runId: "promote-active" }
+      },
+      {
+        state: "completed",
+        priority: 0,
+        deferred: true,
+        data: { runId: "promote-completed" }
+      },
+      {
+        state: "created",
+        priority: 30,
+        deferred: true,
+        data: { runId: "promote-created" }
+      },
+      {
+        state: "retry",
+        priority: 30,
+        deferred: true,
+        data: { runId: "promote-retry" }
+      }
+    ]);
+  });
+
+  it("runs a reader-joined background job ahead of the backlog without duplication", async () => {
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    const first = await queue.enqueueCharacterEvidence("background-a", {
+      priority: 0
+    });
+    const joined = await queue.enqueueCharacterEvidence("background-b", {
+      priority: 0
+    });
+    expect(queue.promoteCharacterEvidence).toBeTypeOf("function");
+    await queue.promoteCharacterEvidence(joined, 20);
+    expect(
+      await queue.enqueueCharacterEvidence("background-b", { priority: 20 })
+    ).toBe(joined);
+    const delivered: string[] = [];
+    await queue.workCharacterEvidence(async (job) => {
+      delivered.push(job.runId);
+    });
+    await eventually(async () => delivered.length === 2);
+    expect(delivered).toEqual(["background-b", "background-a"]);
+    const { rows } = await applicationPool.query(
+      "SELECT count(*)::int AS jobs FROM pgboss.job WHERE id = ANY($1::uuid[])",
+      [[first, joined]]
+    );
+    expect(rows).toEqual([{ jobs: 2 }]);
+  });
+
+  it("fetches newer reader jobs first, preserving FIFO within a band and serial execution", async () => {
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    await queue.enqueueCharacterEvidence("older-background", { priority: 0 });
+    await queue.enqueueCharacterEvidence("reader-first", { priority: 30 });
+    await queue.enqueueCharacterEvidence("reader-second", { priority: 30 });
+    const delivered: string[] = [];
+    let active = 0;
+    let peak = 0;
+    await queue.workCharacterEvidence(async (job) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      delivered.push(job.runId);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active -= 1;
+    });
+    await eventually(async () => delivered.length === 3 && active === 0);
+    expect(delivered).toEqual([
+      "reader-first",
+      "reader-second",
+      "older-background"
+    ]);
+    expect(peak).toBe(1);
+  });
+
   it("persists only explicit public job fields for every collection delivery", async () => {
     // Break caught: private identity or wider metadata could survive in job JSON.
     const queue = createDiscoveryQueue({ connectionString });
@@ -503,7 +612,8 @@ describe("durable discovery queue", () => {
       });
     });
     const jobId = await queue.enqueueCharacterEvidence(
-      "00000000-0000-4000-8000-000000000009"
+      "00000000-0000-4000-8000-000000000009",
+      { priority: 30 }
     );
 
     await eventually(async () => {
@@ -515,6 +625,7 @@ describe("durable discovery queue", () => {
     const [retrying] = await inspector.findJobs(characterEvidenceQueueName, {
       id: jobId
     });
+    expect(retrying!.priority).toBe(30);
     expect(retrying!.startAfter.getTime()).toBeGreaterThanOrEqual(
       failedAt + 4_900
     );

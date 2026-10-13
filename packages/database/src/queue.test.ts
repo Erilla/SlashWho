@@ -41,6 +41,7 @@ import {
   collectCharacterEvidenceQueueName,
   discoverCharacterQueueName,
   fingerprintAdmissionQueueName,
+  evidenceRunPriority,
   updateActiveRetryDelay
 } from "./queue";
 
@@ -120,6 +121,41 @@ describe("fingerprint admission queue", () => {
 });
 
 describe("character evidence queue", () => {
+  it("gives foreground origins precedence without promoting discovery sweeps", () => {
+    expect(
+      [
+        "dossier_initial",
+        "applicant_sheet",
+        "dossier_read",
+        "fingerprint_admission",
+        "tier_search",
+        "discovery",
+        "resume_sweep",
+        "refresh",
+        "rebuild",
+        "historic_alias",
+        "unknown"
+      ].map((origin) => evidenceRunPriority(origin as never))
+    ).toEqual([30, 30, 20, 20, 20, 10, 10, 0, 0, 0, 0]);
+  });
+
+  it("sends priority as scheduling metadata, never as job JSON", async () => {
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://local/test"
+    });
+    await queue.start();
+    await queue.enqueueCharacterEvidence("priority-run", {
+      priority: 30,
+      mode: "light"
+    });
+    expect(queueFakes.send).toHaveBeenCalledWith(
+      collectCharacterEvidenceQueueName,
+      { runId: "priority-run", mode: "light" },
+      { singletonKey: "priority-run", priority: 30 }
+    );
+    await queue.stop({ graceful: false, timeoutMs: 100 });
+  });
+
   it("delivers one singleton evidence scan per evidence run", async () => {
     // Break caught: duplicate dossier reads could fan out into concurrent WCL
     // scans for the same durable evidence run.

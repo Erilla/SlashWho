@@ -97,7 +97,10 @@ describe("connected-character route admission with PostgreSQL", () => {
       repositories,
       config,
       search: searches,
-      queue: { enqueueCharacterEvidence: unavailable },
+      queue: {
+        enqueueCharacterEvidence: unavailable,
+        promoteCharacterEvidence: unavailable
+      },
       blizzard: { getCompletedAchievements: unavailable },
       raiderio: {
         getCharacter: unavailable,

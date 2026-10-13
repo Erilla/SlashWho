@@ -22,6 +22,7 @@ export {
 } from "./schema";
 export {
   createDiscoveryQueue,
+  evidenceRunPriority,
   collectCharacterEvidenceQueueName,
   DiscoveryQueueStopTimeoutError,
   discoverCharacterQueueName,
@@ -59,6 +60,10 @@ export type {
   CharacterMythicWipeInput,
   CharacterRaiderIoFirstKillInput,
   CompletedCharacterEvidence,
+  CompletedEvidenceSelection,
+  EvidenceSettlementKill,
+  EvidenceRunPreparation,
+  EvidenceSchedulingReads,
   CreateSnapshotInput,
   DiscoveryRun,
   DiscoverySource,

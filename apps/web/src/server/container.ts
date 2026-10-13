@@ -106,7 +106,10 @@ export type WebContainerDependencies = Readonly<{
       Repositories,
       "snapshots" | "evidence" | "manualConnections" | "recentSearches"
     >;
-    queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+    queue: Pick<
+      DiscoveryQueue,
+      "enqueueCharacterEvidence" | "promoteCharacterEvidence"
+    >;
     search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
     blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
     raiderio: Pick<RaiderIoGateway, "getCharacter">;

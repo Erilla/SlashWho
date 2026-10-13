@@ -101,7 +101,7 @@ function harness(reservations: Readonly<Record<string, Reservation>>) {
         repositories: {
           evidence: { reserveTierSearch, markEnqueued } as never
         },
-        queue: { enqueueCharacterEvidence },
+        queue: { enqueueCharacterEvidence, promoteCharacterEvidence: vi.fn() },
         ...(options.limit === undefined ? {} : { limit: options.limit })
       })
   };

@@ -36,7 +36,11 @@ describe("startApplicantCollection", () => {
           },
           evidence: { reserve: vi.fn().mockResolvedValue({ kind: "fresh" }) }
         } as never,
-        queue: { enqueue, enqueueCharacterEvidence: vi.fn() },
+        queue: {
+          enqueue,
+          enqueueCharacterEvidence: vi.fn(),
+          promoteCharacterEvidence: vi.fn()
+        },
         raiderio: { getCharacter }
       })
     ).resolves.toBe("started");
@@ -56,6 +60,7 @@ describe("startApplicantCollection", () => {
     // Break caught: nothing recorded why a run was queued, so a queue backed
     // up by applicant submissions could not be told from one backed up by
     // readers (#708).
+    const enqueueCharacterEvidence = vi.fn().mockResolvedValue("job-1");
     const reserve = vi.fn().mockResolvedValue({
       kind: "reserved",
       run: { id: "evidence-run" }
@@ -75,14 +80,69 @@ describe("startApplicantCollection", () => {
       } as never,
       queue: {
         enqueue: vi.fn(),
-        enqueueCharacterEvidence: vi.fn().mockResolvedValue("job-1")
+        promoteCharacterEvidence: vi.fn(),
+        enqueueCharacterEvidence
       },
       raiderio: { getCharacter: vi.fn() }
     });
 
+    expect(enqueueCharacterEvidence).toHaveBeenCalledWith(
+      "evidence-run",
+      expect.objectContaining({ priority: 30 })
+    );
     expect(reserve).toHaveBeenCalledWith(
       // The applicant is the root of its own discovery.
       expect.objectContaining({ key, origin: "applicant_sheet", root: key })
     );
   });
 });
+
+it.each(["active", "fresh"] as const)(
+  "applicant reader promotes a joined %s background run and preserves light repairs",
+  async (kind) => {
+    const run = {
+      id: "background-run",
+      origin: "refresh",
+      status: "queued",
+      queueJobId: "background-job" as string | null,
+      lightRefresh: true
+    };
+    const reserve = vi
+      .fn()
+      .mockImplementation(async () => ({ kind, run, active: run }));
+    const queue = {
+      enqueue: vi.fn(),
+      enqueueCharacterEvidence: vi.fn().mockResolvedValue("repaired-job"),
+      promoteCharacterEvidence: vi.fn()
+    };
+    const markEnqueued = vi.fn();
+    const input = {
+      key,
+      observedAt: new Date(),
+      discoveryFreshnessHours: 24,
+      evidenceFreshnessHours: 24,
+      repositories: {
+        suppressions: { isActive: vi.fn().mockResolvedValue(false) },
+        searchReservations: {
+          reserve: vi.fn().mockResolvedValue({ kind: "fresh" })
+        },
+        evidence: { reserve, markEnqueued }
+      } as never,
+      queue,
+      raiderio: { getCharacter: vi.fn() }
+    };
+    await startApplicantCollection(input);
+    expect(queue.promoteCharacterEvidence).toHaveBeenCalledWith(
+      "background-job",
+      30
+    );
+    expect(queue.enqueueCharacterEvidence).not.toHaveBeenCalled();
+    run.queueJobId = null;
+    await startApplicantCollection(input);
+    expect(queue.enqueueCharacterEvidence).toHaveBeenCalledWith(
+      "background-run",
+      expect.objectContaining({ mode: "light", priority: 30 })
+    );
+    expect(run.origin).toBe("refresh");
+  }
+);
