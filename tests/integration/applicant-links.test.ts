@@ -403,7 +403,122 @@ it("expires and closes an application settled seven days ago in the hourly clean
   expect(members.rowCount).toBe(0);
 });
 
-it("visits the least recently checked applications first and skips locked ones", async () => {
+// Fails, rather than hangs the suite, when a pass blocks.
+async function withinSeconds<T>(seconds: number, work: Promise<T>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`still running after ${seconds} s`)),
+      seconds * 1_000
+    );
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+it("skips an application another transaction holds, and decides the rest", async () => {
+  await character("lockroot");
+  const ids: string[] = [];
+  for (const name of ["lockone", "locktwo", "lockthree"]) {
+    await character(name);
+    const root = await intent(id("lockroot"), "done");
+    const member = await intent(id(name), "done");
+    ids.push(
+      await application({ identity: id("lockroot"), sequence: root }, [
+        { identity: id(name), sequence: member }
+      ])
+    );
+  }
+  await settleApplicantApplications(pool);
+  const holder = await pool.connect();
+  let run: Promise<unknown> | undefined;
+  try {
+    await holder.query("BEGIN");
+    await holder.query(
+      "SELECT id FROM applicant_source_applications WHERE id = $1 FOR NO KEY UPDATE",
+      [ids[1]]
+    );
+    const pass = linkApplicantApplications({
+      pool,
+      repositories: createPostgresRepositories(pool)
+    });
+    run = pass;
+    const result = await withinSeconds(5, pass);
+    expect(result).toMatchObject({ linked: 2, failed: 0 });
+    const state = await pool.query<{
+      id: string;
+      checked: boolean;
+      closed: boolean;
+      linked_count: number;
+    }>(
+      `SELECT id, last_checked_at IS NOT NULL AS checked,
+              closed_at IS NOT NULL AS closed, linked_count
+         FROM applicant_source_applications ORDER BY created_at`
+    );
+    expect(state.rows).toEqual([
+      { id: ids[0], checked: true, closed: true, linked_count: 1 },
+      { id: ids[1], checked: false, closed: false, linked_count: 0 },
+      { id: ids[2], checked: true, closed: true, linked_count: 1 }
+    ]);
+    expect(await links()).toEqual([
+      { root: "lockroot", connected: "lockone", origin: "applicant_sheet" },
+      { root: "lockroot", connected: "lockthree", origin: "applicant_sheet" }
+    ]);
+  } finally {
+    await holder.query("ROLLBACK");
+    holder.release();
+    // A pass that blocked must end before the next test truncates its tables.
+    await run?.catch(() => undefined);
+  }
+  // Released, the skipped application is decided on the next pass.
+  expect(await link()).toMatchObject({ linked: 1 });
+});
+
+it("decides each application once when two passes run at the same time", async () => {
+  const names = ["dualone", "dualtwo", "dualthree", "dualfour"];
+  const members: string[] = [];
+  for (const rootName of names) {
+    await character(rootName);
+    const root = await intent(id(rootName), "done");
+    const own: Array<{ identity: string; sequence: string }> = [];
+    for (const suffix of ["a", "b", "c"]) {
+      const name = `${rootName}${suffix}`;
+      await character(name);
+      members.push(name);
+      own.push({
+        identity: id(name),
+        sequence: await intent(id(name), "done")
+      });
+    }
+    await application({ identity: id(rootName), sequence: root }, own);
+  }
+  await settleApplicantApplications(pool);
+  const pass = () =>
+    linkApplicantApplications({
+      pool,
+      repositories: createPostgresRepositories(pool)
+    });
+  const [first, second] = await withinSeconds(
+    10,
+    Promise.all([pass(), pass()])
+  );
+  expect(first.failed + second.failed).toBe(0);
+  expect(first.linked + second.linked).toBe(members.length);
+  const state = await pool.query<{ closed: boolean; linked_count: number }>(
+    "SELECT closed_at IS NOT NULL AS closed, linked_count FROM applicant_source_applications"
+  );
+  expect(state.rows).toHaveLength(names.length);
+  for (const row of state.rows)
+    expect(row).toEqual({ closed: true, linked_count: 3 });
+  expect((await links()).map((row) => row.connected).sort()).toEqual(
+    [...members].sort()
+  );
+});
+
+it("visits the least recently checked applications first", async () => {
   await character("orderroot");
   for (const name of ["o1", "o2", "o3"]) {
     const root = await intent(id("orderroot"), "done");
