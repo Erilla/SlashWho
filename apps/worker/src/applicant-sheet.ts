@@ -98,7 +98,13 @@ export function createApplicantSheetClient(
     } catch {
       throw new Error("applicant_sheet_unavailable");
     }
-    if (!response.ok) throw new Error("applicant_sheet_read_rejected");
+    if (!response.ok) {
+      // A revoked or expired token would otherwise fail every minute's read
+      // until its cached lifetime ran out.
+      if (response.status === 401 || response.status === 403)
+        cachedToken = undefined;
+      throw new Error("applicant_sheet_read_rejected");
+    }
     const raw = await response.text();
     if (raw.length > 2_000_000)
       throw new Error("applicant_sheet_bounds_exceeded");

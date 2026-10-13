@@ -161,3 +161,49 @@ it("reuses a service-account token until a minute before it expires", async () =
     vi.useRealTimers();
   }
 });
+
+it("mints a new token after a read is rejected with 401 or 403", async () => {
+  // Break caught: a revoked token stayed cached for up to an hour, failing
+  // every minute's read until it expired.
+  const { privateKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { format: "pem", type: "pkcs8" },
+    publicKeyEncoding: { format: "pem", type: "spki" }
+  });
+  for (const status of [401, 403]) {
+    let tokens = 0;
+    let rejectNext = false;
+    const fetch = vi.fn(async (url: string) => {
+      if (url.includes("oauth2")) {
+        tokens++;
+        return new Response(
+          JSON.stringify({ access_token: `token-${tokens}`, expires_in: 3600 })
+        );
+      }
+      if (rejectNext) {
+        rejectNext = false;
+        return new Response("{}", { status });
+      }
+      return new Response(JSON.stringify({ values: [] }));
+    });
+    const client = createApplicantSheetClient({
+      sheetId: "fake-sheet",
+      column: "F",
+      email: "fake@example.test",
+      privateKey,
+      fetch: fetch as typeof globalThis.fetch
+    });
+
+    await client.readColumn();
+    expect(tokens).toBe(1);
+
+    rejectNext = true;
+    await expect(client.readColumn()).rejects.toThrow(
+      "applicant_sheet_read_rejected"
+    );
+    expect(tokens).toBe(1);
+
+    await client.readColumn();
+    expect(tokens).toBe(2);
+  }
+});

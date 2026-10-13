@@ -657,7 +657,7 @@ it("records a count a new parser version no longer reads without announcing it",
   await poll([dropped, dropped]);
 });
 
-it("stamps last_polled_at with the time the poll was given, not the database's now()", async () => {
+it("stamps last_polled_at with the time the poll was given", async () => {
   // Break caught: a late stamp made a one-minute cadence poll every two minutes.
   const startedAt = new Date("2026-10-13T12:00:00.000Z");
   await pollApplicantSheet({
