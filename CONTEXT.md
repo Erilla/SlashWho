@@ -64,7 +64,7 @@ _Avoid_: Historical reverse match, reverse account enumeration
 
 **Manual connection**:
 A durable, directional relationship explicitly added from one applicant dossier
-to a character key. It is recorded before that character has been discovered,
+to a character key. A manual connection can also come from an application: the applicant sheet watcher links the other characters in a response to its first one, and the dossier labels these "From application". That is still the applicant's statement, not an ownership claim. It is recorded before that character has been discovered,
 so it may name a character SlashWho holds nothing about yet; until discovery
 creates it the connection is **pending** and carries no class or level rather
 than an invented one. Adding it starts a discovery run rooted at that

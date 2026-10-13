@@ -296,7 +296,7 @@ applications.
 - Ordered by `last_checked_at`, oldest first, so waiting applications don't
   starve newer ones. Each visit updates `last_checked_at`.
 - At most 50 per tick.
-- `FOR UPDATE SKIP LOCKED`.
+- `FOR NO KEY UPDATE OF application SKIP LOCKED`. `manualConnections.add` runs on another connection and its foreign-key check takes `FOR KEY SHARE`, which `FOR UPDATE` would block, hanging every link.
 
 For each application:
 
@@ -399,7 +399,7 @@ step adds first and marks second, so a crash between them repeats an add that
 **Logging.** Each tick emits one count-only event:
 `applicant_links { linked, waiting, suppressed, same_character,
 skipped_region, skipped_excluded, skipped_cross_group, needed_link_pairs,
-expired }`. A failure
+expired, failed }`. `failed` counts applications whose processing threw: each is rolled back to its own savepoint, moves to the back of the queue and is counted, without logging any message. A failure
 in the step is logged and never fails the drain.
 
 Members marked `linked` are never revisited, so a reviewer's removal holds
