@@ -5525,6 +5525,148 @@ describe("applicant evidence job handler", () => {
         troubledRaidIds: { parses: [], tierBests: [] }
       });
 
+      function trackRankPhase(evidence: ReturnType<typeof store>) {
+        const phases = fullEvidencePhasePlan().map(
+          (id, ordinal): EvidenceRunPhase => ({
+            id,
+            ordinal,
+            state: "pending",
+            startedAt: null,
+            completedAt: null,
+            limitationCode: null
+          })
+        );
+        evidence.listPhases = async () => phases;
+        evidence.recordPhaseTransitions = async (_id, updates) => {
+          for (const update of updates)
+            Object.assign(
+              phases.find((phase) => phase.id === update.id)!,
+              update
+            );
+        };
+        return phases;
+      }
+
+      it.each([
+        {
+          name: "confirmed guild",
+          result: {
+            kind: "limitation",
+            code: "not_found",
+            guildNotFound: true
+          },
+          state: "completed",
+          checked: true
+        },
+        {
+          name: "bare404",
+          result: {
+            kind: "limitation",
+            code: "unavailable",
+            failureCode: "http_4xx"
+          },
+          state: "limited",
+          checked: false
+        },
+        {
+          name: "unmarked not_found",
+          result: { kind: "limitation", code: "not_found" },
+          state: "limited",
+          checked: false
+        }
+      ] as const)(
+        "settles only the $name answer",
+        async ({ result, state, checked }) => {
+          const evidence = store();
+          const phases = trackRankPhase(evidence);
+          const getMythicBossRankings = vi.fn(async () => result);
+          const kill = rankedKill("Unknown", 1);
+          await terminalHandler(
+            evidence,
+            response([kill]),
+            {},
+            { raiderio: { getMythicBossRankings } }
+          ).execute(run.id);
+          const published = evidence.published[0]?.result.kills[0];
+          expect(
+            phases.find((phase) => phase.id === "raiderio_rankings")?.state
+          ).toBe(state);
+          if (checked)
+            expect(published).toMatchObject({
+              historicWorldRank: null,
+              historicRankCheckedAt: "2026-09-18T12:00:00.000Z"
+            });
+          else {
+            expect(published?.historicRankCheckedAt).toBeUndefined();
+            await terminalHandler(
+              store(),
+              response([kill]),
+              {},
+              { raiderio: { getMythicBossRankings } }
+            ).execute(run.id);
+            expect(getMythicBossRankings).toHaveBeenCalledTimes(2);
+          }
+        }
+      );
+
+      it.each([
+        ["2026-09-18T12:00:00.000Z", false],
+        ["2026-09-11T12:00:00.001Z", false],
+        ["2026-09-11T12:00:00.000Z", true],
+        ["invalid", true],
+        [null, true],
+        ["2026-09-18T12:00:00.001Z", true]
+      ] as const)(
+        "rechecks stored null timestamp %s only when due",
+        async (checkedAt, due) => {
+          const evidence = store();
+          const phases = trackRankPhase(evidence);
+          const kill = rankedKill("Unknown", 1);
+          evidence.storedEvidenceTiers = async () => ({
+            kills: [],
+            wipes: [],
+            parseOnlyKills: [
+              {
+                ...kill,
+                historicWorldRank: null,
+                historicRankCheckedAt: checkedAt
+              }
+            ] as never
+          });
+          const getMythicBossRankings = vi.fn(async () => ({
+            kind: "rankings" as const,
+            rows: [
+              {
+                rank: 7,
+                guildName: "Unknown",
+                guildRealm: "silvermoon",
+                guildRegion: "eu",
+                firstDefeated: "2026-09-12T20:00:00.000Z"
+              }
+            ]
+          }));
+          await terminalHandler(
+            evidence,
+            response([kill]),
+            {},
+            { raiderio: { getMythicBossRankings } }
+          ).execute(run.id);
+          expect(getMythicBossRankings).toHaveBeenCalledTimes(due ? 1 : 0);
+          const published = evidence.published[0]?.result.kills[0];
+          if (due)
+            expect(published).toMatchObject({
+              historicWorldRank: 7,
+              historicRankCheckedAt: "2026-09-18T12:00:00.000Z"
+            });
+          else {
+            expect(published?.historicRankCheckedAt).toBeUndefined();
+            expect(
+              phases.find((phase) => phase.id === "raiderio_rankings")?.state
+            ).toBe("skipped");
+          }
+        }
+      );
+
       it("does not ask again for a rank a published run already holds", async () => {
         // Break caught: every full run re-asked Raider.IO for up to 50 ranks,
         // although publishing keeps a stored rank whatever the lookup says.

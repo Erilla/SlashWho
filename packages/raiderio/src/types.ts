@@ -90,12 +90,26 @@ export type MythicBossRankingsOptions = Readonly<{
   guild?: Readonly<{ name: string; realm: string; region: string }>;
 }>;
 
+export type RankingsFailureCode =
+  | "not_found"
+  | "http_4xx"
+  | "http_5xx"
+  | "timeout"
+  | "network"
+  | "schema"
+  | "throttled"
+  | "private";
+
 export type MythicBossRankingsResult =
   | { kind: "rankings"; rows: readonly MythicBossRanking[] }
   | {
       kind: "limitation";
       code: RaiderIoEvidenceLimitation;
       retryAfterMs?: number;
+      /** Only an exact guild-not-found answer from the settled guild pair. */
+      guildNotFound?: true;
+      /** Closed diagnostics; never an upstream message or request identity. */
+      failureCode?: RankingsFailureCode;
       /**
        * When the limitation was actually observed, as an ISO timestamp. Set by
        * the dossier gateway so a replayed (negatively cached) limitation is
