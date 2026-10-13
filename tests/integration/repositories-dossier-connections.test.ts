@@ -62,9 +62,67 @@ describe("PostgreSQL repositories: dossier connections", () => {
           raiderIoUrl:
             "https://raider.io/characters/eu/silvermoon/undiscovered",
           pending: true,
+          origin: "dossier",
           excluded: false
         }
       ]);
+    });
+
+    it("keeps a reviewer's link when the worker adds the same one, and converts the worker's when a reviewer does", async () => {
+      // Break caught: ON CONFLICT DO NOTHING left a reviewer's own add marked as
+      // the applicant's, and DO UPDATE ... RETURNING reported a re-add as "added".
+      const root = {
+        region: "eu" as const,
+        realm: "hyjal",
+        name: "originroot"
+      };
+      const member = {
+        region: "eu" as const,
+        realm: "hyjal",
+        name: "originmember"
+      };
+      const other = {
+        region: "eu" as const,
+        realm: "hyjal",
+        name: "originother"
+      };
+      await pool.query(
+        "INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url) VALUES ('eu', 'hyjal', 'originroot', 'Originroot', 'Mage', 80, 'https://raider.io/characters/eu/hyjal/originroot')"
+      );
+      const application = await insertApplication(pool);
+
+      expect(
+        await repositories.manualConnections.add(root, member, {
+          origin: "applicant_sheet",
+          applicationId: application
+        })
+      ).toBe("added");
+      await repositories.manualConnections.setExcluded(root, member, true);
+      expect(await repositories.manualConnections.add(root, member)).toBe(
+        "duplicate"
+      );
+      const converted = (await repositories.manualConnections.list(root)).find(
+        (row) => row.key.name === "originmember"
+      );
+      expect(converted).toMatchObject({ origin: "dossier", excluded: true });
+      expect(await repositories.manualConnections.add(root, member)).toBe(
+        "duplicate"
+      );
+
+      expect(await repositories.manualConnections.add(root, other)).toBe(
+        "added"
+      );
+      expect(
+        await repositories.manualConnections.add(root, other, {
+          origin: "applicant_sheet",
+          applicationId: application
+        })
+      ).toBe("duplicate");
+      expect(
+        (await repositories.manualConnections.list(root)).find(
+          (row) => row.key.name === "originother"
+        )?.origin
+      ).toBe("dossier");
     });
 
     it("reports a repeated link as a duplicate rather than adding it twice", async () => {
@@ -110,6 +168,7 @@ describe("PostgreSQL repositories: dossier connections", () => {
           level: 80,
           raiderIoUrl: "https://raider.io/characters/us/area-52/other",
           pending: false,
+          origin: "dossier",
           excluded: false
         }
       ]);
@@ -386,3 +445,17 @@ describe("PostgreSQL repositories: dossier connections", () => {
     ).resolves.toEqual([]);
   });
 });
+
+async function insertApplication(pool: Pool): Promise<string> {
+  await pool.query(
+    "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at, parser_version) VALUES ('applicant_sheet', now(), now(), 2) ON CONFLICT DO NOTHING"
+  );
+  const intent = await pool.query<{ sequence: string }>(
+    'INSERT INTO applicant_source_intents (source, identity, observed_at) VALUES (\'applicant_sheet\', \'character:["eu","hyjal","originroot"]\', now()) RETURNING sequence'
+  );
+  const application = await pool.query<{ id: string }>(
+    'INSERT INTO applicant_source_applications (source, root_intent_sequence, root_identity, submitted_serial) VALUES (\'applicant_sheet\', $1, \'character:["eu","hyjal","originroot"]\', 1) RETURNING id',
+    [intent.rows[0]!.sequence]
+  );
+  return application.rows[0]!.id;
+}

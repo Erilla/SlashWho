@@ -3733,7 +3733,8 @@ describe("manually connected characters", () => {
         level: 0,
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
-        pending: true
+        pending: true,
+        origin: "dossier"
       }
     ]);
     // An undiscovered character has no evidence run, so its reservation is a
@@ -3801,7 +3802,8 @@ describe("manually connected characters", () => {
         level: 80,
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
-        pending: false
+        pending: false,
+        origin: "dossier"
       }
     ]);
     (
@@ -3868,6 +3870,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);
@@ -3902,6 +3905,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);
@@ -3931,6 +3935,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);
@@ -3983,6 +3988,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);
