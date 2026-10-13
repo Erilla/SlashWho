@@ -1,8 +1,9 @@
 # Progress patches and coalesced dossier reads (#824)
 
-Status: revised after Manager review 5506068687; awaiting acceptance before
-implementation. The fixed deadline and removal of the step-read gap with
-stale-read fallback were approved in that review.
+Status: approved at `bf8ec245` in Manager review 5506164377; implementation
+authorised. The fixed deadline, alias and empty-phase rules, step-read gap
+removal with stale-read fallback, and patch/full-read drift measurement are
+accepted.
 
 ## Purpose and current evidence
 
@@ -34,7 +35,7 @@ changes in the opaque version. No migration, provider calls, reservations or
 snapshot assembly are required.
 
 Run-derived evidence state is waiting for queued/retrying, scanning for running,
-complete for completed, and partial for partial/failed/cancelled. Deferral still
+complete for completed, and partial for partial/failed. Deferral still
 controls the cheap poll's queued/running scheduling as today. Only rows with
 unsettled runs are patched. A single-identity row already showing complete or
 partial published evidence
@@ -150,23 +151,20 @@ Progress patches must never call read-or-start. Coalesced full reads remain poll
 reads, and poll reads must never start research on a stale group page. Preserve
 #902's e2e invariant that polling live evidence sends no second start.
 
-Coordinator's revised proposed landing order: #902 first, then #824. #902 is
-already implementing and testing group read/reservation changes; this plan is
-still awaiting acceptance. The coordinator is confirming interfaces and order
-with #902's owner; the separate Manager retains control of merge order. Plan
-revisions can proceed now. Keep overlapping implementation adaptable until #902
-lands, then fetch/merge its changes from `origin/main` into this branch, resolve
-the read-loop/contract overlap and rerun the full gate plus the no-second-start
-coverage before final implementation review. Report interface objections or
-dependency needs to the coordinator. #909 is worker-side and does not overlap
+Manager's landing order: whichever PR is reviewed and green first lands. Do not
+wait for #902's seven-day ship evidence. Keep overlapping implementation
+adaptable; whichever branch lands second integrates the other's merged changes
+from freshly fetched `origin/main` and reverifies the full gate and overlapping
+read-loop/no-second-start tests before final review. Report interface objections
+or dependency needs to the coordinator. #909 is worker-side and does not overlap
 this change. Preserve external dependencies and publication transaction
 boundaries; do not change identity or group discovery in #824.
 
-## Decisions requested from Manager
+## Accepted decisions
 
 The fixed publish deadline and removal of the obsolete step-read gap while
 retaining stale-read fallback are approved. A run-derived evidence state with
 preservation is approved for single-identity rows; no server freshness projection
-is required. Please accept the revised alias mapping, conservative multi-identity
-state rule, empty-phase/research-state invariants and explicit #902 overlap
-coverage. The coordinator will confirm landing order separately.
+is required. The alias mapping, conservative multi-identity state rule,
+empty-phase/research-state invariants and explicit #902 overlap coverage are
+accepted. Merge order follows the Manager's decision above.

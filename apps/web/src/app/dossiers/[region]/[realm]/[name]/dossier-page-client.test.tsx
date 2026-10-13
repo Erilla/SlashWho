@@ -1981,6 +1981,196 @@ describe("DossierPageClient staged research", () => {
     expect(screen.getByText("Ryalts")).toBeVisible();
   });
 
+  it("patches step progress without full reads or starting research, and keeps polling after patches", async () => {
+    vi.useFakeTimers();
+    const runId = "10000000-0000-4000-8000-000000000013";
+    const requests: string[] = [];
+    let phaseState: "active" | "completed" = "active";
+    vi.stubGlobal("fetch", (input: string) => {
+      requests.push(input);
+      if (input.startsWith("/api/dossiers/evidence-runs"))
+        return Promise.resolve(
+          Response.json({
+            runs: [
+              {
+                id: runId,
+                key: identity,
+                state: "running",
+                version: phaseState,
+                evidenceState: "scanning",
+                collectionProgress: [
+                  { id: "warcraft_logs_history", state: phaseState }
+                ]
+              }
+            ]
+          })
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    const shown = withEvidenceState(expanded, "waiting");
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={{ ...shown, evidenceRunIds: [runId] }}
+        jobId={null}
+      />
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(
+      screen.getAllByText("Scanning report history", { exact: false })[0]
+    ).toBeVisible();
+    phaseState = "completed";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    expect(screen.getByText("Finishing", { exact: true })).toBeVisible();
+    expect(requests.length).toBeGreaterThan(2);
+    expect(
+      requests.every((path) => path.startsWith("/api/dossiers/evidence-runs"))
+    ).toBe(true);
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+  });
+
+  it("coalesces intermediate publishes and reads the final publish without starting research", async () => {
+    vi.useFakeTimers();
+    const first = "10000000-0000-4000-8000-000000000013";
+    const second = "10000000-0000-4000-8000-000000000014";
+    let fullReads = 0;
+    let final = false;
+    const starts: string[] = [];
+    const shown: ApplicantDossier = {
+      ...withEvidenceState(expanded, "scanning"),
+      evidenceRunIds: [first, second]
+    };
+    vi.stubGlobal("fetch", (input: string) => {
+      if (input.startsWith("/api/dossiers/evidence-runs"))
+        return Promise.resolve(
+          Response.json({
+            runs: [
+              {
+                id: first,
+                key: identity,
+                state: "settled",
+                version: "done",
+                evidenceState: "complete",
+                collectionProgress: []
+              },
+              {
+                id: second,
+                key: identity,
+                state: final ? "settled" : "running",
+                version: final ? "done" : "active",
+                evidenceState: final ? "complete" : "scanning",
+                collectionProgress: []
+              }
+            ]
+          })
+        );
+      if (input === dossierPath) {
+        fullReads++;
+        return Promise.resolve(
+          Response.json(
+            final ? expanded : { ...shown, evidenceRunIds: [second] }
+          )
+        );
+      }
+      starts.push(input);
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={shown}
+        jobId={null}
+      />
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_999);
+    });
+    expect(fullReads).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(fullReads).toBe(1);
+    final = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(fullReads).toBe(2);
+    expect(starts).toEqual([]);
+    expect(screen.getByText(expanded.research.message)).toBeVisible();
+  });
+
+  it("ignores a progress response overtaken by a manual full read", async () => {
+    vi.useFakeTimers();
+    const runId = "10000000-0000-4000-8000-000000000013";
+    let progressReads = 0;
+    let resolveProgress!: (response: Response) => void;
+    vi.stubGlobal("fetch", (input: string) => {
+      if (input.startsWith("/api/dossiers/evidence-runs")) {
+        if (++progressReads === 1)
+          return Promise.resolve(
+            Response.json(
+              { error: { code: "rate_limited", message: "Wait" } },
+              { status: 429, headers: { "retry-after": "1" } }
+            )
+          );
+        return new Promise<Response>((resolve) => {
+          resolveProgress = resolve;
+        });
+      }
+      if (input === `${dossierPath}/refresh`)
+        return Promise.resolve(
+          Response.json({ mode: "full", lastCollectedAt: null })
+        );
+      if (input === dossierPath)
+        return Promise.resolve(Response.json(expanded));
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={{
+          ...withEvidenceState(expanded, "scanning"),
+          evidenceRunIds: [runId]
+        }}
+        jobId={null}
+      />
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    });
+    await act(async () => {
+      resolveProgress(
+        Response.json({
+          runs: [
+            {
+              id: runId,
+              key: identity,
+              state: "running",
+              version: "old",
+              evidenceState: "scanning",
+              collectionProgress: [
+                { id: "warcraft_logs_history", state: "active" }
+              ]
+            }
+          ]
+        })
+      );
+    });
+    expect(screen.queryAllByText("Scanning report history")).toEqual([]);
+    expect(screen.getByText(expanded.research.message)).toBeVisible();
+  });
+
   it("asks after a gathering dossier's runs, and re-reads it only once one publishes", async () => {
     // #690: the page noticed a publish only at its next full read, up to ten
     // seconds late, and every one of those reads cost the whole dossier.
@@ -1988,9 +2178,30 @@ describe("DossierPageClient staged research", () => {
     const runId = "10000000-0000-4000-8000-000000000013";
     const progressPath = `/api/dossiers/evidence-runs?ids=${runId}`;
     const progress = [
-      { id: runId, state: "running", version: "running:active:pending" },
-      { id: runId, state: "running", version: "running:active:pending" },
-      { id: runId, state: "settled", version: "complete:completed:completed" }
+      {
+        id: runId,
+        key: identity,
+        state: "running",
+        version: "running:active:pending",
+        evidenceState: "scanning",
+        collectionProgress: []
+      },
+      {
+        id: runId,
+        key: identity,
+        state: "running",
+        version: "running:active:pending",
+        evidenceState: "scanning",
+        collectionProgress: []
+      },
+      {
+        id: runId,
+        key: identity,
+        state: "settled",
+        version: "complete:completed:completed",
+        evidenceState: "complete",
+        collectionProgress: []
+      }
     ];
     const requests: string[] = [];
     const progressInits: (RequestInit | undefined)[] = [];
@@ -2094,7 +2305,16 @@ describe("DossierPageClient staged research", () => {
         progressReads += 1;
         return Promise.resolve(
           Response.json({
-            runs: [{ id: runId, state: "queued", version: "running-deferred" }]
+            runs: [
+              {
+                id: runId,
+                key: { ...identity, name: "ryalts" },
+                state: "queued",
+                version: "running-deferred",
+                evidenceState: "scanning",
+                collectionProgress: []
+              }
+            ]
           })
         );
       }
