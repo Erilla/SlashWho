@@ -8,11 +8,19 @@ import {
   classifyResponse,
   createUpstreamError,
   isUpstreamFailure,
+  reportThrottle,
+  retryAfterMs,
   type ThrottleObserver,
   type UpstreamError,
   type UpstreamFailure
 } from "@slashwho/upstream-http";
 import { z } from "zod";
+import {
+  GuildNotFound,
+  awaitRankingsPair,
+  guildPairLimitation,
+  rankingsLimitation
+} from "./rankings-failures";
 
 import {
   normalizeCharacterResponse,
@@ -500,7 +508,9 @@ export function createRaiderIoClient(
       });
     } catch {
       if (signal?.aborted) throw signal.reason;
-      throw createRaiderIoError({ kind: "transient" });
+      throw Object.assign(createRaiderIoError({ kind: "transient" }), {
+        rankingTimeout: timeoutSignal.aborted
+      });
     }
 
     signal?.throwIfAborted();
@@ -508,7 +518,60 @@ export function createRaiderIoClient(
       // Raider.IO answers 403 for a user profile its owner has made private.
       // That is a permanent answer about visibility, not an outage, so it is
       // never retried as one, and it never fires onThrottle.
-      throw createRaiderIoError(classifyResponse(response, options.onThrottle));
+      const guildPath =
+        url.pathname === "/api/guilds/raid-rankings" ||
+        url.pathname === "/api/v1/guilds/profile";
+      // The shared classifier treats 403/404 as final for other endpoints.
+      // A guild endpoint explicitly asking for backoff remains retryable.
+      const guildBackoff =
+        guildPath && (response.status === 403 || response.status === 404)
+          ? retryAfterMs(response)
+          : undefined;
+      let failure: UpstreamFailure;
+      if (guildBackoff !== undefined) {
+        reportThrottle(options.onThrottle, guildBackoff);
+        failure = {
+          kind: "transient",
+          status: response.status,
+          retryAfterMs: guildBackoff
+        };
+      } else {
+        failure = classifyResponse(response, options.onThrottle);
+        if (guildPath && response.status === 404)
+          failure = { kind: "transient", status: 404 };
+      }
+      if (
+        guildPath &&
+        (response.status === 400 || response.status === 422) &&
+        !(failure.kind === "transient" && failure.retryAfterMs !== undefined)
+      ) {
+        let body: unknown;
+        try {
+          body = await response.json();
+        } catch (error) {
+          if (signal?.aborted) throw signal.reason;
+          if (requestSignal.aborted || !(error instanceof SyntaxError)) {
+            throw Object.assign(createRaiderIoError({ kind: "transient" }), {
+              rankingTimeout: timeoutSignal.aborted
+            });
+          }
+          // Only malformed JSON retains the status classification.
+        }
+        signal?.throwIfAborted();
+        if (requestSignal.aborted)
+          throw Object.assign(createRaiderIoError({ kind: "transient" }), {
+            rankingTimeout: timeoutSignal.aborted
+          });
+        if (
+          typeof body === "object" &&
+          body !== null &&
+          "message" in body &&
+          body.message === "Could not find requested guild"
+        ) {
+          throw new GuildNotFound();
+        }
+      }
+      throw createRaiderIoError(failure);
     }
 
     let value: unknown;
@@ -519,7 +582,9 @@ export function createRaiderIoClient(
     } catch {
       if (signal?.aborted) throw signal.reason;
       if (requestSignal.aborted) {
-        throw createRaiderIoError({ kind: "transient" });
+        throw Object.assign(createRaiderIoError({ kind: "transient" }), {
+          rankingTimeout: timeoutSignal.aborted
+        });
       }
       throw createRaiderIoError({ kind: "schema_drift" });
     }
@@ -737,7 +802,11 @@ export function createRaiderIoClient(
     const raidSlug = rankingOptions.raidSlug;
     const bossSlug = rankingOptions.bossSlug;
     if (!raidSlug || !bossSlug) {
-      return { kind: "limitation", code: "schema_drift" };
+      return {
+        kind: "limitation",
+        code: "schema_drift",
+        failureCode: "schema"
+      };
     }
 
     signal?.throwIfAborted();
@@ -760,20 +829,32 @@ export function createRaiderIoClient(
         fields: `raid_encounters:${raidSlug}:mythic`
       }).toString();
       try {
-        const [ranks, profile] = await Promise.all([
-          request(
-            ranksUrl,
-            (value) => guildBossRanksSchema.parse(value),
-            signal,
-            onPhysicalRequest
-          ),
-          request(
-            profileUrl,
-            (value) => guildEncountersSchema.parse(value),
-            signal,
-            onPhysicalRequest
-          )
-        ]);
+        const pair = await awaitRankingsPair(
+          Promise.allSettled([
+            request(
+              ranksUrl,
+              (value) => guildBossRanksSchema.parse(value),
+              signal,
+              onPhysicalRequest
+            ),
+            request(
+              profileUrl,
+              (value) => guildEncountersSchema.parse(value),
+              signal,
+              onPhysicalRequest
+            )
+          ]),
+          signal
+        );
+        signal?.throwIfAborted();
+        const failures = pair.flatMap((item) =>
+          item.status === "rejected" ? [item.reason as unknown] : []
+        );
+        if (failures.length > 0) return guildPairLimitation(failures);
+        const ranks = pair[0].status === "fulfilled" ? pair[0].value : null;
+        const profile = pair[1].status === "fulfilled" ? pair[1].value : null;
+        if (!ranks || !profile)
+          return rankingsLimitation(new Error("missing_pair"));
         // The website also ranks unfinished attempts. A matching confirmed
         // first defeat is required before a rank can enrich kill evidence.
         const rows = ranks.bossRankings.flatMap((row) => {
@@ -795,7 +876,7 @@ export function createRaiderIoClient(
         return { kind: "rankings", rows };
       } catch (error) {
         if (signal?.aborted) throw signal.reason;
-        return raiderIoLimitation(error);
+        return rankingsLimitation(error);
       }
     }
 

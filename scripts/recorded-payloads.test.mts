@@ -50,6 +50,28 @@ function record(
 }
 
 describe("committed recordings", () => {
+  it.each(["guild-profile", "guild-rankings"])(
+    "refuses arbitrary error text in %s recordings",
+    (endpoint) => {
+      const fixture = readJson(
+        resolve(recordedRoot, "raiderio", `${endpoint}-unknown-guild.json`)
+      ) as Recording;
+      const tampered = {
+        ...fixture,
+        body: {
+          statusCode: fixture.status,
+          error:
+            endpoint === "guild-profile"
+              ? "Bad Request"
+              : "Unprocessable Entity",
+          message: "Private guild name and upstream body"
+        }
+      };
+      expect(verifyRecording(tampered)).toContainEqual(
+        expect.objectContaining({ path: "body.message" })
+      );
+    }
+  );
   it("exist", () => {
     expect(recordingFiles.length).toBeGreaterThan(0);
   });

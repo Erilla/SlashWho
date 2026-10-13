@@ -16,6 +16,7 @@ export type {
   MythicBossRanking,
   MythicBossRankingsOptions,
   MythicBossRankingsResult,
+  RankingsFailureCode,
   RaiderIoCharacter,
   RaiderIoEvidenceLimitation,
   RaiderIoGateway,
