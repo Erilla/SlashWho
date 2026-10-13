@@ -2,6 +2,7 @@ import { isUpstreamFailure } from "@slashwho/upstream-http";
 import type { MythicBossRankingsResult, RankingsFailureCode } from "./types";
 
 export class GuildNotFound extends Error {
+  override readonly name = "GuildNotFound";
   constructor() {
     super("guild_not_found");
   }

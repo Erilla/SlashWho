@@ -4,8 +4,12 @@ import {
   type CollectionPhase,
   type EvidenceRunProgressResponse
 } from "@slashwho/contracts";
+import { evidenceRunPriority } from "@slashwho/database/evidence-priority";
 import type {
   DiscoveryQueue,
+  EvidenceReservationResult,
+  CompletedCharacterEvidence,
+  CompletedEvidenceSelection,
   EvidenceRunPhase,
   EvidenceRunProgress,
   RecentDossierSearch,
@@ -348,27 +352,39 @@ function cachedWipe(
   };
 }
 
-async function gatherCharacterEvidence(
+type GatherEvidenceOptions = {
+  /** Which read this is, recorded on a run it reserves (#708). */
+  origin: DossierReadOrigin;
+  /** The dossier being read, recorded on a run it reserves. */
+  root: CharacterKey;
+  repositories: Pick<Repositories, "evidence">;
+  queue: Pick<
+    DiscoveryQueue,
+    "enqueueCharacterEvidence" | "promoteCharacterEvidence"
+  >;
+  freshnessCutoff: Date;
+  signal?: AbortSignal;
+  wclCredentials?: WclCredentials | null | undefined;
+  wclCredentialRef?:
+    { accountId: string; credentialVersion: number } | undefined;
+  encryptionKey: Buffer;
+  /** The subject the evidence is shown under, when not `character` itself. */
+  attributeTo?: CharacterKey;
+};
+
+type ScheduledEvidence = {
+  reservation: EvidenceReservationResult<
+    CompletedCharacterEvidence | CompletedEvidenceSelection
+  >;
+  lightRunId: string | null;
+};
+
+async function scheduleCharacterEvidence(
   character: DossierSubject,
-  options: {
-    /** Which read this is, recorded on a run it reserves (#708). */
-    origin: DossierReadOrigin;
-    /** The dossier being read, recorded on a run it reserves. */
-    root: CharacterKey;
-    repositories: Pick<Repositories, "evidence">;
-    queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
-    freshnessCutoff: Date;
-    signal?: AbortSignal;
-    wclCredentials?: WclCredentials | null | undefined;
-    wclCredentialRef?:
-      { accountId: string; credentialVersion: number } | undefined;
-    encryptionKey: Buffer;
-    /** The subject the evidence is shown under, when not `character` itself. */
-    attributeTo?: CharacterKey;
-  }
-): Promise<IdentityEvidence> {
-  const attributed = options.attributeTo ?? character.key;
-  const reservation = await options.repositories.evidence.reserve({
+  options: GatherEvidenceOptions
+): Promise<ScheduledEvidence> {
+  const store = options.repositories.evidence;
+  const request = {
     key: character.key,
     origin: options.origin,
     root: options.root,
@@ -389,28 +405,52 @@ async function gatherCharacterEvidence(
           }
         : null),
     phasePlan: fullEvidencePhasePlan()
-  });
+  };
+  const reservation = store.reserveForScheduling
+    ? await store.reserveForScheduling(
+        request,
+        async ({ completed, completedVersionCurrent, reads }) =>
+          staleReadNeedsOnlyNewestPage({
+            key: character.key,
+            at: new Date(),
+            completed,
+            completedVersionCurrent,
+            evidence: reads,
+            loadKills: async () =>
+              completed ? reads.completedSettlementKills(completed) : []
+          })
+      )
+    : await store.reserve(request);
   let lightRunId: string | null = null;
   if (reservation.kind === "reserved") {
     // Stale evidence of a character with nothing left to collect needs only
     // the newest page, for a raid night since its last run (#540). A ranked
     // continuation is its own targeted run and keeps its mode.
-    const light =
-      reservation.run.mode !== "tier_search" &&
-      (await staleReadNeedsOnlyNewestPage({
-        key: character.key,
-        at: new Date(),
-        completed: reservation.completed,
-        completedVersionCurrent: reservation.completedVersionCurrent ?? false,
-        evidence: options.repositories.evidence
-      }));
+    const light = store.reserveForScheduling
+      ? reservation.run.lightRefresh === true
+      : reservation.run.mode !== "tier_search" &&
+        (await staleReadNeedsOnlyNewestPage({
+          key: character.key,
+          at: new Date(),
+          completed: reservation.completed,
+          loadKills: async () => {
+            const completed = reservation.completed;
+            if (!completed) return [];
+            return "snapshotRunId" in completed
+              ? await store.completedSettlementKills!(completed)
+              : completed.kills;
+          },
+          completedVersionCurrent: reservation.completedVersionCurrent ?? false,
+          evidence: options.repositories.evidence
+        }));
     // Recorded before the job exists, so no read of the queued run sees it as
     // a full run that supersedes the last one's notices (#541).
-    if (light)
+    if (light && !store.reserveForScheduling)
       await options.repositories.evidence.markLightRefresh(reservation.run.id);
     const queueJobId = await options.queue.enqueueCharacterEvidence(
       reservation.run.id,
       {
+        priority: evidenceRunPriority(reservation.run.origin ?? options.origin),
         enqueuedAt: new Date().toISOString(),
         ...(light ? { mode: "light" as const } : {})
       }
@@ -421,6 +461,46 @@ async function gatherCharacterEvidence(
     );
     if (light) lightRunId = reservation.run.id;
   }
+  if (reservation.kind !== "reserved" && reservation.active) {
+    const active = reservation.active;
+    const priority = Math.max(
+      evidenceRunPriority(active.origin ?? options.origin),
+      evidenceRunPriority(options.origin)
+    );
+    if (active.queueJobId) {
+      await options.queue.promoteCharacterEvidence(active.queueJobId, priority);
+    } else if (active.status === "queued") {
+      const jobId = await options.queue.enqueueCharacterEvidence(active.id, {
+        priority,
+        enqueuedAt: new Date().toISOString(),
+        mode: active.lightRefresh ? "light" : "full"
+      });
+      await store.markEnqueued(active.id, jobId);
+    }
+  }
+  return { reservation, lightRunId };
+}
+
+async function gatherCharacterEvidence(
+  character: DossierSubject,
+  options: GatherEvidenceOptions,
+  scheduled?: ScheduledEvidence
+): Promise<IdentityEvidence> {
+  const attributed = options.attributeTo ?? character.key;
+  const { reservation: metadata, lightRunId } =
+    scheduled ?? (await scheduleCharacterEvidence(character, options));
+  const completedMetadata = metadata.completed;
+  const completedEvidence =
+    completedMetadata && "snapshotRunId" in completedMetadata
+      ? await options.repositories.evidence.hydrateCompletedEvidence!(
+          completedMetadata
+        )
+      : completedMetadata;
+  // Hydrate exactly the publications selected by the locked reservation.
+  const reservation = {
+    ...metadata,
+    completed: completedEvidence
+  } as EvidenceReservationResult;
   const limitations: DossierLimitation[] = [];
   const completed = reservation.completed;
   // The same run `gathering` below is keyed on, so the steps describe exactly
@@ -877,7 +957,10 @@ async function assembleDossier(options: {
   /** The roster is unknown and only durable evidence for the submitted root is shown. */
   rootOnlyStoredEvidence?: boolean;
   repositories: Pick<Repositories, "evidence">;
-  queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  queue: Pick<
+    DiscoveryQueue,
+    "enqueueCharacterEvidence" | "promoteCharacterEvidence"
+  >;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getMythicBossRankings">;
   concurrency: ReturnType<typeof createConcurrencyLimiter>;
@@ -891,6 +974,25 @@ async function assembleDossier(options: {
   /** The read's scope, which times the assembly as `assemble` (#687). */
   scope?: MeasurementScope | undefined;
 }): Promise<ContractApplicantDossier> {
+  const gatherOptions: GatherEvidenceOptions = {
+    origin: options.evidenceOrigin,
+    root: options.root,
+    repositories: options.repositories,
+    queue: options.queue,
+    freshnessCutoff: options.freshnessCutoff,
+    signal: options.signal,
+    wclCredentials: options.wclCredentials,
+    wclCredentialRef: options.wclCredentialRef,
+    encryptionKey: options.encryptionKey
+  };
+  // The root is the opened character, not a group's original discovery root.
+  const rootSubject = options.subjects.find(
+    (subject) =>
+      canonicalCharacterId(subject.key) === canonicalCharacterId(options.root)
+  );
+  const rootScheduling = rootSubject
+    ? await scheduleCharacterEvidence(rootSubject, gatherOptions)
+    : undefined;
   const evidence = await Promise.all(
     options.subjects.map(async (character) =>
       mergeIdentityEvidence(
@@ -898,18 +1000,11 @@ async function assembleDossier(options: {
           [character.key, ...(character.warcraftLogsAliases ?? [])].map((key) =>
             gatherCharacterEvidence(
               { ...character, key },
-              {
-                origin: options.evidenceOrigin,
-                root: options.root,
-                repositories: options.repositories,
-                queue: options.queue,
-                freshnessCutoff: options.freshnessCutoff,
-                signal: options.signal,
-                wclCredentials: options.wclCredentials,
-                wclCredentialRef: options.wclCredentialRef,
-                encryptionKey: options.encryptionKey,
-                attributeTo: character.key
-              }
+              { ...gatherOptions, attributeTo: character.key },
+              rootScheduling &&
+                canonicalCharacterId(key) === canonicalCharacterId(options.root)
+                ? rootScheduling
+                : undefined
             )
           )
         )
@@ -1114,7 +1209,10 @@ export function createApplicantDossierService(options: {
     Repositories,
     "snapshots" | "evidence" | "manualConnections" | "recentSearches" | "runs"
   >;
-  queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  queue: Pick<
+    DiscoveryQueue,
+    "enqueueCharacterEvidence" | "promoteCharacterEvidence"
+  >;
   search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
   raiderio: Pick<RaiderIoGateway, "getCharacter" | "getMythicBossRankings">;

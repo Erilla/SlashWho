@@ -26,7 +26,7 @@ function harness(reservation: unknown) {
       repositories: {
         evidence: { reserveTierSearch, reserve, markEnqueued } as never
       },
-      queue: { enqueueCharacterEvidence }
+      queue: { enqueueCharacterEvidence, promoteCharacterEvidence: vi.fn() }
     });
   return {
     reserveTierSearch,
@@ -66,6 +66,7 @@ describe("searching one character's tier", () => {
     // without a payload can turn a search into a default.
     expect(test.enqueueCharacterEvidence).toHaveBeenCalledWith("run-1", {
       enqueuedAt: at.toISOString(),
+      priority: 20,
       mode: "full"
     });
     expect(test.markEnqueued).toHaveBeenCalledWith("run-1", "job-1");
@@ -127,4 +128,23 @@ describe("searching one character's tier", () => {
     await expect(test.search()).resolves.toEqual({ kind: "no_evidence" });
     expect(test.enqueueCharacterEvidence).not.toHaveBeenCalled();
   });
+});
+
+it("repairs a joined undispatched light run without changing its collection policy", async () => {
+  const test = harness({
+    kind: "active",
+    run: tierRun({
+      id: "repair",
+      origin: "refresh",
+      mode: "full",
+      lightRefresh: true,
+      queueJobId: null
+    })
+  });
+  await test.search();
+  expect(test.enqueueCharacterEvidence).toHaveBeenCalledWith(
+    "repair",
+    expect.objectContaining({ priority: 20, mode: "light" })
+  );
+  expect(test.markEnqueued).toHaveBeenCalledWith("repair", "job-1");
 });

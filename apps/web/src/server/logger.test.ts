@@ -19,6 +19,7 @@ const baseFields = new Set([
   "durationMs",
   "count",
   "errorName",
+  "errorCode",
   "reason"
 ]);
 
@@ -312,4 +313,29 @@ it("allowlists every throttle field a web request can be charged", () => {
   expect(throttleFields.filter((field) => !allowedFields.has(field))).toEqual(
     []
   );
+});
+
+it("serializes only the safe diagnostics pair on failed web requests", async () => {
+  const output = new PassThrough();
+  let captured = "";
+  output.on("data", (chunk) => {
+    captured += chunk.toString();
+  });
+  await withHttpRequest(
+    "dossier",
+    async () => {
+      throw Object.assign(new Error("PRIVATE_BODY https://private"), {
+        name: "StableFailure",
+        code: "23505"
+      });
+    },
+    createWebLogger(output)
+  );
+  expect(JSON.parse(captured)).toMatchObject({
+    event: "http_request",
+    errorName: "StableFailure",
+    errorCode: "23505"
+  });
+  expect(captured).not.toContain("PRIVATE_BODY");
+  expect(captured).not.toContain("https://private");
 });

@@ -29,6 +29,7 @@ import {
   type DossierApiResult,
   type DossierRequestInit
 } from "../../../../../lib/dossier-api";
+import { createDiscoveryJobPollSchedule } from "../../../../../lib/discovery-job-poll-schedule";
 import { createEvidenceRunWatch } from "../../../../../lib/evidence-run-watch";
 import { patchEvidenceProgress } from "../../../../../lib/evidence-progress-patch";
 import { raiderIoCharacterUrl } from "../../../../../lib/dossier-path";
@@ -36,7 +37,6 @@ import { fetchFirstDossierRead } from "../../../../../lib/early-dossier-read";
 import { evidenceFilter } from "../../../../../lib/character-visibility";
 import { dossierTitle } from "../../../../../lib/dossier-title";
 import {
-  createBackoff,
   type PollReadResult,
   retryAfterMilliseconds,
   useAuthoritativePoll
@@ -174,12 +174,9 @@ function isTransientRefusal(response: Response, body: unknown): boolean {
   );
 }
 
-/**
- * Consecutive failed asks after a job before the page says so: the fifth
- * lands 15 s after the first on the job's 1, 2, 4, 8 s backoff. It goes on asking, and the next answer clears the notice,
- * so a passing fault is waited out while a lasting one is still shown.
- */
+/** A brief outage stays quiet: at least five failures over 15 seconds. */
 const jobFailuresBeforeNotice = 5;
+const jobFailureDurationBeforeNoticeMs = 15_000;
 
 function isAbortError(caught: unknown): boolean {
   return caught instanceof Error && caught.name === "AbortError";
@@ -566,25 +563,61 @@ function DossierPageState({
 
     const jobApi = dossierJobApiPath(activeJobId);
     const controller = new AbortController();
-    const backoff = createBackoff();
+    const schedule = createDiscoveryJobPollSchedule();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    let terminal = false;
+    let inFlight = false;
+    let pendingResume = false;
+    let notBefore = 0;
     let failures = 0;
+    let failureStartedAt: number | undefined;
     let failureShown = false;
 
-    function schedulePoll(retryAfterMs?: number) {
+    function clearScheduledPoll() {
+      if (timeout !== undefined) clearTimeout(timeout);
+      timeout = undefined;
+    }
+
+    function scheduleRead(delayMs: number) {
+      clearScheduledPoll();
+      if (stopped || terminal || document.visibilityState === "hidden") return;
       timeout = setTimeout(
-        () => void pollJob(),
-        Math.max(backoff.next(), retryAfterMs ?? 0)
+        () => {
+          timeout = undefined;
+          void pollJob();
+        },
+        Math.min(
+          maxTimerDelayMs,
+          Math.max(delayMs, notBefore - performance.now(), 0)
+        )
       );
     }
 
+    function schedulePoll(retryAfterMs?: number) {
+      // A refusal can arrive while hidden or while a visible resume is pending.
+      // Record its floor before deciding whether a timer may be scheduled.
+      if (
+        retryAfterMs !== undefined &&
+        Number.isFinite(retryAfterMs) &&
+        retryAfterMs >= 0
+      )
+        notBefore = Math.max(notBefore, performance.now() + retryAfterMs);
+      scheduleRead(schedule.next());
+    }
+
     // The job is followed until it answers, so a throttle, a server error or
-    // a dropped connection on the way is waited out on the backoff rather
+    // a dropped connection on the way is retried on the watch schedule rather
     // than ending the page's research with the root-only view still on show.
     function retryAfterFailure(message: string, retryAfterMs?: number) {
       failures += 1;
-      if (failures >= jobFailuresBeforeNotice && !failureShown) {
+      failureStartedAt ??= performance.now();
+      if (
+        failures >= jobFailuresBeforeNotice &&
+        performance.now() - failureStartedAt >=
+          jobFailureDurationBeforeNoticeMs &&
+        !failureShown
+      ) {
         failureShown = true;
         setError(message);
       }
@@ -593,19 +626,24 @@ function DossierPageState({
 
     function answered() {
       failures = 0;
+      failureStartedAt = undefined;
       if (!failureShown) return;
       failureShown = false;
       setError(null);
     }
 
     async function readExpandedDossier() {
+      if (stopped || document.visibilityState === "hidden") return;
       const sequence = ++requestSequence.current;
       const result = await readFullDossier(dossierApi, {
         cache: "no-store",
         signal: controller.signal
       });
-      if (controller.signal.aborted || sequence < appliedSequence.current)
+      if (controller.signal.aborted) return;
+      if (sequence < appliedSequence.current) {
+        terminal = true;
         return;
+      }
       if (result.kind === "refused") {
         if (result.response.status === 409) {
           answered();
@@ -631,17 +669,29 @@ function DossierPageState({
         answered();
         showDossier(result.data, { sequence });
       }
+      terminal = true;
+      clearScheduledPoll();
       setStatus(null);
     }
 
     async function pollJob() {
+      if (stopped || terminal || document.visibilityState === "hidden") return;
+      if (inFlight) {
+        pendingResume = true;
+        return;
+      }
+      if (performance.now() < notBefore) {
+        scheduleRead(0);
+        return;
+      }
+      inFlight = true;
       try {
         const result = await fetchDossierApi(
           jobApi,
           dossierResearchStatusSchema,
           { cache: "no-store", signal: controller.signal }
         );
-        if (controller.signal.aborted) return;
+        if (stopped || controller.signal.aborted) return;
         if (
           result.kind === "refused" &&
           isTransientRefusal(result.response, result.body)
@@ -653,6 +703,8 @@ function DossierPageState({
           return;
         }
         if (result.kind !== "ok") {
+          terminal = true;
+          clearScheduledPoll();
           setError(
             result.kind === "refused"
               ? apiError(result.response, result.body)
@@ -668,6 +720,8 @@ function DossierPageState({
           return;
         }
         if (job.status === "failed") {
+          terminal = true;
+          clearScheduledPoll();
           setResearchFailed(true);
           setError(
             job.error?.message ??
@@ -680,15 +734,30 @@ function DossierPageState({
       } catch (caught) {
         if (isAbortError(caught) || stopped) return;
         retryAfterFailure("The applicant research status could not be loaded.");
+      } finally {
+        inFlight = false;
+        if (pendingResume) {
+          pendingResume = false;
+          scheduleRead(0);
+        }
       }
     }
 
+    function onVisibilityChange() {
+      clearScheduledPoll();
+      if (stopped || terminal || document.visibilityState === "hidden") return;
+      if (inFlight) pendingResume = true;
+      else scheduleRead(0);
+    }
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
     void pollJob();
 
     return () => {
       stopped = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       controller.abort();
-      if (timeout) clearTimeout(timeout);
+      clearScheduledPoll();
     };
   }, [activeJobId, dossierApi, showDossier, readFullDossier]);
 
