@@ -96,3 +96,40 @@ Disabling minification would affect bundle size and container/runtime overlap wi
   discrepancy remains unconfirmed and is disclosed in the PR body.
 - Implementation PR hand-off uses `Refs #858`, retaining the issue for test
   deployment acceptance. No deployed measurements, merge or auto-merge claimed.
+
+## Manager implementation review fixes
+
+Review `5507279934` requested two fixes, read and verified against the source.
+
+- `92a44bb4`: treat generic error names case-insensitively. The pg-protocol
+  instance name is lowercase `error`; two new regressions failed first, then
+  four variants (`error`, `ERROR`, `Error`, empty) preserve `DatabaseError`
+  with `23505`. Shared diagnostics/web/worker focused suite passed 468 tests.
+- `c1b81029`: non-test source AST guard scans packages, worker and web server
+  for literal error creation/calls, row/environment helper code arguments,
+  error class fields/types, code assignments and thrown object literals.
+  It requires more than 150 distinct discovered codes, with no unlogged
+  snake_case exceptions. Mutation regressions caught the missing scanner and
+  two initially missed thrown-object forms before implementation. It detects
+  unregistered injected codes without mutating repository source files.
+  Focused diagnostics/name/inventory suites passed 253 tests; application
+  typecheck passed. Full gate and fresh fix review are next.
+- Manager accepts the earlier unchanged queue timing discrepancy as unrelated.
+  Optional helper/layout, indirect-class and legacy PG16 class notes remain
+  outside the required fixes; no scheduler or timing-tolerance changes.
+- Fresh read-only fix review: no actionable findings in `215c7ca7..c1b81029`.
+- Review-fix gate: format/lint/typecheck and 3,412 unit tests in 211 files passed.
+  The default-concurrency integration run timed out in unchanged migration
+  backfill and character-group overlapping-pass tests (479/481 passed).
+  Both suites passed in isolation: 47 tests at `--maxWorkers=2`.
+- Coordinator drained the other assigned integration lanes and authorised
+  `corepack pnpm test:integration --maxWorkers=3`, matching documented CI
+  concurrency, with all original tests/timeouts/assertions retained. It passed
+  all 481 tests in 21 files (103.89 s). The held lanes were released immediately
+  afterwards. Host contention remains an inference; no proven cause or
+  shared-service restart is claimed. Build/browser verification follows.
+- Review-fix production build and all 61 browser tests passed on unchanged
+  `cf394e6d`. Coordinator reported #909 landing as `262b044f` while e2e was
+  running; e2e completed before any merge. Those results belong to the old
+  tree only. Fetch/integrate the newer main and verify the merged tree before
+  pushing the fixes; use the authorised integration `--maxWorkers=3` command.
