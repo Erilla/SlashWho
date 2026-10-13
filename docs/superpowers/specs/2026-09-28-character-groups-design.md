@@ -721,13 +721,82 @@ growth costs little new collection.
 
 **Rollback.** Revert the code. The tables go stale, and nothing reads them.
 
+### Phase 1 exit record (2026-10-13)
+
+**Rebuild.** Ran on 2026-09-29 against the test database: 43 observers, 310
+links, 31 groups.
+The window starts at 2026-09-29T10:29:20.789Z.
+
+**Replays.** Each had 0 failures.
+
+- **09-29 (day 0):** 123 pages, 0 lost.
+- **09-30:** 127 pages, 0 lost, 34 publications.
+- **10-13:** 170 pages (143 unchanged, 27 grew, 0 lost); 366 publications
+  checked since the rebuild.
+
+The 10-13 replay covered every exit path except the live-sweep completion,
+which #812 covers by tests:
+
+- `raiderio_complete` 7, `raiderio_limited` 9, `privacy_hidden` 43;
+- `capped` 37, `matched` 34, `skipped_guild` 236;
+- sweep first cycles 58, continuations 249, seals 45;
+- `not_due_refresh` 1, `manual_added` 1.
+
+**Worker logs,** 09-29 10:29 to 10-13 14:10, across every worker deployment:
+0 `character_groups_write_failed`, 0 `character_groups_merged`, 0 error
+records. Every maintenance recompute completed its cycle, the longest in
+1.2 s.
+
+**Manual removal.** On 10-13 at 14:29:25 UTC, ozanarath was added as a manual
+connection on knuxxm. The post-write recompute of ozanarath's discovery chain
+merged them straight away. At about 14:31 the connection was removed; the
+chain's next write, at 14:31:41, recomputed from the current links and split
+the group. The replay afterwards had 0 failures and no drift. While the target
+is active, a publication's recompute heals a removal within seconds; the
+hourly pass is only the fallback.
+
+**Integration suite.** Passed on main `9c5bad04`: 21 of 21 files, 481 of 481
+tests.
+
+**Decision and its gaps.** Ryan accepted the 10-13 replay alone in place of
+replays on three consecutive days. The gaps:
+
+- Replays ran only on 09-29, 09-30 and 10-13; none ran from 10-01 to 10-12.
+- The 10-13 replay covers completeness, presence, provenance and retraction
+  for the whole period since the rebuild.
+- Drift and maintenance health are judged only when a replay runs, so they
+  were checked on those three days only. A drift that appeared and healed in
+  between would not have been seen.
+
+**Unexplained maintenance consumer.** Between 10-06 19:00 and 10-09 00:00 UTC,
+about 25 hourly maintenance runs (cache cleanup plus groups recompute)
+completed in `pgboss.job` but left no record in the Railway worker's logs.
+
+- **Ruled out:** the worker has 1 replica; the web service has no such
+  records; every ledger write in those hours came from runs the Railway
+  worker logged.
+- **Suspected:** a worker outside Railway taking the scheduled maintenance
+  job. It wrote no links.
+- **Cause:** not yet confirmed.
+
+**Condition on phase 2.** Phase 2 does not ship until that outside maintenance
+consumer is explained or confirmed gone.
+
+**Phase 2 design input.** A historical guild that stays 404 at Blizzard makes
+every cycle of a chain log `skipped_guild` / `added_only`, which permanently
+disables fingerprint retraction for that observer. This was seen for the
+ryun/ryii cluster. `skippedHistoricalGuilds` is neither stored nor logged.
+
 ## Phase 2: read, search and edit from groups
 
 > **Draft.** Not approved. Re-reviewed against phase 1's data before it is
 > built.
 
 Phase 2 merges only after phase 1 has met its exit criteria, and after the
-replay passes again against the tree phase 2 will deploy. Its worker and web
+replay passes again against the tree phase 2 will deploy. It also does not
+ship until the maintenance consumer outside Railway, seen from 10-06 to 10-09
+(see "Phase 1 exit record (2026-10-13)"), is explained or confirmed gone. Its
+worker and web
 both keep phase 1's writes, now inside the publication transaction, so deploy
 order does not matter.
 
