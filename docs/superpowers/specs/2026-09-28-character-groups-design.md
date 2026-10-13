@@ -2,12 +2,16 @@
 
 Issue: #738. Delivered in three phases, each its own pull request.
 
-**Status (2026-09-28).**
+**Status (2026-10-13).**
 
-- **Up for approval now:** the model (Terms through Convergence) and phase 1.
-- **Draft:** phases 2 and 3. They are kept as the current best design, not as
-  approved, and are re-reviewed against phase 1's real data from test before
-  either is built. The implementation plan covers phase 1 only.
+- **Approved on 2026-09-28:** the model (Terms through Convergence) and phase 1.
+  Phase 1 shipped, and its exit is recorded under
+  [Phase 1 exit record (2026-10-13)](#phase-1-exit-record-2026-10-13).
+- **Approved on 2026-10-13:** phases 2 and 3, revised against phase 1's data
+  from test. The revision keeps phase 1's writes after the commit, folds O's
+  own latest snapshot into its page, accounts for #813's applicant links, and
+  extends rejection to manual links. Each phase still gets its own
+  implementation plan before it is built.
 - **Where phase 1's design depends on phase 2 or 3,** that is stated as a
   constraint phase 1 must leave room for. Examples are the replay calling phase
   2's resolution code, and `countingLinks` honouring rejections.
@@ -67,7 +71,8 @@ it should be weighed on those.
 ## Maintainer decisions
 
 Recorded because each overrides a deliberate earlier rule or accepts a stated
-risk. All were made on 2026-09-28.
+risk. These were made on 2026-09-28; the decisions on phases 2 and 3 follow,
+under [Made on 2026-10-13](#made-on-2026-10-13).
 
 - **Groups plus connections.** This replaces the issue's first framing, "reuse
   the owner's snapshot". There is no owner:
@@ -108,6 +113,22 @@ risk. All were made on 2026-09-28.
 - **Three phases.** Write the new tables first and compare, switch reads
   second, add rejection and expiry third.
 
+### Made on 2026-10-13
+
+Ryan's decisions on the revision of phases 2 and 3. The fourth decision made
+that day, accepting the 10-13 replay alone as phase 1's exit, is recorded
+under [Phase 1 exit record (2026-10-13)](#phase-1-exit-record-2026-10-13).
+
+- **Post-commit writes.** Phase 2 keeps phase 1's link writes after the
+  publication commits, best effort. They do not move inside the publication
+  transaction. See [Writes](#writes).
+- **Applicant links count like manual links.** They count in full, never
+  expire, and are subject to rejection like any manual link. See
+  [Applicant links (#813)](#applicant-links-813).
+- **Fingerprint retraction blocked by a 404 guild is not fixed.** It is a
+  documented limitation. Phase 3's expiry covers it anyway: a character that
+  left is never re-observed, so its link stops counting after 90 days.
+
 ## Model
 
 ### Terms
@@ -140,6 +161,12 @@ recompute, read and replay:
 **Rejections count from phase 1.** Nothing writes a rejection until phase 3,
 but honouring them from the start means reverting phase 3 leaves them in
 force: rejected characters do not silently rejoin.
+
+- **As built, phase 1 honours them on the observed half only.**
+  `COUNTING_LINKS_FROM` has no rejection check on its manual half, so a
+  rejected manual link would still count. Phase 3 corrects this before any
+  rejection is written; see
+  [Rejections cover manual links](#rejections-cover-manual-links).
 
 **Suppression is not part of the predicate.** It is applied when a page is
 read, because it can be lifted or expire.
@@ -245,9 +272,9 @@ to an existing table in any phase.
 **Lock order.** Every writer takes locks in this one order:
 
 0. the rebuild lock: a transaction-level advisory lock. Every writer of the new
-   tables takes it shared; only the rebuild takes it exclusive. Phase 2's
-   single publication transaction must take it before `lockRoot`, which is
-   today the first statement of every snapshot writer;
+   tables takes it shared; only the rebuild takes it exclusive. Phase 2 keeps
+   the writes after the publication commits (see [Writes](#writes)), so no
+   snapshot writer's transaction takes it;
 1. the existing bucket and root advisory locks, sorted, as today;
 2. the existing fingerprint-sweeps lock;
 3. the groups lock: one transaction-level advisory lock serialising every
@@ -719,7 +746,14 @@ growth costs little new collection.
 | mommystrike |     2 |     5 |                                     5 |
 | regnii      |    22 |    23 |                                    23 |
 
-**Rollback.** Revert the code. The tables go stale, and nothing reads them.
+**Rollback.** First set `APPLICANT_LINKING_ENABLED=false`, then revert the
+code. The tables go stale, and nothing reads them.
+
+- **Why the flag goes first.** #813's link step reads `character_connections`
+  for its cross-group check. Reverting phase 1 freezes those links, and
+  emptying `character_connections` removes them. Either way the check would
+  allow or refuse merges wrongly. The same order applies before emptying
+  `character_connections` for any other reason.
 
 ### Phase 1 exit record (2026-10-13)
 
@@ -789,29 +823,113 @@ ryun/ryii cluster. `skippedHistoricalGuilds` is neither stored nor logged.
 
 ## Phase 2: read, search and edit from groups
 
-> **Draft.** Not approved. Re-reviewed against phase 1's data before it is
-> built.
+Phase 2 merges only after phase 1 has met its exit criteria. It ships only
+when all of these hold:
 
-Phase 2 merges only after phase 1 has met its exit criteria, and after the
-replay passes again against the tree phase 2 will deploy. It also does not
-ship until the maintenance consumer outside Railway, seen from 10-06 to 10-09
-(see "Phase 1 exit record (2026-10-13)"), is explained or confirmed gone. Its
-worker and web
-both keep phase 1's writes, now inside the publication transaction, so deploy
-order does not matter.
+1. **The replay passes** again against the tree phase 2 will deploy.
+2. **The outside maintenance consumer is gone.** This is the consumer outside
+   Railway seen from 10-06 to 10-09 (see
+   [Phase 1 exit record (2026-10-13)](#phase-1-exit-record-2026-10-13)).
+   - **The gate.** For the 7 days before the deploy, every
+     `maintenance-cleanup` job that completed in `pgboss.job` must have a
+     matching `evidence_cache_cleanup` record in the Railway worker's logs.
+   - **Supporting evidence only.** `pg_stat_activity` showing no `pgboss`
+     connection from outside the private network is a point-in-time check.
+     A worker that isn't running at that moment passes it.
+   - **Telling connections apart.** Phase 2 sets the Railway worker's
+     connection `application_name` to `slashwho-worker` (pg-boss's pool and
+     the repositories' pool). Any other `pgboss` or `slashwho-*` connection
+     is then recognisably foreign.
+
+   On test, every hourly run since 10-09 00:00 has its record. The runbook
+   carries the rule that no worker runs against test's or production's
+   database from outside Railway.
+
+3. **The #753 check passes.** Chains in flight before #753 could have written
+   tournament profiles as fingerprint links. Before phase 2 ships, list the
+   fingerprint observations from chains that started before #753's deploy
+   (2026-09-29 11:33Z) and check whether any names a tournament profile.
+   Either the list is empty, or every root named in it has been re-run on a
+   post-#753 chain and the rebuild has run afterwards.
+4. **#813's flag.** If `APPLICANT_LINKING_ENABLED` is on when phase 2 ships,
+   the replay's coverage must include at least one applicant link. Phase 2's
+   integration tests cover the applicant-origin label.
 
 - **If phase 1 was reverted in between,** the rebuild is run before phase 2
   deploys.
-- **Rolling back phase 2** is a code revert. The worker keeps writing through
-  phase 1's code.
+- **Deploy order.** The worker and web can deploy in either order. The
+  worker's writes are unchanged, and the web only reads.
+- **Rolling back phase 2** is a code revert. Phase 1's writes carry on.
+
+### Writes
+
+- **Writes are unchanged from phase 1** (decided on 2026-10-13). After each
+  committed publication, `writeCommittedObservations` writes observations and
+  the ledger, then recomputes, best effort, outside #772's fenced
+  transaction. Publication code is untouched, and a writer fault can never
+  fail or delay a publication. Nothing is added to #772's fenced repository
+  set.
+- **Web edits.** A manual add or remove from the web still writes its row and
+  recomputes the affected groups under the groups lock, in its own
+  transaction. That is not the publication path.
+- **Monitoring after ship.** The replay stays as a periodic check, and its
+  `drift_pending`, `drift_stale_pending` and `maintenance_stale` rules catch a
+  recompute that stops healing. The page-comparison half stays until phase 3
+  removes `legacyResolveSubjects`.
 
 ### Reading a group
 
 - **`groupOf(key)`** returns the key's stored group, or nothing for a
   character never discovered or a suppressed one. A suppressed key reads as
   not found, as today.
-- **Group decisions are made over page members.** These are all computed over
-  `pageMembers(O)`, never the stored group:
+- **`pageMembers(O)`** is the walk defined under [Terms](#terms). It walks the
+  current counting links within O's stored group.
+- **A page's members** are `pageMembers(O)` over O's stored group, together
+  with every non-suppressed member of O's own latest completed snapshot. The
+  second part (the fold-in) does two jobs:
+  - It covers the seconds between a publication committing and its recompute
+    landing, so a character O just discovered is on O's page at once.
+  - It is the safety net for a lost post-commit write. O's page can never show
+    fewer characters than today's root page, which makes P1 hold by
+    construction.
+
+  How far a sibling's page can lag depends on what was lost:
+  - **Normally:** by seconds.
+  - **A lost recompute:** by up to one maintenance pass, which heals it.
+  - **A lost observation write:** until O's next publication or a manual
+    rebuild. Lost writes are detected, not healed (see
+    [Phase 1](#phase-1-write-connections-and-groups-read-nothing)). The replay's
+    completeness check (a) detects one, and the runbook's rebuild step stays
+    as the repair.
+
+- **The fold-in skips rejected characters.** From phase 3, a character
+  separated from O's page by "Not the same person" must not return through
+  the fold-in. The fold-in therefore skips any snapshot member C that has a
+  `rejected` row pairing it with any page member.
+  - **This covers everything the cut removes.** Every member of O's snapshot
+    is directly observed by O. The characters a cut removes besides X are,
+    by definition, reachable only through X, so they cannot be in O's
+    snapshot. Only X can come back, and the cut always writes a rejected row
+    between X and a remaining page member.
+  - **No removed set is stored.** The rule is derived from rejection rows
+    alone.
+  - **The premise it rests on.** Every non-self member of O's published
+    snapshot has a direct link from O: observed, manual or expired.
+    `writeCommittedObservations` writes every snapshot member as an
+    observation with O as observer (`character-connections.ts:201-227`).
+    That is why X can be in O's snapshot only through a direct O–X link, and
+    why the cut always writes the (X, O) rejection.
+  - **A test pins the premise** (see [Testing](#testing), phase 2). A future
+    source family or snapshot path that adds members without a direct
+    observation from O fails the build, instead of quietly letting a cut
+    character back onto O's page.
+  - **The cut wins over P1.** P1 holds through phases 1 and 2. Phase 3
+    removes characters only deliberately, as
+    [Preserved behaviour](#preserved-behaviour) says. The rejection filter
+    ships in the same commit as phase 3's manual-half filter (see
+    [Rejections cover manual links](#rejections-cover-manual-links)).
+
+- **Group decisions are made over page members,** never the stored group:
   - freshness (`isFresh`);
   - "a member has an active run";
   - the due checks for new guild members;
@@ -821,10 +939,12 @@ order does not matter.
   O's group fresh, have its run joined, hold off O's check, or have its rows
   grey, flag or be deleted from O's page. A suppressed member's own rows are
   untouched, and take effect again if the suppression lifts.
+  - **Freshness and active runs read the source tables.** `isFresh`, "a member
+    has an active run" and the due checks read the snapshot, run and
+    sweep-state tables directly, over page members. The fold-in makes O
+    always a page member. Only membership comes from the group tables, so the
+    lag can never make a group look wrongly fresh or wrongly stale.
 
-- **`pageMembers(O)`** is the walk defined under [Terms](#terms). It walks the
-  current counting links within O's stored group, which phase 2 keeps
-  consistent with the links in every writing transaction.
 - **One consistent read.** Every read that feeds one response runs inside one
   `withConsistentRead`: the group, its links for labels, its members' latest
   snapshots for research state, and its exclusions.
@@ -838,9 +958,13 @@ that decides "which dossier is this":
 - `recentSearches.listRecent`, whose in-progress state comes from the group;
 - `resolveSubjects`, the dossier read and the tier search;
 - `readInitial`;
-- `isConnectedToDossier` and `sharedIdentityKeys`;
+- `isConnectedToDossier`, and the "which dossier is this" uses of
+  `sharedIdentityKeys`;
 - the connected-characters, exclusion and historic-alias routes;
 - `scheduleConnectedCharacterSweep`.
+
+**`sharedIdentityKeys` itself stays.** It defines a maker's Warcraft Logs
+identity set for self-exclusion, and #813's `skipped_excluded` uses it.
 
 ### Search and reservation
 
@@ -891,13 +1015,16 @@ bounded:
   search may add to it.
   - **A landing-page search** keeps today's rule, which records a `job` or
     `character` result, and now also records `group_ready`.
-  - **The `groupStale` start** sends `origin: "page"` in its `POST` body, and
-    `dossiers.start` never records it. Merely viewing a sibling's page
-    therefore never adds that character to the landing list.
+  - **The `groupStale` start** sends `startedFrom: "page"` in its `POST`
+    body, and `dossiers.start` never records it. Merely viewing a sibling's
+    page therefore never adds that character to the landing list.
   - **The root-only automatic start** is recorded, as today. Only the
-    `groupStale` start is new, and only it carries `origin`.
+    `groupStale` start is new, and only it carries `startedFrom`.
   - **The request contract.** `createDossierRequestSchema` is `.strict()`, so
-    phase 2 adds `origin` to it as an optional field.
+    phase 2 adds `startedFrom` to it as an optional field.
+  - **Why not `origin`.** The field is not called `origin`, which would clash
+    with #813's `manual_dossier_connections.origin` column and with
+    `character_evidence_runs.origin`. #813's column keeps its name.
 - **Order of checks in `search.create`.** Today's order is kept: Raider.IO is
   read before `reserve`, so no reservation ever has to be cancelled. The
   checks run in this order:
@@ -929,7 +1056,9 @@ bounded:
   O's own, so a joining page is not told `not_ready`.
 - **Re-enqueueing a joined run.** When the applicant watcher joins another
   member's queued run that has no queue job, it enqueues with that run's
-  `rootKey`, not O. Today `start-applicant-collection.ts` passes O.
+  `rootKey`, not O. Today `start-applicant-collection.ts` passes O. These are
+  fields #773's explicit queue payload already carries. Any new job field
+  must be added to the list in `packages/database/src/queue.ts`.
 
 ### Reading a dossier
 
@@ -938,6 +1067,9 @@ bounded:
   evidence is collected and it counts under the ceiling. That includes, from
   phase 3, the far ends of O's own expired links. The page and the ceiling
   therefore count the same characters.
+  - **Where evidence comes from (#767).** Members of O's own snapshot collect
+    evidence without a dossier read. Members outside it, such as other
+    roots' members and manual targets, get theirs from the dossier read.
 - **URL and root:** the URL stays O's, and the response's `root` is O.
 - **Labels.** O's row keeps the label today's code gives a snapshot's root:
   its `input` source, shown as `raiderio_declared`. That is also what the
@@ -968,16 +1100,22 @@ bounded:
   A character reached by a fingerprint link and then a Raider.IO claim is
   labelled fingerprint-derived.
 
-  **Fallback.** A member with no path from O cannot occur within one
-  consistent read. If it does, it keeps the label from the latest snapshot
-  containing it, and `group_member_unreachable` is logged.
+  **Folded-in members.** A member folded in from O's latest snapshot with no
+  counting path from O takes its label from that snapshot, as today. That is
+  the expected lag case, not an error, so nothing is logged.
+
+  **Fallback.** A member outside O's latest snapshot with no path from O
+  cannot occur within one consistent read. If it does, it keeps the label
+  from the latest snapshot containing it, and `group_member_unreachable` is
+  logged.
 
 - **Contract additions.** Two fields, both optional, because the dossier schema
   is `.strict()` and `/demo` parses the frozen `ryii-dossier.json`:
   - `hasManualConnection` on a character, true when any page member has a
     manual row targeting it. The menu's Remove item uses it instead of the
     label, so a manual target labelled by a provider path can still be
-    removed.
+    removed. It is decided together with #813's `origin` field; see
+    [Applicant links (#813)](#applicant-links-813).
   - `groupStale` on the dossier. It is true only when all of these hold:
     - `isFresh(pageMembers(O))` is false;
     - no page member has an active discovery run;
@@ -1014,7 +1152,7 @@ bounded:
     discovered. This is today's case, keyed on the `submitted` label, and a
     refused start shows today's research error.
   - **`groupStale` is true.** The page sends one `POST start`, with
-    `origin: "page"`, per page load.
+    `startedFrom: "page"`, per page load.
     - **Only the first read decides.** `readCurrentOrStartResearch` evaluates
       `groupStale`, as today it runs only without an active job id. Nothing
       re-evaluates it: not `readDossierPoll`, `refreshDossier`,
@@ -1071,6 +1209,10 @@ being viewed. The scope differs by direction:
   survive, keep T in the stored group, and grey or bring back T once the
   suppression lifts. Deleting or clearing such a row reveals nothing about
   the suppressed character.
+  - **The connection mutation allowance (#774).** Include and Remove act
+    across the stored group, but each request is charged once, not once per
+    row. That is accepted: the allowance limits requests, and a group-wide
+    clear is one request.
 - **Writes that add** (Exclude, a manual connection) write from O only.
 
 The two exclusion stores are kept apart:
@@ -1096,10 +1238,57 @@ The two exclusion stores are kept apart:
 **Tier search** searches every included page member. **Refresh** is unchanged:
 it re-collects one character's evidence and does not rediscover.
 
-## Phase 3: rejection and expiry
+### Applicant links (#813)
 
-> **Draft.** Not approved. Re-reviewed against phase 1's data before it is
-> built.
+#813 (`2026-10-13-applicant-application-links-design.md`) writes
+`manual_dossier_connections` rows with `origin = 'applicant_sheet'`, behind
+`APPLICANT_LINKING_ENABLED`, which defaults to off.
+
+- **They count like manual links** (decided on 2026-10-13). They are in
+  `COUNTING_LINKS_FROM` already, because they are manual rows. They never
+  expire, and are subject to rejection like any manual link.
+- **The `origin` label on group pages.**
+  - **Loader.** `GroupGraph.manual` and `GroupGraph.undiscoveredManualTargets`
+    gain `origin`. The loader selects it in both queries
+    (`character-groups-audit.ts` :237-277 and :445-455), and so does phase
+    2's production loader.
+  - **Undiscovered targets.** At `group-subjects.ts:129` the row carries
+    `origin: "application"` when its manual rows are applicant-origin.
+  - **Discovered members.** A discovered member whose label comes from a
+    manual-only path (`SOURCE_FOR.manual`, `group-subjects.ts:60`) carries
+    `origin: "application"` on the same rule as below.
+  - **The rule.** One per-target lookup over the manual rows that page
+    members made targeting T decides both fields:
+    - `hasManualConnection` is true when any such row exists;
+    - `origin` is `"application"` when every such row is applicant-origin.
+
+    A reviewer's own manual link therefore always shows as "Manually added".
+
+  - **Sources.** `source` stays `manually_added`, as #813 requires, so Remove,
+    Exclude and `labelOf` are unchanged.
+- **Recompute after an applicant link.** #813's link step triggers no
+  recompute, so a new applicant link reaches the group at the next
+  publication touching either end, or at the hourly pass. The replay reports
+  `drift_pending` in between. Phase 2 accepts this. It recommends that #813's
+  step call `recomputeGroupsOf` for both ends after each `linked`, best
+  effort, as a web add does, but does not require it.
+- **The link step reads counting links on the fly.** #813's cross-group
+  check must compute components from the counting links
+  (`COUNTING_LINKS_FROM`), never from `character_group_members` or
+  `character_groups`. Phase 2 exports the counting-links fragments from one
+  place, so the link step and the recompute cannot drift apart. Phase 3's
+  manual-half rejection predicate reaches the link step through the same
+  fragments (see
+  [Rejections cover manual links](#rejections-cover-manual-links)).
+- **Rollback ordering.** Set `APPLICANT_LINKING_ENABLED=false` before
+  reverting phase 1 or emptying `character_connections`. Otherwise the link
+  step's cross-group check runs against frozen or missing links, and allows
+  or refuses merges wrongly. Phase 1's rollback and the runbook's Rollback
+  section both carry this step.
+- **Rejections in the link step** arrive with phase 3: the link step gains a
+  `skipped_rejected` outcome.
+
+## Phase 3: rejection and expiry
 
 ### Not the same person
 
@@ -1119,6 +1308,41 @@ are built from paths.
   The merge alert fires whenever a merge rejoins a character that any
   rejection row names, whatever the group sizes. The rejoined character is
   shown as an ordinary member, and the reviewer can reject again.
+- **The fold-in.** A rejected X does not return to O's page through O's own
+  snapshot; see the fold-in's rejection rule under
+  [Reading a group](#reading-a-group).
+
+### Rejections cover manual links
+
+The cut writes `rejected` rows for observed, manual and expired links alike.
+But `COUNTING_LINKS_FROM` filters rejections only on the observed half, and
+its manual half has no rejection check. So a rejected manual or applicant
+link would still count, and the cut would not hold.
+
+- **Phase 3 filters manual rows too.** It applies the rejection filter to the
+  manual half of every counting-links query:
+  - `COUNTING_LINKS_FROM`;
+  - the rebuild's groups statement in `REBUILD_SQL`;
+  - the audit loader's `COUNTING_LINKS_WITH_STRENGTH`;
+  - #813's link step.
+- **One shared predicate, not one query.** These can't literally be one
+  query: `COUNTING_LINKS_FROM` carries `= ANY($1)` filters and the others
+  don't. Phase 3 therefore shares the manual-half rejection predicate as one
+  exported SQL fragment, used by all of them. The link step's "same counting
+  links" in phase 2 means the same: it uses the shared fragments.
+- **One integration test checks they agree.** Over a fixture holding a
+  rejected manual link and a rejected applicant link, it runs all four paths
+  (recompute, rebuild, audit loader and the link step's cross-group check)
+  and checks that they produce the same components.
+- **#813's link step** reads the same fragments, so applicant links honour
+  rejections with no change of its own. It also gains a `skipped_rejected`
+  outcome, so a resubmitted application doesn't keep re-adding a row that
+  can't count.
+- **The web add's rejection check** (see [Reviewer edits](#reviewer-edits))
+  is unchanged.
+- **One commit ahead of the controls.** The manual-half filter and the
+  fold-in's rejection filter ship as one commit, ahead of phase 3's reviewer
+  controls.
 
 ### Link expiry
 
@@ -1128,7 +1352,17 @@ that is no longer true. So an `observed` link whose `observed_at` is more than
 90 days old stops counting (`CONNECTION_MERGE_TTL_DAYS`, a domain constant
 with its own test).
 
-- **Manual links and rejections** never expire.
+- **What expires.** Only `observed` links expire. Manual links, applicant
+  links and rejections never do.
+- **Blocked retraction** (decided on 2026-10-13). For an observer whose sweep
+  always skips a 404 guild, expiry is the cleanup for fingerprint links. A
+  character that left is never re-observed, so its link stops counting after
+  90 days. Retraction itself is not changed.
+- **#719's bound.** Its decision 7 requires its 28-day bound to stay at or
+  under half of `CONNECTION_MERGE_TTL_DAYS` (90). The 28-day constant exists
+  only if #719's option D is built. Whichever of the two lands second, phase
+  3 or option D, adds a domain test asserting the relationship, so that
+  changing either constant then fails the build.
 - **Where an expired link still shows.** On its observer's page, its far end is
   a member, as a stale snapshot's member is today. That far end also works
   with every route that page offers: exclude, historic alias, and the
@@ -1145,10 +1379,13 @@ with its own test).
 - **Renewal.** A link is renewed when its observer re-observes it, and
   retracted by the rules above.
 
-**Rollback.** Revert the code.
+**Rollback.** Revert the reviewer's controls and expiry. The commit carrying
+the manual-half filter and the fold-in's rejection filter stays.
 
-- **Rejections stay in force**, because phase 1's `countingLinks` already
-  honours them; only the reviewer's controls go.
+- **Rejections stay in force** only if both filters stay: the manual-half
+  filter, and the fold-in's rejection filter. That is why they ship as one
+  commit ahead of the controls, and a phase 3 rollback reverts the controls
+  only.
 - **Expired links count again**, so groups they had split can rejoin until
   phase 3 is re-applied.
 
@@ -1215,12 +1452,11 @@ The integration and end-to-end tests below cover each of them.
     does rejoin one, the worker's next maintenance pass raises the alert. The
     web has no webhook.
 
-- **A recompute failure.**
-  - In phase 1 it is logged and changes nothing else.
-  - From phase 2 it rolls the publication back, and the run takes today's
-    retry path. For a continuation, that path is `continueWithoutProgress`,
-    and the chain is abandoned after `MAX_CONTINUATION_NON_PROGRESS_CYCLES`
-    (5).
+- **A recompute failure** is logged and changes nothing else, in every phase.
+  The writes stay after the publication commits (see [Writes](#writes)), so
+  it never rolls a publication back. From phase 2, O's page still shows O's
+  latest snapshot through the fold-in, and the next maintenance pass heals
+  its siblings' pages.
 - **The ceiling.** `DOSSIER_CHARACTER_CEILING` caps research as today. A page
   over it fails the replay, so no group reaches it unnoticed.
 - **Privacy.**
@@ -1301,14 +1537,36 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
   - path labels (P5), including a fingerprint-then-claimed chain and a manual
     target with and without a provider path;
   - research state from page members only;
-  - the check for new guild members being due, including an abandoned chain.
+  - the check for new guild members being due, including an abandoned chain;
+  - labels: a folded-in member with no path takes its snapshot label and
+    logs nothing, and a member outside O's snapshot with no path logs
+    `group_member_unreachable`.
 - **Integration:**
+  - the fold-in: with a publication committed and its recompute not yet run
+    (inject a failing recompute), O's page includes the new member and a
+    sibling's page does not. After the maintenance pass, both pages do;
+  - **the fold-in premise.** For every publication path and every source
+    family, every non-self member of the published snapshot has an
+    observation row with the root as observer. The paths are a Raider.IO-only
+    run, a `not_due` refresh, a privacy-hidden run, a first sweep cycle, a
+    continuation, a seal and a live-sweep completion.
+    - The test enumerates the families from the domain's source list, not
+      from a hard-coded array, so adding a family without extending the test
+      fails it.
+    - If a path deliberately adds a member without a direct observation, the
+      fold-in's rejection rule must be revisited first;
+  - applicant origin: an undiscovered applicant target shows "From
+    application", and so does a discovered member reached only by an
+    applicant link. The same target also linked by a reviewer shows "Manually
+    added". `hasManualConnection` is true in all three cases;
   - reservation, where concurrent searches for several members reserve one
     run;
   - a search for a member Raider.IO answers 404, while another visitor's run
     for the group is queued, leaves that run queued and charged;
   - a rate-limited search makes no Raider.IO read;
-  - a `POST` carrying `origin` parses, and one without it still does;
+  - `startedFrom: "page"` is accepted by `createDossierRequestSchema`, a
+    `POST` without it still parses, and an unknown `origin` field is still
+    rejected by `.strict()`;
   - search and the applicant watcher agree, including the re-enqueue key;
   - the `fresh` result for a member with no snapshot of its own;
   - `readInitial` joining a sibling's run;
@@ -1316,7 +1574,8 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
   - suppression hiding a member, a manual target and a research message name,
     then lifting;
   - consistent reads during a publication;
-  - the atomic publication rolling back on a failed recompute.
+  - a failed recompute leaves the publication committed, and O's page still
+    shows the new snapshot's members.
 - **End to end:**
   - a fresh sibling page sends no `POST start`, and a stale one sends exactly
     one, which joins a running member's run if there is one; O's row carries
@@ -1351,8 +1610,20 @@ Fixtures only, with no live Raider.IO, Blizzard or Warcraft Logs traffic.
   - the cut, with X linked to O directly, through a third character, and
     through a manual link;
   - undoing it with an overlapping rejection;
-  - expiry and renewal.
+  - expiry and renewal, with manual and applicant links never expiring;
+  - `CONNECTION_MERGE_TTL_DAYS` is at least twice #719's 28-day bound, added
+    by whichever of phase 3 and #719's option D lands second.
 - **Integration:**
+  - **the cut holds against the fold-in,** tested with the manual-half
+    filter's commit:
+    1. Reject X on O's page.
+    2. O republishes a snapshot that still contains X.
+    3. X stays off O's page and is listed as rejected, both before and after
+       the recompute.
+  - the counting-links paths agree: over a fixture holding a rejected manual
+    link and a rejected applicant link, the recompute, the rebuild, the audit
+    loader and #813's cross-group check produce the same components;
+  - #813's link step answers `skipped_rejected` for a rejected pair;
   - the maintenance pass applying expiry after an earlier cleanup step failed;
   - a far end working with exclusion and historic-alias routes;
   - the rejoin alert;

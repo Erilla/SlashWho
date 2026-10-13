@@ -512,8 +512,11 @@ export const evidenceRunProgressResponseSchema = z
       z
         .object({
           id: z.uuid(),
+          key: characterKeySchema,
           state: z.enum(["queued", "running", "settled"]),
-          version: z.string().min(1)
+          version: z.string().min(1),
+          collectionProgress: z.array(collectionPhaseSchema),
+          evidenceState: dossierEvidenceStateSchema
         })
         .strict()
     )

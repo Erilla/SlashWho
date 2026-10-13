@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import {
   lookupJournalEncounter,
@@ -21,6 +21,32 @@ import {
   supportedRaidCatalogue
 } from "./raid-catalogue";
 import currentContentWindowSnapshot from "./raid-current-content-windows.generated.json";
+
+it("reuses pure Raider.IO name resolutions, including misses, without normalising again", () => {
+  const normalize = vi.spyOn(String.prototype, "normalize");
+  try {
+    for (const [raid, boss] of [
+      ["Nerub-ar Palace!?!!", "Queen Ansurek!?!!"],
+      ["uncatalogued-787", "unknown-787"]
+    ]) {
+      const first = lookupRaiderIoBoss(raid!, boss!);
+      normalize.mockClear();
+      expect(lookupRaiderIoBoss(raid!, boss!)).toEqual(first);
+      expect(normalize.mock.calls).toHaveLength(0);
+    }
+  } finally {
+    normalize.mockRestore();
+  }
+});
+
+it("shares only immutable cached Raider.IO identities", () => {
+  const result = lookupRaiderIoBoss("Nerub-ar Palace!!!?", "Queen Ansurek!!!?");
+  expect(result).toEqual({
+    raidSlug: "nerubar-palace",
+    bossSlug: "queen-ansurek"
+  });
+  expect(Object.isFrozen(result)).toBe(true);
+});
 
 it("groups the catalogue into tiers, folding side raids into their parent tier", () => {
   // Pinned by name and date: a count or an ordering check passes over a raid

@@ -6,6 +6,7 @@ export const maintenanceCleanupQueueName = "maintenance-cleanup";
 export const fingerprintAdmissionQueueName = "fingerprint-admission";
 export const collectCharacterEvidenceQueueName = "collect-character-evidence";
 export const evidenceResumeQueueName = "evidence-resume";
+export const applicantSheetTickQueueName = "applicant-sheet-tick";
 
 /** Optional so jobs enqueued before this deployment stay valid in flight. */
 export type JobTelemetry = {
@@ -90,6 +91,12 @@ export interface DiscoveryQueue {
    * waiting character would sit for up to an extra hour.
    */
   scheduleEvidenceResume(handler: () => Promise<void>): Promise<void>;
+  /**
+   * Runs the applicant sheet watcher every minute. At most one tick is queued
+   * or running across every worker, so a slow Sheet read never overlaps the
+   * next tick, and ticks never pile up behind it.
+   */
+  scheduleApplicantSheetTick(handler: () => Promise<void>): Promise<void>;
   /**
    * The subset of `jobIds` whose evidence job can no longer run: completed,
    * cancelled, failed, or archived out of the job table altogether. A run row
@@ -226,6 +233,7 @@ export function createDiscoveryQueue(
   let ready = false;
   let maintenanceRegistered = false;
   let evidenceResumeRegistered = false;
+  let applicantSheetTickRegistered = false;
   let fingerprintAdmissionsRegistered = false;
   let characterEvidenceRegistered = false;
   let acceptingFingerprintAdmissions = false;
@@ -606,6 +614,48 @@ export function createDiscoveryQueue(
       evidenceResumeRegistered = true;
     },
 
+    async scheduleApplicantSheetTick(handler) {
+      if (!ready) throw new Error("discovery_queue_not_ready");
+      if (applicantSheetTickRegistered) return;
+      // Exclusive: one tick queued or active across every worker, so a deploy's
+      // overlap or a second replica never runs two polls at once, and a slow
+      // tick drops the next minute's job rather than queueing it behind. A
+      // missed minute needs no retry: the next one does the same work.
+      // createQueue is idempotent and the policy is fixed at creation, so this
+      // queue is born exclusive and never needs the policy migration.
+      await boss.createQueue(applicantSheetTickQueueName, {
+        policy: "exclusive",
+        retryLimit: 0,
+        expireInSeconds: 300
+      });
+      await boss.updateQueue(applicantSheetTickQueueName, {
+        retryLimit: 0,
+        expireInSeconds: 300
+      });
+      await boss.schedule(
+        applicantSheetTickQueueName,
+        "* * * * *",
+        {},
+        {
+          tz: "UTC"
+        }
+      );
+      await boss.work(
+        applicantSheetTickQueueName,
+        { pollingIntervalSeconds: 0.5 },
+        async () => {
+          const execution = handler();
+          inFlight.add(execution);
+          try {
+            await execution;
+          } finally {
+            inFlight.delete(execution);
+          }
+        }
+      );
+      applicantSheetTickRegistered = true;
+    },
+
     async settledEvidenceJobIds(jobIds) {
       if (!ready) throw new Error("discovery_queue_not_ready");
       // A non-uuid id would fail the cast and take the whole sweep down with
@@ -636,6 +686,7 @@ export function createDiscoveryQueue(
       ready = false;
       maintenanceRegistered = false;
       evidenceResumeRegistered = false;
+      applicantSheetTickRegistered = false;
       fingerprintAdmissionsRegistered = false;
       characterEvidenceRegistered = false;
       acceptingFingerprintAdmissions = false;

@@ -14,7 +14,14 @@ function run(
   state: "queued" | "running" | "settled",
   version: string = state
 ) {
-  return { id, state, version };
+  return {
+    id,
+    state,
+    version,
+    key: { region: "eu" as const, realm: "silvermoon", name: id },
+    evidenceState: "scanning" as const,
+    collectionProgress: []
+  };
 }
 
 /** A watch on a clock the test moves by hand. */
@@ -41,79 +48,83 @@ describe("createEvidenceRunWatch", () => {
     expect(delays.map((decision) => decision.delayMs)).toEqual([500, 500, 500]);
   });
 
-  it("re-reads at once when a run publishes or is gone, even on the first ask", () => {
-    const { watch } = watchAt();
+  it("never re-reads for step moves, even beyond the former progress gap", () => {
+    const { watch, advance } = watchAt();
+    watch.fullRead([first]);
+    watch.observe([run(first, "running", "a")]);
+    for (let step = 0; step < 30; step++) {
+      advance(10_000);
+      expect(watch.observe([run(first, "running", `step:${step}`)])).toEqual({
+        kind: "unchanged",
+        delayMs: 500
+      });
+    }
+  });
+
+  it("coalesces publishes under a fixed deadline and reads immediately on final settlement", () => {
+    const third = "10000000-0000-4000-8000-000000000015";
+    const { watch, advance } = watchAt();
+    watch.fullRead([first, second, third]);
+    expect(
+      watch.observe([
+        run(first, "settled"),
+        run(second, "running"),
+        run(third, "queued")
+      ]).kind
+    ).toBe("unchanged");
+    advance(8_000);
+    expect(
+      watch.observe([
+        run(first, "settled"),
+        run(second, "settled"),
+        run(third, "running")
+      ]).kind
+    ).toBe("unchanged");
+    advance(2_000);
+    expect(
+      watch.observe([
+        run(first, "settled"),
+        run(second, "settled"),
+        run(third, "running")
+      ])
+    ).toEqual({ kind: "reread" });
+    watch.fullRead([third]);
+    expect(watch.observe([run(third, "settled")])).toEqual({ kind: "reread" });
+  });
+
+  it("waits at least the last full-read duration for intermediate publishes", () => {
+    const { watch, advance } = watchAt();
+    watch.fullRead([first, second], 15_000);
+    const runs = [run(first, "settled"), run(second, "running")];
+    expect(watch.observe(runs).kind).toBe("unchanged");
+    advance(10_000);
+    expect(watch.observe(runs).kind).toBe("unchanged");
+    advance(5_000);
+    expect(watch.observe(runs)).toEqual({ kind: "reread" });
+  });
+
+  it("reads immediately when the last run disappears, and coalesces an intermediate disappearance", () => {
+    const { watch, advance } = watchAt();
     watch.fullRead([first, second]);
-    expect(
-      watch.observe([run(first, "settled"), run(second, "running")])
-    ).toEqual({ kind: "reread" });
-
-    watch.fullRead([first, second]);
-    expect(watch.observe([run(first, "running")])).toEqual({
-      kind: "reread"
-    });
-  });
-
-  it("re-reads for a step no sooner than the dossier's own backoff", () => {
-    // Break caught: re-reading on every step made a short run cost more full
-    // reads than the plain backoff it replaced.
-    const { watch, advance } = watchAt();
-    watch.fullRead([first]);
-    watch.observe([run(first, "running", "running:active:pending")]);
-
-    advance(500);
-    // Moved, but only half a second after the full read: not yet.
-    expect(
-      watch.observe([run(first, "running", "running:completed:active")])
-    ).toEqual({ kind: "unchanged", delayMs: 500 });
-    advance(500);
-    // Still moved against what was last recorded, and now due.
-    expect(
-      watch.observe([run(first, "running", "running:completed:active")])
-    ).toEqual({ kind: "reread" });
-
-    // The next step waits two seconds, as the backoff's second read did.
-    watch.fullRead([first]);
-    watch.observe([run(first, "running", "running:completed:active")]);
-    advance(1_500);
-    expect(
-      watch.observe([run(first, "running", "running:completed:completed")])
-    ).toEqual({ kind: "unchanged", delayMs: 500 });
-    advance(500);
-    expect(
-      watch.observe([run(first, "running", "running:completed:completed")])
-    ).toEqual({ kind: "reread" });
-  });
-
-  it("counts a dossier another read showed as a full read", () => {
-    // Break caught: discovery's own dossier read did not count, so a step
-    // change straight after it re-read the dossier a second time.
-    const { watch, advance } = watchAt();
-    watch.fullRead([first]);
-    watch.observe([run(first, "queued")]);
-    advance(900);
-    watch.shown([first]);
-    watch.observe([run(first, "queued")]);
-    advance(500);
-    expect(watch.observe([run(first, "running")])).toEqual({
-      kind: "unchanged",
-      delayMs: 500
-    });
-    // It leaves the poll's own schedule alone: its next full read still
-    // asks at once.
-    expect(watch.fullRead([first])).toBe(0);
-  });
-
-  it("starts the backoff over for a new set of runs", () => {
-    const { watch, advance } = watchAt();
-    watch.fullRead([first]);
-    watch.fullRead([first]);
-    watch.fullRead([second]);
-    watch.observe([run(second, "queued")]);
+    expect(watch.observe([run(second, "running")]).kind).toBe("unchanged");
     advance(1_000);
-    expect(watch.observe([run(second, "running")])).toEqual({
-      kind: "reread"
-    });
+    expect(watch.observe([])).toEqual({ kind: "reread" });
+  });
+
+  it("does not reset the stale-full-read fallback when the watched set shrinks", () => {
+    const { watch } = watchAt();
+    expect(watch.fullRead([first, second])).toBe(0);
+    expect(watch.fullRead([first, second])).toBe(1_000);
+    expect(watch.fullRead([second])).toBe(2_000);
+    expect(watch.fullRead([second])).toBe(4_000);
+  });
+
+  it("counts a dossier another read showed without resetting the poll's fallback", () => {
+    const { watch } = watchAt();
+    watch.fullRead([first]);
+    watch.shown([second]);
+    expect(watch.watching()).toEqual([second]);
+    expect(watch.fullRead([second])).toBe(1_000);
   });
 
   it("slows down while a run is quiet, and while every run only waits", () => {

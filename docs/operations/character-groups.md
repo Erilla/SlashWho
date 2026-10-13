@@ -54,6 +54,15 @@ railway variables list --service Postgres --environment test --kv | grep -E '^(R
 Run `unset DATABASE_URL` when the operation is finished, and never paste the
 value into a file, an issue, or the operations log.
 
+**Never run a worker against test's or production's database from outside
+Railway.** Use this `DATABASE_URL` only for the `ops:` commands. A worker
+started with it joins the same pg-boss queues as the Railway worker and takes
+its jobs. Between 10-06
+19:00 and 10-09 00:00 UTC, about 25 hourly maintenance jobs on test were taken
+by an unknown consumer outside Railway: they completed in `pgboss.job` but
+left no record in the Railway worker's logs. Phase 2 does not ship until such
+a consumer is confirmed gone.
+
 Before any replay, export the web's `DOSSIER_CHARACTER_CEILING` too. The
 replay compares pages against the ceiling the web applies, and without the
 variable it uses the default, 50, whatever the web is set to:
@@ -292,7 +301,13 @@ failure, and the next replay compares it.
 
 ## Rollback
 
-Revert the code. The tables go stale, and nothing reads them. After a
+Set `APPLICANT_LINKING_ENABLED=false` on the worker first, before reverting
+phase 1 or emptying `character_connections`. #813's link step reads those
+links for its cross-group check, so against frozen or missing links it would
+allow or refuse merges wrongly. Switch it back on only after the roll-forward
+and rebuild.
+
+Then revert the code. The tables go stale, and nothing reads them. After a
 roll-forward, rebuild and restart the three days.
 
 Reverting the code does not revert the migration. 0069, with `when`
