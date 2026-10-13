@@ -1,6 +1,6 @@
 # Character groups phase 2 implementation plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. The Manager must approve this draft before product code is changed.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking. The Manager must approve this draft before product code is changed.
 
 **Goal:** Every character in a group opens a dossier rooted at that character, reuses fresh discovery, shares active discovery, and supports reviewer edits across the group.
 
@@ -86,10 +86,10 @@ Internal SQL seam: `loadGroupRead(client: Pick<PoolClient, "query">, key: Charac
 
 **Consumes:** Existing counting links, stored groups, `withConsistentRead`, snapshots and source tables. **Produces:** `groupReads.read`, `loadGroupRead`, extended graph facts, and pure run-completion freshness for all later tasks.
 
-- [ ] Seed O–A–B with A suppressed, O's snapshot containing C, and a fresh complete B run. Assert O's page contains O/C, never A/B, and B cannot make it fresh. Lift suppression and assert reach returns. Also cover unknown and suppressed O, pending/suppressed manual targets, and missing stored-group membership after a committed snapshot.
-- [ ] Run `corepack pnpm exec vitest run --project integration tests/integration/group-dossier-reads.test.ts`; confirm the new production API tests fail before implementation.
-- [ ] Export counting-link SQL from one module, preserving phase 1 semantics exactly. Recompute and audit use it; future applicant cross-group checks consume it. Load only O's stored group plus own-snapshot/pending-target data. Keep every response's reads on one repeatable-read client.
-- [ ] Define `isFresh(completedAt: readonly Date[], at: Date, freshnessHours: number): boolean` once. Derive dates only from complete runs of resolved page members. Test completion at either side of the cutoff, failed runs, partial snapshots, continuation whose snapshot timestamp did not move, and live-sweep completion with no new snapshot.
+- [x] Seed O–A–B with A suppressed, O's snapshot containing C, and a fresh complete B run. Assert O's page contains O/C, never A/B, and B cannot make it fresh. Lift suppression and assert reach returns. Also cover unknown and suppressed O, pending/suppressed manual targets, and missing stored-group membership after a committed snapshot.
+- [x] Run `corepack pnpm exec vitest run --project integration tests/integration/group-dossier-reads.test.ts`; confirm the new production API tests fail before implementation.
+- [x] Export counting-link SQL from one module, preserving phase 1 semantics exactly. Recompute and audit use it; future applicant cross-group checks consume it. Load only O's stored group plus own-snapshot/pending-target data. Keep every response's reads on one repeatable-read client.
+- [x] Define `isFresh(completedAt: readonly Date[], at: Date, freshnessHours: number): boolean` once. Derive dates only from complete runs of resolved page members. Test completion at either side of the cutoff, failed runs, partial snapshots, continuation whose snapshot timestamp did not move, and live-sweep completion with no new snapshot.
 
   Start the pure predicate test with:
 
@@ -116,8 +116,8 @@ Internal SQL seam: `loadGroupRead(client: Pick<PoolClient, "query">, key: Charac
 
   Reuse this predicate in replay and source-table-backed reservation checks; add the exact-cutoff assertion using the same strict boundary.
 
-- [ ] Define failure back-off from consecutive latest failed runs: `FRESHNESS_HOURS * 2 ** (failures - 1)`, capped at `FINGERPRINT_SWEEP_CADENCE_HOURS`; a complete run ends the streak. Define sweep due from member sweep states, cadence, resumable cursor and active runs; five continuation failures mean abandoned.
-- [ ] Integration-test a publication committed between projection statements: a response sees one database version, with no mixed graph/snapshot/exclusion state. Unit-test boundary times and abandoned chains, then rerun both affected suites and commit `feat(groups): add consistent group read projection`.
+- [x] Define failure back-off from consecutive latest failed runs: `FRESHNESS_HOURS * 2 ** (failures - 1)`, capped at `FINGERPRINT_SWEEP_CADENCE_HOURS`; a complete run ends the streak. Define sweep due from member sweep states, cadence, resumable cursor and active runs; five continuation failures mean abandoned.
+- [x] Integration-test a publication committed between projection statements: a response sees one database version, with no mixed graph/snapshot/exclusion state. Unit-test boundary times and abandoned chains, then rerun both affected suites and commit `feat(groups): add consistent group read projection`.
 
 ## Task 2: Dossier subjects, labels, research and replay parity
 
@@ -125,14 +125,14 @@ Internal SQL seam: `loadGroupRead(client: Pick<PoolClient, "query">, key: Charac
 
 **Consumes:** Task 1 projection. **Produces:** Live `resolveSubjects` backed by group membership, retained legacy comparison, optional `hasManualConnection` and `groupStale` response fields.
 
-- [ ] Write failing resolver tests for O's own snapshot fold-in with no path; expected snapshot label and no error log. For an outside-snapshot member with no path, preserve its latest containing-snapshot label and log `group_member_unreachable`. Pin O's `input` source, including a sibling with no own snapshot.
-- [ ] Run `corepack pnpm exec vitest run --project unit packages/application/src/group-subjects.test.ts packages/application/src/applicant-dossier-service.test.ts` and confirm new assertions fail.
-- [ ] Union walked members with O's non-suppressed latest completed snapshot before ranking, alias merging, exclusions and the ceiling. Preserve root-first ranking and guild metadata. Resolve path strength with existing `pathStrengths`; log `group_label_weakened` for non-O snapshot members whose live labels weaken.
-- [ ] Add optional subject `hasManualConnection`. Add `origin` to both graph manual collections and audit queries. One per-target lookup over visible makers decides the flag and applicant origin: any manual row sets the flag; all applicant rows yield `origin: "application"`; a reviewer row wins. Provider paths keep their provider label while retaining Remove capability.
-- [ ] Test fingerprint→claimed paths, manual→provider paths, pending applicant targets, discovered manual-only applicant targets, mixed reviewer/applicant rows, aliases and an over-ceiling page. Frozen demo must still parse without the new fields.
-- [ ] Derive research state from contributing page-member snapshots: complete only when every contributing snapshot and O's own snapshot are complete. Keep internal limitation codes, and name only visible privacy-hidden roots in the public message. Preserve every legacy limitation under P4.
-- [ ] Switch live dossier/tier/membership reads to `resolveSubjects`; keep `sharedIdentityKeys` for maker self-identity and alias handling. Replay calls the same resolver against its captured projection, comparing to `legacyResolveSubjects`; add member freshness and applicant coverage reporting. Do not bypass P1–P7 or ledger/drift checks.
-- [ ] Inject failed post-commit recompute: O sees C, sibling does not; maintenance then heals both. Cover lost observations via the fold-in and replay's existing completeness failure. Run affected unit/integration suites and commit `feat(groups): read dossier subjects from groups`.
+- [x] Write failing resolver tests for O's own snapshot fold-in with no path; expected snapshot label and no error log. For an outside-snapshot member with no path, preserve its latest containing-snapshot label and log `group_member_unreachable`. Pin O's `input` source, including a sibling with no own snapshot.
+- [x] Run `corepack pnpm exec vitest run --project unit packages/application/src/group-subjects.test.ts packages/application/src/applicant-dossier-service.test.ts` and confirm new assertions fail.
+- [x] Union walked members with O's non-suppressed latest completed snapshot before ranking, alias merging, exclusions and the ceiling. Preserve root-first ranking and guild metadata. Resolve path strength with existing `pathStrengths`; log `group_label_weakened` for non-O snapshot members whose live labels weaken.
+- [x] Add optional subject `hasManualConnection`. Add `origin` to both graph manual collections and audit queries. One per-target lookup over visible makers decides the flag and applicant origin: any manual row sets the flag; all applicant rows yield `origin: "application"`; a reviewer row wins. Provider paths keep their provider label while retaining Remove capability.
+- [x] Test fingerprint→claimed paths, manual→provider paths, pending applicant targets, discovered manual-only applicant targets, mixed reviewer/applicant rows, aliases and an over-ceiling page. Frozen demo must still parse without the new fields.
+- [x] Derive research state from contributing page-member snapshots: complete only when every contributing snapshot and O's own snapshot are complete. Keep internal limitation codes, and name only visible privacy-hidden roots in the public message. Preserve every legacy limitation under P4.
+- [x] Switch live dossier/tier/membership reads to `resolveSubjects`; keep `sharedIdentityKeys` for maker self-identity and alias handling. Replay calls the same resolver against its captured projection, comparing to `legacyResolveSubjects`; add member freshness and applicant coverage reporting. Do not bypass P1–P7 or ledger/drift checks.
+- [x] Inject failed post-commit recompute: O sees C, sibling does not; maintenance then heals both. Cover lost observations via the fold-in and replay's existing completeness failure. Run affected unit/integration suites and commit `feat(groups): read dossier subjects from groups`.
 
 ## Task 3: Search, reservation, applicant watcher and weekly sweep
 
@@ -140,14 +140,14 @@ Internal SQL seam: `loadGroupRead(client: Pick<PoolClient, "query">, key: Charac
 
 **Consumes:** Task 1 membership/freshness/due predicates. **Produces:** Group-aware reservation, internal `group_ready`, group active state for recent searches and `readInitial`.
 
-- [ ] Write real-database concurrent searches for different stale siblings: expect one inserted run, one charge and all jobs referencing that run. Test a fresh sibling without a snapshot returning `group_ready` before negative cache or provider calls.
-- [ ] Run `corepack pnpm exec vitest run --project integration tests/integration/search-service.test.ts` and confirm these tests fail on root-only reservation.
-- [ ] Add internal `CreateSearchResult` variant `{ kind: "group_ready"; key: CharacterKey }`; keep strict public `CharacterResource` unchanged. Search order remains fresh group, negative cache, read-only allowance check, Raider.IO root read, reserve. Test rate-limited search makes no provider call; 404 for A cannot cancel/refund B's queued run.
-- [ ] Reserve performs unlocked freshness/active checks first. Fresh returns immediately. On stale path take locks in the declared order, reload membership and repeat freshness/active checks, then lock a candidate active run `FOR UPDATE` and recheck status before joining. Insert/charge only if no join/fresh result applies. No provider call in this transaction.
-- [ ] Extend `reserve` with optional `ignoreFreshness` and a serialisable `sweepDue` value carrying cadence cutoff and continuation-failure bound. Weekly sweep uses `fingerprint-sweep-visit` and a non-refusing limit, repeats due and active checks under the groups lock and returns without insertion if no longer due. Use an explicit `not_due` internal result for that branch and exhaustively update callers.
-- [ ] Test a sweep publishing between unlocked due check and locked reservation; no duplicate run. Test active/live cursor blocks, abandoned cursor permits, freshness alone does not block, and concurrent sibling visits queue one sweep.
-- [ ] Return O's URL even when joining B. Applicant re-enqueue uses `reservation.run.rootKey`, with existing queue payload fields; add any genuinely new payload field to queue's explicit list. `readInitial` follows page-member active runs; recent-search progress does likewise.
-- [ ] Test applicant/landing/weekly paths agree, stale queued run without job id is re-enqueued from its owner, and suppressed bridge's active run is never joined. Run affected unit/integration suites and commit `feat(groups): share discovery reservations across page members`.
+- [x] Write real-database concurrent searches for different stale siblings: expect one inserted run, one charge and all jobs referencing that run. Test a fresh sibling without a snapshot returning `group_ready` before negative cache or provider calls.
+- [x] Run `corepack pnpm exec vitest run --project integration tests/integration/search-service.test.ts` and confirm these tests fail on root-only reservation.
+- [x] Add internal `CreateSearchResult` variant `{ kind: "group_ready"; key: CharacterKey }`; keep strict public `CharacterResource` unchanged. Search order remains fresh group, negative cache, read-only allowance check, Raider.IO root read, reserve. Test rate-limited search makes no provider call; 404 for A cannot cancel/refund B's queued run.
+- [x] Reserve performs unlocked freshness/active checks first. Fresh returns immediately. On stale path take locks in the declared order, reload membership and repeat freshness/active checks, then lock a candidate active run `FOR UPDATE` and recheck status before joining. Insert/charge only if no join/fresh result applies. No provider call in this transaction.
+- [x] Extend `reserve` with optional `ignoreFreshness` and a serialisable `sweepDue` value carrying cadence cutoff and continuation-failure bound. Weekly sweep uses `fingerprint-sweep-visit` and a non-refusing limit, repeats due and active checks under the groups lock and returns without insertion if no longer due. Use an explicit `not_due` internal result for that branch and exhaustively update callers.
+- [x] Test a sweep publishing between unlocked due check and locked reservation; no duplicate run. Test active/live cursor blocks, abandoned cursor permits, freshness alone does not block, and concurrent sibling visits queue one sweep.
+- [x] Return O's URL even when joining B. Applicant re-enqueue uses `reservation.run.rootKey`, with existing queue payload fields; add any genuinely new payload field to queue's explicit list. `readInitial` follows page-member active runs; recent-search progress does likewise.
+- [x] Test applicant/landing/weekly paths agree, stale queued run without job id is re-enqueued from its owner, and suppressed bridge's active run is never joined. Run affected unit/integration suites and commit `feat(groups): share discovery reservations across page members`.
 
 ## Task 4: One automatic start on a stale group page
 
@@ -155,13 +155,13 @@ Internal SQL seam: `loadGroupRead(client: Pick<PoolClient, "query">, key: Charac
 
 **Consumes:** Tasks 2/3 dossier state and search result. **Produces:** Optional strict request `startedFrom: "page"`, ready mapping, silent stale-page start behaviour.
 
-- [ ] Write contract tests: optional `startedFrom: "page"` accepted, omitted field accepted, unknown `origin` still rejected. Test `group_ready` maps to `{ kind: "ready" }` without manufacturing a snapshot resource.
-- [ ] Run `corepack pnpm exec vitest run --project unit apps/web/src/app/api/dossiers/api-contract.test.ts apps/web/src/lib/dossier-api.test.ts`; confirm added cases fail.
-- [ ] Compute `groupStale` from page-member freshness, active runs and failure back-off plus O's negative cache. Explicit landing searches ignore failure back-off. Keep root-only `submitted` behaviour; no production provisional pages.
-- [ ] In `readCurrentOrStartResearch`, only the first read with no active job may start a stale group, passing `startedFrom: "page"`. Poll/expanded/refreshed/completed reads never start. Preserve content after every non-job/non-ready result and after job failure, including joined sibling failure; root-only research errors remain.
-- [ ] Record job/character/group_ready only for deliberate searches; omit page starts. Keep existing root-only automatic-start recording.
-- [ ] E2E-test fresh sibling sends zero starts; stale sends exactly one; polling live evidence sends no second start; failed/refused/negative-cached page keeps content. Cover live and abandoned O sweep chains becoming fresh after one completion, consecutive-failure back-off, explicit search despite back-off and recent-search distinction.
-- [ ] Run affected unit tests and `corepack pnpm exec playwright test tests/e2e/group-dossiers.spec.ts tests/e2e/search.spec.ts` after build; commit `feat(groups): refresh stale group pages once per load`.
+- [x] Write contract tests: optional `startedFrom: "page"` accepted, omitted field accepted, unknown `origin` still rejected. Test `group_ready` maps to `{ kind: "ready" }` without manufacturing a snapshot resource.
+- [x] Run `corepack pnpm exec vitest run --project unit apps/web/src/app/api/dossiers/api-contract.test.ts apps/web/src/lib/dossier-api.test.ts`; confirm added cases fail.
+- [x] Compute `groupStale` from page-member freshness, active runs and failure back-off plus O's negative cache. Explicit landing searches ignore failure back-off. Keep root-only `submitted` behaviour; no production provisional pages.
+- [x] In `readCurrentOrStartResearch`, only the first read with no active job may start a stale group, passing `startedFrom: "page"`. Poll/expanded/refreshed/completed reads never start. Preserve content after every non-job/non-ready result and after job failure, including joined sibling failure; root-only research errors remain.
+- [x] Record job/character/group_ready only for deliberate searches; omit page starts. Keep existing root-only automatic-start recording.
+- [x] E2E-test fresh sibling sends zero starts; stale sends exactly one; polling live evidence sends no second start; failed/refused/negative-cached page keeps content. Cover live and abandoned O sweep chains becoming fresh after one completion, consecutive-failure back-off, explicit search despite back-off and recent-search distinction.
+- [x] Run affected unit tests and `corepack pnpm exec playwright test tests/e2e/group-dossiers.spec.ts tests/e2e/search.spec.ts` after build; commit `feat(groups): refresh stale group pages once per load`.
 
 ## Task 5: Reviewer edits across groups
 
@@ -169,13 +169,13 @@ Internal SQL seam: `loadGroupRead(client: Pick<PoolClient, "query">, key: Charac
 
 **Consumes:** Visible page membership for reads and full stored membership for clear mutations. **Produces:** Group-scoped mutation semantics with one admission charge per request.
 
-- [ ] Seed a manual/exclusion row made by suppressed A targeting visible T. Reads from O must ignore it. Include/Remove from O must clear it even while A is suppressed; after lifting suppression T must not unexpectedly return or grey.
-- [ ] Run `corepack pnpm exec vitest run --project integration tests/integration/repositories-dossier-connections.test.ts` and confirm group clear assertions fail.
-- [ ] Add scoped SQL operations rather than looping separately committed root operations: Include clears both stores across stored members; Remove deletes all stored-group manual rows to T and recomputes affected groups under groups lock in the same transaction. Admission is charged once before these writes.
-- [ ] Exclude uses visible makers' manual rows targeting T; otherwise writes one discovered exclusion from O if none applies. Ignore/guard maker self-exclusions including recorded WCL aliases. O is never grey on its own page; hide its Exclude menu action. Include retains manual rows.
-- [ ] Before manual add spends/queues, test rejected pairs between the components computed from current counting links. Recheck before the final write to avoid a concurrent rejection race. Rejection reads already exist in phase 1 data even though phase 2 writes none. Only job/character/group_ready results permit a row from O; recompute immediately in its own transaction.
-- [ ] Update connected/historic/alias access checks to page membership, retaining WCL identity semantics. Remove uses `hasManualConnection` independently of provider label; dialog says “Remove the manual connection to T” and explains when a provider path keeps T present.
-- [ ] Test cross-page both-store exclude/include, self/WCL alias guards, provider-path removal, pending/known manual adds, rejected components, suppression/rate-limited/invalid target leaving no row, and one mutation charge for many rows. Run integration and connected-action e2e suites; commit `feat(groups): apply reviewer edits across stored groups`.
+- [x] Seed a manual/exclusion row made by suppressed A targeting visible T. Reads from O must ignore it. Include/Remove from O must clear it even while A is suppressed; after lifting suppression T must not unexpectedly return or grey.
+- [x] Run `corepack pnpm exec vitest run --project integration tests/integration/repositories-dossier-connections.test.ts` and confirm group clear assertions fail.
+- [x] Add scoped SQL operations rather than looping separately committed root operations: Include clears both stores across stored members; Remove deletes all stored-group manual rows to T and recomputes affected groups under groups lock in the same transaction. Admission is charged once before these writes.
+- [x] Exclude uses visible makers' manual rows targeting T; otherwise writes one discovered exclusion from O if none applies. Ignore/guard maker self-exclusions including recorded WCL aliases. O is never grey on its own page; hide its Exclude menu action. Include retains manual rows.
+- [x] Before manual add spends/queues, test rejected pairs between the components computed from current counting links. Recheck before the final write to avoid a concurrent rejection race. Rejection reads already exist in phase 1 data even though phase 2 writes none. Only job/character/group_ready results permit a row from O; recompute immediately in its own transaction.
+- [x] Update connected/historic/alias access checks to page membership, retaining WCL identity semantics. Remove uses `hasManualConnection` independently of provider label; dialog says “Remove the manual connection to T” and explains when a provider path keeps T present.
+- [x] Test cross-page both-store exclude/include, self/WCL alias guards, provider-path removal, pending/known manual adds, rejected components, suppression/rate-limited/invalid target leaving no row, and one mutation charge for many rows. Run integration and connected-action e2e suites; commit `feat(groups): apply reviewer edits across stored groups`.
 
 ## Task 6: Worker identity, merge alerts and operations
 
@@ -183,11 +183,11 @@ Internal SQL seam: `loadGroupRead(client: Pick<PoolClient, "query">, key: Charac
 
 **Consumes:** Existing recompute and maintenance paths. **Produces:** Distinguishable worker connections, richer observed-merge alert, phase 2 operational instructions and domain entries.
 
-- [ ] Write failing tests asserting repository and pg-boss worker pools set `application_name: "slashwho-worker"`; web/ops constructors keep their respective existing behaviour. Implement an optional queue application-name option using pg-boss's installed API; worker passes it.
-- [ ] Enrich recompute result metadata with both pre-merge group sizes and bridging source/type. Test observed merges of two groups with more than one member alert through `MAINTAINER_ALERT_WEBHOOK_URL` when set; manual-only merges log only. Maintenance-detected observed merges also alert. Web has no webhook; do not add webhook calls under database locks.
-- [ ] Keep alert failure best effort and existing recompute 30-second maintenance bound. Add regression tests showing failed recompute/alert cannot roll back publication or skip pending-search recovery.
-- [ ] Update `CONTEXT.md` Connection, Group, page members, reverse declaration, shared exclusions and applicant dossier vocabulary. Update runbook with the four ship gates, periodic replay, lost-write rebuild repair, deploy order, revert-only phase 2 rollback and applicant flag off before phase 1 rollback.
-- [ ] Run runtime/queue/recompute tests and commit `feat(groups): identify worker connections and alert on observed merges`.
+- [x] Write failing tests asserting repository and pg-boss worker pools set `application_name: "slashwho-worker"`; web/ops constructors keep their respective existing behaviour. Implement an optional queue application-name option using pg-boss's installed API; worker passes it.
+- [x] Enrich recompute result metadata with both pre-merge group sizes and bridging source/type. Test observed merges of two groups with more than one member alert through `MAINTAINER_ALERT_WEBHOOK_URL` when set; manual-only merges log only. Maintenance-detected observed merges also alert. Web has no webhook; do not add webhook calls under database locks.
+- [x] Keep alert failure best effort and existing recompute 30-second maintenance bound. Add regression tests showing failed recompute/alert cannot roll back publication or skip pending-search recovery.
+- [x] Update `CONTEXT.md` Connection, Group, page members, reverse declaration, shared exclusions and applicant dossier vocabulary. Update runbook with the four ship gates, periodic replay, lost-write rebuild repair, deploy order, revert-only phase 2 rollback and applicant flag off before phase 1 rollback.
+- [x] Run runtime/queue/recompute tests and commit `feat(groups): identify worker connections and alert on observed merges`.
 
 ## Task 7: Publication premise, full gate and Manager hand-off
 
