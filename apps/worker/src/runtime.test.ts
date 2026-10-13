@@ -2314,7 +2314,8 @@ describe("worker runtime", () => {
     vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
       admitted: 1,
       suppressed: 0,
-      deferred: 0
+      deferred: 0,
+      pointsBlocked: false
     });
     const fakes = runtimeFakes();
     const logger = { info: vi.fn() };
@@ -2346,6 +2347,7 @@ describe("worker runtime", () => {
         admitted: 1,
         suppressed: 0,
         deferred: 0,
+        pointsBlocked: false,
         durationMs: 25
       }
     ]);
@@ -2406,7 +2408,8 @@ describe("worker runtime", () => {
       vi.mocked(drainApplicantIntents).mockResolvedValue({
         admitted: 0,
         suppressed: 0,
-        deferred: 0
+        deferred: 0,
+        pointsBlocked: false
       });
       vi.mocked(pollApplicantSheet).mockResolvedValue({
         baseline: false,
@@ -2430,6 +2433,53 @@ describe("worker runtime", () => {
       expect(pollApplicantSheet).toHaveBeenCalledTimes(1);
       await runtime.stop();
     } finally {
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("skips the drain and its points probe for five minutes after a points block", async () => {
+    // Break caught: each minute's drain probed the WCL allowance, at 1 point
+    // a probe, sixty times an hour while the gate was already blocking.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      vi.mocked(pollApplicantSheet).mockResolvedValue({
+        baseline: false,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        newApplicants: []
+      });
+      vi.mocked(drainApplicantIntents).mockClear();
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: true
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+
+      await fakes.applicantSheetTickHandler?.();
+      vi.setSystemTime(start + 4 * 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(drainApplicantIntents).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(start + 5 * 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(drainApplicantIntents).toHaveBeenCalledTimes(2);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
       vi.mocked(pollApplicantSheet).mockReset();
       vi.mocked(drainApplicantIntents).mockReset();
     }
@@ -2468,7 +2518,8 @@ describe("worker runtime", () => {
       vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
         admitted: 0,
         suppressed: 0,
-        deferred: 0
+        deferred: 0,
+        pointsBlocked: false
       });
       const fakes = runtimeFakes();
       const runtime = await createWorkerRuntime(applicantConfig, {

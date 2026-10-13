@@ -936,6 +936,10 @@ function createApplicantSheetTick(
   let applicantPollFailures = 0;
   let applicantNextPollAttempt = 0;
   let applicantAlertedAt = 0;
+  // A blocked WCL allowance stays blocked for a while; probing it again every
+  // minute would spend a point a probe while points are already short.
+  const pointsBlockMs = 300_000;
+  let pointsBlockedUntil = 0;
 
   async function pollSheet(): Promise<void> {
     const pollStartedAt = clock();
@@ -957,12 +961,15 @@ function createApplicantSheetTick(
             if (++numericChecks > 4 || !evidenceGateway.resolveCharacterById)
               return "defer";
             try {
+              if (Date.now() < pointsBlockedUntil) return "defer";
               if (numericAllowance === undefined) {
                 const allowance = await evidenceGateway.getRateLimit();
                 numericAllowance =
                   allowance.kind === "rate_limit" &&
                   allowance.limitPerHour - allowance.pointsSpentThisHour >=
                     config.applicantWatcher.minimumPoints;
+                if (!numericAllowance)
+                  pointsBlockedUntil = Date.now() + pointsBlockMs;
               }
               if (!numericAllowance) return "defer";
               const resolved = await evidenceGateway.resolveCharacterById(
@@ -1068,26 +1075,30 @@ function createApplicantSheetTick(
       ) {
         await pollSheet();
       }
-      const drainStartedAt = clock();
-      const wcl = evidenceGateway;
-      if (!wcl.resolveCharacterById)
-        throw new Error("applicant_resolver_unavailable");
-      const drained = await drainApplicantIntents({
-        pool: pool as Pool,
-        config,
-        repositories,
-        queue,
-        raiderio: gateway,
-        warcraftlogs: {
-          getRateLimit: wcl.getRateLimit,
-          resolveCharacterById: wcl.resolveCharacterById
-        }
-      });
-      logger?.info({
-        event: "applicant_sheet_drain",
-        ...drained,
-        durationMs: elapsedMs(clock, drainStartedAt)
-      });
+      if (Date.now() >= pointsBlockedUntil) {
+        const drainStartedAt = clock();
+        const wcl = evidenceGateway;
+        if (!wcl.resolveCharacterById)
+          throw new Error("applicant_resolver_unavailable");
+        const drained = await drainApplicantIntents({
+          pool: pool as Pool,
+          config,
+          repositories,
+          queue,
+          raiderio: gateway,
+          warcraftlogs: {
+            getRateLimit: wcl.getRateLimit,
+            resolveCharacterById: wcl.resolveCharacterById
+          }
+        });
+        if (drained.pointsBlocked)
+          pointsBlockedUntil = Date.now() + pointsBlockMs;
+        logger?.info({
+          event: "applicant_sheet_drain",
+          ...drained,
+          durationMs: elapsedMs(clock, drainStartedAt)
+        });
+      }
     } catch (error) {
       logger?.info({
         event: "applicant_sheet_tick_failed",

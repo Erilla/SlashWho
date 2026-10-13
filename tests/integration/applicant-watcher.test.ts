@@ -362,7 +362,12 @@ it("does not admit against points already reserved by queued evidence", async ()
       })
     }
   });
-  expect(result).toEqual({ admitted: 0, suppressed: 0, deferred: 0 });
+  expect(result).toEqual({
+    admitted: 0,
+    suppressed: 0,
+    deferred: 0,
+    pointsBlocked: true
+  });
 });
 
 it("admits every distinct supported link in a bounded multi-link cell", async () => {
