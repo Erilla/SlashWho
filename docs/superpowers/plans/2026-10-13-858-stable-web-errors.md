@@ -1,6 +1,6 @@
 # Stable web error diagnostics (#858) implementation plan
 
-Status: proposed; Manager approval and PR #908 merge required before implementation.
+Status: approved at `177a574c` in review `5506778671`; implementation underway after merging PR #908 (`d6597a80`).
 
 **Goal:** Web request and escaped-process failures expose readable names and safe codes in the production build, without recording messages or identity data.
 
@@ -12,10 +12,16 @@ Status: proposed; Manager approval and PR #908 merge required before implementat
 
 ## Isolation and dependencies
 
-Worktree: `G:/repos/SlashWho/.claude/worktrees/fix-858-stable-web-errors`.
 Branch: `fix/858-stable-web-errors`, following the repository branch convention.
 Fetched base: `bd042af9886dcc1dad5e71a488551021e248be3d` (#905).
 The coordinator verified the clean worktree before authorising this plan.
+
+Manager confirmed registry membership, SQLSTATE class validation from `.code`
+only, omission of `unauthorized`, and first-caught-cause precedence. Additional
+conditions are an inventory test preserving worker codes and a literal-name
+guard for all Error subclasses in the four packages. The implementation tests
+cover every inventoried code independently of the production registry, and the
+AST guard also covers non-exported subclasses such as `RankingLookupFailure`.
 
 PR #908 touches `logger.ts`, `dossier-gateways.ts`, and Raider.IO errors and introduces `GuildNotFound`. Read its approved plan and changes before implementation, wait for its merge, fetch and merge `origin/main` into this issue's worktree, and re-check this plan against that tree. Never implement in the shared checkout. Later logging issues remain queued.
 

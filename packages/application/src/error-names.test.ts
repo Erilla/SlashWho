@@ -34,7 +34,8 @@ it("requires literal names on every Error subclass in the four packages", () => 
               )
           )
         ) {
-          checked.push(node.name!.text);
+          const className = node.name!.text;
+          checked.push(className);
           let literalName = false;
           function findName(child: ts.Node) {
             if (
@@ -42,7 +43,7 @@ it("requires literal names on every Error subclass in the four packages", () => 
               child.name.getText(source) === "name" &&
               child.initializer &&
               ts.isStringLiteral(child.initializer) &&
-              child.initializer.text === node.name!.text
+              child.initializer.text === className
             )
               literalName = true;
             if (
@@ -50,7 +51,7 @@ it("requires literal names on every Error subclass in the four packages", () => 
               child.left.getText(source) === "this.name" &&
               child.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
               ts.isStringLiteral(child.right) &&
-              child.right.text === node.name!.text
+              child.right.text === className
             )
               literalName = true;
             ts.forEachChild(child, findName);
@@ -58,7 +59,7 @@ it("requires literal names on every Error subclass in the four packages", () => 
           findName(node);
           expect(
             literalName,
-            `${path}: ${node.name!.text} needs its literal name`
+            `${path}: ${className} needs its literal name`
           ).toBe(true);
         }
         ts.forEachChild(node, visit);
