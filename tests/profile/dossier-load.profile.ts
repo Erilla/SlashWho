@@ -446,8 +446,16 @@ test("warm read of a dossier at the character ceiling", async ({
 const productionVolumes = {
   /** The median dossier: 759 kills, 1,613 wipes, 15 tier bests, 58 Cutting Edge. */
   median: { kills: 76, wipes: 161, tierBests: 2, cuttingEdges: 6 },
-  /** The largest: 3,072 kills, 13,779 wipes, 70 tier bests, 184 Cutting Edge. */
-  largest: { kills: 307, wipes: 1_378, tierBests: 7, cuttingEdges: 18 }
+  /** #787: 14 characters, totals 3,406 kills, 14,464 wipes, 340 first kills,
+   * 4,100 roster members. Remainders are assigned by character below. */
+  largest: {
+    kills: 243,
+    wipes: 1_033,
+    tierBests: 7,
+    cuttingEdges: 18,
+    raiderIoFirstKills: 24,
+    rosterMembers: 292
+  }
 } as const satisfies Record<string, EvidenceVolume>;
 
 for (const [size, volume] of Object.entries(productionVolumes)) {
@@ -459,9 +467,22 @@ for (const [size, volume] of Object.entries(productionVolumes)) {
     // synthetic completed evidence at production volume. Nothing to discover,
     // gather or look up, as in the other warm scenarios.
     const root = key(`profile${size}`);
-    await seedDossier(root, 10, (character) =>
-      seedSyntheticEvidence(character, volume)
-    );
+    let ordinal = 0;
+    await seedDossier(root, size === "largest" ? 14 : 10, (character) => {
+      const index = ordinal++;
+      return seedSyntheticEvidence(
+        character,
+        size === "largest"
+          ? {
+              ...volume,
+              kills: volume.kills + (index < 4 ? 1 : 0),
+              wipes: volume.wipes + (index < 2 ? 1 : 0),
+              raiderIoFirstKills: 24 + (index < 4 ? 1 : 0),
+              rosterMembers: 292 + (index < 12 ? 1 : 0)
+            }
+          : volume
+      );
+    });
 
     const scenario = `warm, production ${size}`;
     console.log(`${scenario}: ${await dossierBytes(request, root)} bytes`);

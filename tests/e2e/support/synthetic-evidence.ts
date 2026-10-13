@@ -9,6 +9,7 @@
  * tested.
  */
 import {
+  lookupRaiderIoBoss,
   lookupRaidCurrentContentWindow,
   supportedRaidCatalogue
 } from "@slashwho/domain";
@@ -16,8 +17,11 @@ import type {
   CharacterCuttingEdgeInput,
   CharacterMythicKillInput,
   CharacterMythicWipeInput,
-  CharacterTierBestParseInput
+  CharacterTierBestParseInput,
+  RaiderIoFirstKillsPublication,
+  RaiderIoLoggedEncounterAnswers
 } from "@slashwho/database";
+import { createHash } from "node:crypto";
 
 import cuttingEdgeCatalogue from "../../../packages/domain/src/cutting-edge-catalogue.generated.json";
 
@@ -27,6 +31,8 @@ export type EvidenceVolume = Readonly<{
   wipes: number;
   tierBests: number;
   cuttingEdges: number;
+  raiderIoFirstKills?: number;
+  rosterMembers?: number;
 }>;
 
 export type SyntheticEvidence = Readonly<{
@@ -34,6 +40,8 @@ export type SyntheticEvidence = Readonly<{
   wipes: readonly CharacterMythicWipeInput[];
   tierBests: readonly CharacterTierBestParseInput[];
   cuttingEdges: readonly CharacterCuttingEdgeInput[];
+  raiderIoFirstKills?: RaiderIoFirstKillsPublication;
+  raiderIoLoggedEncounters?: RaiderIoLoggedEncounterAnswers;
 }>;
 
 /**
@@ -223,5 +231,94 @@ export function syntheticEvidence(
       ).toISOString()
     }));
 
-  return { kills, wipes, tierBests, cuttingEdges };
+  const firstCount = volume.raiderIoFirstKills ?? 0;
+  if (firstCount === 0) return { kills, wipes, tierBests, cuttingEdges };
+  // IDs are deterministic, separate for each generated character, and fit
+  // safely into both bigint storage and JavaScript's integer range.
+  const idBase =
+    createHash("sha256").update(label).digest().readUInt32BE(0) * 1000;
+  const seen = new Set<string>();
+  const firstBosses = bosses
+    .flatMap((boss) => {
+      const slugs = lookupRaiderIoBoss(boss.raidName, boss.bossName);
+      if (!slugs || seen.has(`${slugs.raidSlug}:${slugs.bossSlug}`)) return [];
+      seen.add(`${slugs.raidSlug}:${slugs.bossSlug}`);
+      return [{ ...boss, ...slugs }];
+    })
+    .slice(0, firstCount);
+  if (firstBosses.length !== firstCount)
+    throw new Error("synthetic_first_kill_volume_exceeds_catalogue");
+  const firstKills = firstBosses.map((boss, index) => {
+    const matchingKill = kills.find(
+      (kill) => kill.raidId === boss.raidId && kill.bossId === boss.bossId
+    );
+    // One in five is standalone, so the profiler exercises both matching
+    // and Raider.IO-only evidence rather than attaching every roster to WCL.
+    const killedAt =
+      index % 5 !== 4 && matchingKill
+        ? matchingKill.killedAt
+        : at(boss, 1, 2, 4 * hourMs);
+    return {
+      raidSlug: boss.raidSlug,
+      bossSlug: boss.bossSlug,
+      killedAt,
+      guild: { ...guildFor(boss), region: "eu" },
+      loggedEncounterId: idBase + index,
+      encounterState: "read" as const,
+      encounterLimitationCode: null,
+      historicWorldRank: null,
+      historicRankCheckedAt: killedAt,
+      presenceChecked: true
+    };
+  });
+  const totalMembers = volume.rosterMembers ?? firstCount * 12;
+  const logged = firstKills.map((first, index) => ({
+    loggedEncounterId: first.loggedEncounterId,
+    raidSlug: first.raidSlug,
+    bossSlug: first.bossSlug,
+    pulledAt: new Date(Date.parse(first.killedAt) - 300_000).toISOString(),
+    defeatedAt: first.killedAt,
+    durationMs: 300_000,
+    guild: first.guild,
+    itemLevel: { average: 600, min: 590, max: 610 },
+    deathCount: 3,
+    // Include available zero and absent Vantus data, which mean different things.
+    vantusCount: index % 2 === 0 ? 0 : null,
+    shareRaidUntil: null,
+    rosterState: "available" as const,
+    members: Array.from(
+      {
+        length:
+          Math.floor(totalMembers / firstCount) +
+          (index < totalMembers % firstCount ? 1 : 0)
+      },
+      (_, member) => ({
+        raiderIoCharacterId: (idBase + index) * 100 + member,
+        name: member === 0 ? label : `Profile${label}Raider${member}`,
+        realm: "silvermoon",
+        region: "eu",
+        className: "Mage",
+        specName: "Fire",
+        role:
+          member < 2
+            ? ("tank" as const)
+            : member < 4
+              ? ("healer" as const)
+              : ("dps" as const),
+        itemLevel: 600
+      })
+    )
+  }));
+  return {
+    kills,
+    wipes,
+    tierBests,
+    cuttingEdges,
+    raiderIoFirstKills: {
+      kills: firstKills,
+      askedRaidSlugs: [...new Set(firstKills.map((first) => first.raidSlug))],
+      limitationCode: null
+    },
+    raiderIoLoggedEncounters: { encounters: logged, unavailable: [] }
+  };
 }

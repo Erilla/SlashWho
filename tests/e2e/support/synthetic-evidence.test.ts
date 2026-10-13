@@ -21,6 +21,53 @@ describe("syntheticEvidence", () => {
     expect(evidence.cuttingEdges).toHaveLength(6);
   });
 
+  it("generates publishable first kills and read rosters at the requested volume", () => {
+    const evidence = syntheticEvidence("alpha", {
+      ...volume,
+      kills: 244,
+      raiderIoFirstKills: 25,
+      rosterMembers: 302
+    });
+    expect(evidence.raiderIoFirstKills?.kills).toHaveLength(25);
+    expect(evidence.raiderIoLoggedEncounters?.encounters).toHaveLength(25);
+    const encounters = evidence.raiderIoLoggedEncounters?.encounters ?? [];
+    expect(
+      encounters.reduce((sum, encounter) => sum + encounter.members.length, 0)
+    ).toBe(302);
+    expect(
+      encounters.every((encounter) => encounter.rosterState === "available")
+    ).toBe(true);
+    expect(
+      new Set(encounters.map((encounter) => encounter.loggedEncounterId)).size
+    ).toBe(25);
+    const firstKills = evidence.raiderIoFirstKills?.kills ?? [];
+    expect(
+      new Set(firstKills.map((first) => `${first.raidSlug}:${first.bossSlug}`))
+        .size
+    ).toBe(25);
+    expect(
+      firstKills.every(
+        (first) => first.encounterState === "read" && first.presenceChecked
+      )
+    ).toBe(true);
+    const matched = firstKills.filter((first) =>
+      evidence.kills.some((kill) => kill.killedAt === first.killedAt)
+    );
+    expect(matched.length).toBeGreaterThan(0);
+    expect(matched.length).toBeLessThan(25);
+    expect(
+      syntheticEvidence("bravo", {
+        ...volume,
+        raiderIoFirstKills: 25,
+        rosterMembers: 302
+      }).raiderIoLoggedEncounters?.encounters.some((encounter) =>
+        encounters.some(
+          (other) => other.loggedEncounterId === encounter.loggedEncounterId
+        )
+      )
+    ).toBe(false);
+  });
+
   it("generates nothing for an empty volume", () => {
     expect(
       syntheticEvidence("alpha", {
