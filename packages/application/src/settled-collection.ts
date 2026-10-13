@@ -1,5 +1,7 @@
 import type {
   CompletedCharacterEvidence,
+  EvidenceSettlementKill,
+  EvidenceSchedulingReads,
   EvidenceCollectionDomain,
   Repositories,
   TerminalTier
@@ -37,7 +39,7 @@ export type SettledCollectionEvidence = Pick<
  */
 export async function killTiersAreSettled(options: {
   key: CharacterKey;
-  completed: CompletedCharacterEvidence;
+  completed: { kills: readonly EvidenceSettlementKill[] };
   terminal: readonly TerminalTier[];
   /** Fights killed at or after this are still settling, however hydrated. */
   settledBefore: Date;
@@ -113,10 +115,17 @@ export async function killTiersAreSettled(options: {
 export async function staleReadNeedsOnlyNewestPage(options: {
   key: CharacterKey;
   at: Date;
-  completed: CompletedCharacterEvidence | null;
+  completed: Pick<CompletedCharacterEvidence, "run"> | null;
+  loadKills?: () => Promise<readonly EvidenceSettlementKill[]>;
   completedVersionCurrent: boolean;
-  evidence: SettledCollectionEvidence &
-    Pick<Repositories["evidence"], "lastRaiderIoRecoveryAt">;
+  evidence: Pick<
+    EvidenceSchedulingReads,
+    | "storedEvidenceTiers"
+    | "terminalTiers"
+    | "lastRaiderIoRecoveryAt"
+    | "hydratedFightUrls"
+    | "collectedTierZones"
+  >;
 }): Promise<boolean> {
   const completed = options.completed;
   if (
@@ -158,7 +167,11 @@ export async function staleReadNeedsOnlyNewestPage(options: {
 
   return killTiersAreSettled({
     key: options.key,
-    completed,
+    completed: {
+      kills: options.loadKills
+        ? await options.loadKills()
+        : (completed as CompletedCharacterEvidence).kills
+    },
     terminal,
     // Every kill is in a terminal tier by the time this is asked, and a tier
     // goes terminal only once all its kills have settled, so no fight here is

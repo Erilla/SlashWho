@@ -38,6 +38,7 @@ it("migrates and initializes the durable queue before serving searches", async (
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async promoteCharacterEvidence() {},
     async enqueueCharacterEvidence() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
@@ -150,6 +151,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async promoteCharacterEvidence() {},
     async enqueueCharacterEvidence() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
@@ -325,6 +327,7 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async promoteCharacterEvidence() {},
     async enqueueCharacterEvidence() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
@@ -441,6 +444,7 @@ it.each([
       async enqueueFingerprintAdmission() {
         return "54f14e37-7df7-43db-91d5-21e797d1d145";
       },
+      async promoteCharacterEvidence() {},
       async enqueueCharacterEvidence() {
         return "54f14e37-7df7-43db-91d5-21e797d1d145";
       },
@@ -539,6 +543,7 @@ it.each([
       async enqueueFingerprintAdmission() {
         return "54f14e37-7df7-43db-91d5-21e797d1d145";
       },
+      async promoteCharacterEvidence() {},
       async enqueueCharacterEvidence() {
         return "54f14e37-7df7-43db-91d5-21e797d1d145";
       },
@@ -638,6 +643,7 @@ it("rate limits the web's shared Blizzard client, not each dossier read", async 
     async enqueueFingerprintAdmission() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },
+    async promoteCharacterEvidence() {},
     async enqueueCharacterEvidence() {
       return "54f14e37-7df7-43db-91d5-21e797d1d145";
     },

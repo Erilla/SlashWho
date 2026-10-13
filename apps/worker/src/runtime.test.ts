@@ -276,6 +276,7 @@ function runtimeFakes(
       fingerprintAdmissions.push(runId);
       return runId;
     },
+    async promoteCharacterEvidence() {},
     async enqueueCharacterEvidence(runId, meta) {
       evidenceEnqueues.push({ runId, meta });
       return runId;
@@ -1326,7 +1327,7 @@ describe("worker runtime", () => {
     expect(fakes.evidenceEnqueues).toEqual([
       {
         runId: "evidence-run",
-        meta: expect.objectContaining({ mode: "full" })
+        meta: expect.objectContaining({ mode: "full", priority: 20 })
       }
     ]);
     expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
@@ -1370,7 +1371,10 @@ describe("worker runtime", () => {
           config.evidenceFreshnessHours * 60 * 60_000
       );
       expect(fakes.evidenceEnqueues).toEqual([
-        { runId: "linked-run", meta: expect.objectContaining({ mode: "full" }) }
+        {
+          runId: "linked-run",
+          meta: expect.objectContaining({ mode: "full", priority: 10 })
+        }
       ]);
       expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
         "linked-run",
@@ -1460,7 +1464,8 @@ describe("worker runtime", () => {
         id: "light-run",
         status: "queued",
         queueJobId: null,
-        lightRefresh: true
+        lightRefresh: true,
+        origin: "dossier_read"
       };
       fakes.evidenceReserve.mockResolvedValueOnce({
         kind,
@@ -1481,7 +1486,7 @@ describe("worker runtime", () => {
         expect(fakes.evidenceEnqueues).toEqual([
           {
             runId: "light-run",
-            meta: expect.objectContaining({ mode: "light" })
+            meta: expect.objectContaining({ mode: "light", priority: 20 })
           }
         ]);
         expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
@@ -3587,6 +3592,54 @@ it.each(["claim", "ack"] as const)(
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();
+    }
+  }
+);
+
+it.each(["active", "fresh"] as const)(
+  "fingerprint reader joins and repairs existing %s background work",
+  async (kind) => {
+    const fakes = runtimeFakes();
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    fakes.dependencies.createHandler = (options) => {
+      handlerOptions = options;
+      return fakes.handler;
+    };
+    const run = {
+      id: "joined",
+      origin: "refresh",
+      status: "queued",
+      lightRefresh: true,
+      queueJobId: "waiting-job" as string | null
+    };
+    fakes.evidenceReserve.mockImplementation(async () => ({
+      kind,
+      run,
+      active: run
+    }));
+    const promote = vi.spyOn(fakes.queue, "promoteCharacterEvidence");
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    try {
+      const root = { region: "eu", realm: "draenor", name: "root" } as const;
+      await handlerOptions!.enqueueFullEvidence!(
+        { ...root, name: "member" },
+        root
+      );
+      expect(promote).toHaveBeenCalledWith("waiting-job", 20);
+      expect(fakes.evidenceEnqueues).toEqual([]);
+      run.queueJobId = null;
+      await handlerOptions!.enqueueFullEvidence!(
+        { ...root, name: "member" },
+        root
+      );
+      expect(fakes.evidenceEnqueues).toEqual([
+        {
+          runId: "joined",
+          meta: expect.objectContaining({ priority: 20, mode: "light" })
+        }
+      ]);
+    } finally {
+      await runtime.stop();
     }
   }
 );

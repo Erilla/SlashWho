@@ -6,6 +6,7 @@ import type { RaiderIoGateway } from "../../packages/raiderio/src";
 import { createApplicantEvidenceJobHandler } from "../../packages/application/src/applicant-evidence-job-handler";
 import { dossierRaiderIoFirstKill } from "../../packages/application/src/raiderio-first-kill-evidence";
 import { staleReadNeedsOnlyNewestPage } from "../../packages/application/src/settled-collection";
+import { CURRENT_EVIDENCE_VERSION } from "../../packages/database/src/evidence/freshness";
 import {
   resetRepositoryTables,
   startRepositoryDatabase
@@ -31,7 +32,9 @@ beforeEach(async () => {
   await pool.query("TRUNCATE raiderio_roster_profile_resolutions");
 });
 
-it("keeps old completed evidence fresh, uses a light run within the week, then recovers the historic roster on an ordinary full run", async () => {
+async function assertHistoricRosterRollout(
+  hydration: "settled" | "unhydrated"
+) {
   let at = seedAt;
   let offerHistoricKill = false;
   const getHistoricMythicKills = vi.fn<
@@ -195,6 +198,74 @@ it("keeps old completed evidence fresh, uses a light run within the week, then r
   expect(await repositories.evidence.lastRaiderIoRecoveryAt(key)).toEqual(
     seedAt
   );
+  if (hydration === "unhydrated") {
+    await pool.query(
+      "UPDATE character_mythic_kills SET parses_read_at = NULL WHERE evidence_run_id = $1",
+      [seed.run.id]
+    );
+  }
+  const schedule = async (expectedLight: boolean) => {
+    // Capture the legacy pool answer before entering the reservation callback:
+    // the callback must use only its supplied transaction-bound read view.
+    const fresh = await repositories.evidence.reserve({
+      origin: "dossier_read",
+      key,
+      at,
+      freshnessCutoff: seedAt
+    });
+    expect(fresh.kind).toBe("fresh");
+    const legacyLight = await staleReadNeedsOnlyNewestPage({
+      key,
+      at,
+      completed: fresh.completed,
+      completedVersionCurrent:
+        (fresh.completed?.evidenceVersion ?? 0) >= CURRENT_EVIDENCE_VERSION,
+      evidence: repositories.evidence
+    });
+    expect(legacyLight).toBe(expectedLight);
+    const hydrated = await repositories.evidence.hydratedFightUrls(key, at);
+    expect(hydrated).toEqual(
+      hydration === "settled" ? [baseline.fightUrl] : []
+    );
+    let prepared = false;
+    const scheduled = await repositories.evidence.reserveForScheduling!(
+      {
+        origin: "dossier_read",
+        key,
+        at,
+        freshnessCutoff: new Date(at.getTime() - day)
+      },
+      async ({ completed, completedVersionCurrent, reads }) => {
+        prepared = true;
+        expect(await reads.hydratedFightUrls(key, at)).toEqual(hydrated);
+        const kills = completed
+          ? await reads.completedSettlementKills(completed)
+          : [];
+        expect(kills).toEqual(
+          fresh.completed!.kills.map(({ raidId, killedAt, fightUrl }) => ({
+            raidId,
+            killedAt,
+            fightUrl
+          }))
+        );
+        const light = await staleReadNeedsOnlyNewestPage({
+          key,
+          at,
+          completed,
+          completedVersionCurrent,
+          evidence: reads,
+          loadKills: async () =>
+            completed ? reads.completedSettlementKills(completed) : []
+        });
+        expect(light).toBe(legacyLight);
+        return light;
+      }
+    );
+    expect(prepared).toBe(true);
+    expect(scheduled.kind).toBe("reserved");
+    expect(scheduled.run.lightRefresh ?? false).toBe(expectedLight);
+    return scheduled;
+  };
   await pool.query(
     `INSERT INTO character_raiderio_tier_reads
     (region, realm_slug, normalized_name, tier_ordinal, collection_version, read_at)
@@ -213,18 +284,9 @@ it("keeps old completed evidence fresh, uses a light run within the week, then r
   expect(resolveRosterProfile).not.toHaveBeenCalled();
 
   at = new Date("2026-09-27T12:00:00Z");
-  const light = await reserve();
+  const light = await schedule(hydration === "settled");
+  if (hydration === "unhydrated") return;
   if (light.kind !== "reserved") throw new Error("light_not_reserved");
-  expect(
-    await staleReadNeedsOnlyNewestPage({
-      key,
-      at,
-      completed: light.completed,
-      completedVersionCurrent: light.completedVersionCurrent ?? false,
-      evidence: repositories.evidence
-    })
-  ).toBe(true);
-  await repositories.evidence.markLightRefresh(light.run.id);
   await handler.execute({ runId: light.run.id, mode: "light" });
   expect((await repositories.evidence.find(light.run.id))?.status).toBe(
     "complete"
@@ -243,21 +305,17 @@ it("keeps old completed evidence fresh, uses a light run within the week, then r
   ).toEqual([{ collection_version: 1 }]);
 
   at = new Date("2026-10-03T12:00:00Z");
-  const full = await reserve();
+  const full = await schedule(false);
   if (full.kind !== "reserved") throw new Error("full_not_reserved");
-  expect(
-    await staleReadNeedsOnlyNewestPage({
-      key,
-      at,
-      completed: full.completed,
-      completedVersionCurrent: full.completedVersionCurrent ?? false,
-      evidence: repositories.evidence
-    })
-  ).toBe(false);
   await handler.execute(full.run.id);
   expect(getHistoricMythicKills.mock.calls[0]?.[1].tierOrdinals).toContain(28);
   expect(resolveRosterProfile).toHaveBeenCalledExactlyOnceWith(
-    { region: "eu", realm: "argent-dawn", name: "former-123", historicId: 123 },
+    {
+      region: "eu",
+      realm: "argent-dawn",
+      name: "former-123",
+      historicId: 123
+    },
     expect.any(AbortSignal),
     expect.any(Function)
   );
@@ -307,11 +365,20 @@ it("keeps old completed evidence fresh, uses a light run within the week, then r
     roster: {
       state: "available",
       members: [
-        { name: "former-123", realm: "argent-dawn", isDossierCharacter: false }
+        {
+          name: "former-123",
+          realm: "argent-dawn",
+          isDossierCharacter: false
+        }
       ]
     }
   });
-});
+}
+
+it.each(["settled", "unhydrated"] as const)(
+  "uses the same pool and scheduling light/full policy for %s evidence and recovers the historic roster after a week",
+  assertHistoricRosterRollout
+);
 
 it.each(["private", "not_found", "save_failed"] as const)(
   "retains previously published unproved evidence when a visible historical roster resolution is %s",
