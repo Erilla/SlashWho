@@ -3641,6 +3641,69 @@ it("fingerprint reader joins and repairs existing active background work", async
   }
 });
 
+it.each([true, false])(
+  "fingerprint admission reuses fresh evidence while promoting or repairing active work (queued job: %s)",
+  async (hasQueueJob) => {
+    const fakes = runtimeFakes();
+    let handlerOptions: DiscoveryJobHandlerOptions | undefined;
+    fakes.dependencies.createHandler = (options) => {
+      handlerOptions = options;
+      return fakes.handler;
+    };
+    const completedRun = {
+      id: "published",
+      mode: "full",
+      status: "complete",
+      lightRefresh: false,
+      completedAt: new Date()
+    };
+    const activeRun = {
+      id: "active",
+      origin: "refresh",
+      mode: "full",
+      status: "queued",
+      lightRefresh: false,
+      queueJobId: hasQueueJob ? "waiting-job" : null
+    };
+    fakes.evidenceReserve.mockResolvedValue({
+      kind: "fresh",
+      run: completedRun,
+      completed: { run: completedRun },
+      active: activeRun
+    } as never);
+    const promote = vi.spyOn(fakes.queue, "promoteCharacterEvidence");
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    try {
+      const root = { region: "eu", realm: "draenor", name: "root" } as const;
+      await handlerOptions!.enqueueFullEvidence!(
+        { ...root, name: "member" },
+        root
+      );
+
+      expect(fakes.evidenceReserve).toHaveBeenCalledOnce();
+      if (hasQueueJob) {
+        expect(promote).toHaveBeenCalledWith("waiting-job", 20);
+        expect(fakes.evidenceEnqueues).toEqual([]);
+        expect(fakes.evidenceMarkEnqueued).not.toHaveBeenCalled();
+      } else {
+        expect(promote).not.toHaveBeenCalled();
+        expect(fakes.evidenceEnqueues).toEqual([
+          {
+            runId: "active",
+            meta: expect.objectContaining({ priority: 20, mode: "full" })
+          }
+        ]);
+        expect(fakes.evidenceMarkEnqueued).toHaveBeenCalledWith(
+          "active",
+          "active"
+        );
+      }
+    } finally {
+      await runtime.stop();
+    }
+  }
+);
+
 it("fingerprint admission reuses only fresh complete full evidence", async () => {
   const fakes = runtimeFakes();
   let handlerOptions: DiscoveryJobHandlerOptions | undefined;

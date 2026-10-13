@@ -30,6 +30,9 @@ export async function enqueueFingerprintAdmissionEvidence(input: {
     });
 
   let reservation = await reserve(new Date(at.getTime() - freshnessMs));
+  // Reuse follows the run's publication status. Raider.IO ranking caps are
+  // phase-level limits on bounded enrichment; by policy they can coexist with
+  // a complete full publication and remain reusable (#846).
   if (
     reservation.kind === "fresh" &&
     (reservation.completed.run.mode !== "full" ||

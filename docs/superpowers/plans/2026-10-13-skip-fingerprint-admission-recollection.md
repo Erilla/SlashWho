@@ -17,6 +17,7 @@
 - Preserve active-run promotion and repair of queued reservations whose queue job ID is missing.
 - Do not change upstream budgets, worker concurrency, persistence schema or migrations.
 - Measure the effect on Railway test after deployment; local tests do not satisfy that acceptance criterion.
+- Accepted exception: a cap on the optional Raider.IO rankings enrichment phase is recorded on that phase but leaves the evidence run `complete`. Such a fresh complete full-mode run remains reusable. This plan does not change that run-status policy or make the rankings cap trigger recollection.
 
 ## Review Focus
 
@@ -25,7 +26,8 @@
 - A fresh partial/capped run still causes a full run.
 - A complete full-mode publication older than the configured window still causes a full run.
 - Existing queued/running work is joined and promoted/repaired without creating duplicate work.
-- Every evidence `request_cap` and `parse_request_cap` path publishes `partial`, so a capped run cannot pass the reuse predicate as `complete`.
+- Warcraft Logs collection/search `request_cap` paths and parse `parse_request_cap` paths publish `partial`, so those capped runs cannot pass the reuse predicate as `complete`.
+- Raider.IO rankings can hit `request_cap` while the evidence publication remains `complete`; this accepted bounded-enrichment exception is pinned by a regression test and remains reusable.
 
 ---
 
@@ -45,8 +47,9 @@
 - Exercise the same helper from runtime and PostgreSQL tests, using `createPostgresRepositories(...).evidence` and `createDiscoveryQueue`.
 - Keep dispatch through `enqueueCharacterEvidence`, promotion through `promoteCharacterEvidence`, and persistence through `markEnqueued`.
 
-- [x] Add/retain handler-level assertions that `request_cap` and `parse_request_cap` publish `partial`.
-- [x] Add runtime tests for complete fresh reuse, light/partial forced full reservation, stale full collection, and active work promotion/repair.
+- [x] Add/retain handler-level assertions that Warcraft Logs collection/search caps publish `partial` and parse caps publish `partial`.
+- [x] Add a handler regression and PostgreSQL/reuse regression for Raider.IO rankings `request_cap` on a `complete` publication; preserve it as a documented accepted exception.
+- [x] Add runtime tests for complete fresh reuse, light/partial forced full reservation, stale full collection, and active work promotion/repair with both queue-ID states.
 - [x] Add Docker-backed cases for complete reuse, light and partial recollection, and active priority-20 promotion without duplicates.
 - [x] Implement the freshness policy in the worker helper and delegate from the runtime.
 - [x] Run focused runtime and cap handler tests, then the dedicated PostgreSQL/pg-boss integration test.

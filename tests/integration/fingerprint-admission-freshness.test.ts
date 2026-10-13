@@ -8,6 +8,7 @@ import {
   runMigrations
 } from "../../packages/database/src";
 import { enqueueFingerprintAdmissionEvidence } from "../../apps/worker/src/fingerprint-admission-evidence";
+import { fullEvidencePhasePlan } from "../../packages/application/src";
 import { startPostgres } from "./postgres";
 
 const root: CharacterKey = { region: "eu", realm: "silvermoon", name: "root" };
@@ -43,7 +44,8 @@ describe("fingerprint admission evidence freshness", () => {
   async function publish(
     character: CharacterKey,
     state: "complete" | "partial",
-    lightRefresh = false
+    lightRefresh = false,
+    rankingCapped = false
   ) {
     const completedAt = new Date(Date.now() - 60_000);
     const reservation = await repositories.evidence.reserve({
@@ -51,10 +53,31 @@ describe("fingerprint admission evidence freshness", () => {
       origin: "dossier_read",
       freshnessCutoff: new Date(0),
       at: completedAt,
+      phasePlan: fullEvidencePhasePlan(),
       ...(lightRefresh ? { lightRefresh: true } : {})
     });
     if (reservation.kind !== "reserved")
       throw new Error("seed_run_not_reserved");
+    if (rankingCapped) {
+      await repositories.evidence.recordPhaseTransitions!(reservation.run.id, [
+        {
+          id: "raiderio_rankings",
+          state: "active",
+          startedAt: completedAt,
+          completedAt: null,
+          limitationCode: null
+        }
+      ]);
+      await repositories.evidence.recordPhaseTransitions!(reservation.run.id, [
+        {
+          id: "raiderio_rankings",
+          state: "limited",
+          startedAt: completedAt,
+          completedAt,
+          limitationCode: "request_cap"
+        }
+      ]);
+    }
     await repositories.evidence.publish(reservation.run.id, {
       state,
       limitationCode: state === "partial" ? "request_cap" : null,
@@ -101,6 +124,23 @@ describe("fingerprint admission evidence freshness", () => {
 
     expect(await counts(character)).toEqual({ run_count: 1, job_count: 0 });
     expect((await repositories.evidence.find(runId))?.status).toBe("complete");
+  });
+
+  it("accepts a complete full publication whose Raider.IO ranking phase hit its request cap", async () => {
+    // Accepted exception for #846: the phase ledger records this bounded
+    // enrichment cap while the evidence publication remains complete.
+    const character = key("fingerprint-ranking-cap");
+    const runId = await publish(character, "complete", false, true);
+    await run(character, new Date());
+
+    expect(await counts(character)).toEqual({ run_count: 1, job_count: 0 });
+    expect(await repositories.evidence.listPhases!(runId)).toContainEqual(
+      expect.objectContaining({
+        id: "raiderio_rankings",
+        state: "limited",
+        limitationCode: "request_cap"
+      })
+    );
   });
 
   it.each([
