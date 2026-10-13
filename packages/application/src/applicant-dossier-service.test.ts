@@ -2640,6 +2640,83 @@ describe("applicant dossier service", () => {
     expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
   });
 
+  it("settles a confirmed unknown guild as checked null without an outage", async () => {
+    const { dossiers, raiderio, repositories } = fixture({
+      historicWorldRank: null
+    });
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "limitation",
+      code: "not_found",
+      guildNotFound: true,
+      failureCode: "not_found"
+    });
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("Expected dossier");
+    expect(
+      result.dossier.limitations.filter((item) => item.source === "raiderio")
+    ).toEqual([]);
+    expect(result.dossier.raids).toEqual(
+      expect.arrayContaining([raidWithKill({ historicWorldRank: null })])
+    );
+    expect(repositories.evidence.recordHistoricRankLookup).toHaveBeenCalledWith(
+      "10000000-0000-4000-8000-000000000011",
+      null,
+      expect.any(Date)
+    );
+    await dossiers.read(root);
+    expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { kind: "limitation", code: "unavailable", failureCode: "http_4xx" },
+    { kind: "limitation", code: "not_found" }
+  ] as const)(
+    "does not settle an unconfirmed $code rank failure",
+    async (failure) => {
+      const { dossiers, raiderio, repositories } = fixture({
+        historicWorldRank: null
+      });
+      vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue(failure);
+      const result = await dossiers.read(root);
+      if (result.kind !== "ready") throw new Error("Expected dossier");
+      expect(result.dossier.limitations).toContainEqual(
+        expect.objectContaining({ source: "raiderio", code: failure.code })
+      );
+      expect(
+        repositories.evidence.recordHistoricRankLookup
+      ).not.toHaveBeenCalled();
+      // A visitor gateway bypasses negative caching; durable evidence remains due.
+      await dossiers.read(root, undefined, { raiderio });
+      expect(raiderio.getMythicBossRankings).toHaveBeenCalledTimes(2);
+      expect(
+        repositories.evidence.recordHistoricRankLookup
+      ).not.toHaveBeenCalled();
+    }
+  );
+
+  it("retries confirmed no-match persistence when the write fails", async () => {
+    const { dossiers, raiderio, repositories } = fixture({
+      historicWorldRank: null
+    });
+    vi.mocked(raiderio.getMythicBossRankings).mockResolvedValue({
+      kind: "limitation",
+      code: "not_found",
+      guildNotFound: true
+    });
+    vi.mocked(repositories.evidence.recordHistoricRankLookup).mockRejectedValue(
+      new Error("write_failed")
+    );
+    await dossiers.read(root);
+    await dossiers.read(root);
+    expect(
+      vi
+        .mocked(repositories.evidence.recordHistoricRankLookup)
+        .mock.calls.filter(
+          ([id]) => id === "10000000-0000-4000-8000-000000000011"
+        )
+    ).toHaveLength(2);
+  });
+
   it("caps legacy rank fallback requests per dossier read", async () => {
     const additionalKills: StoredCharacterMythicKill[] = Array.from(
       { length: 50 },

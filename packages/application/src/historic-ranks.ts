@@ -87,6 +87,7 @@ export async function restoreMissingHistoricRanks(options: {
   }
   for (const result of rankings.values()) {
     if (result.kind === "rankings") continue;
+    if (result.code === "not_found" && result.guildNotFound === true) continue;
     if (limitations.some((item) => item.code === result.code)) continue;
     const encounters = unrankedKills((key) => {
       const other = rankings.get(key);
@@ -116,12 +117,15 @@ export async function restoreMissingHistoricRanks(options: {
       const result = request
         ? rankings.get(rankingRequestKey(request))
         : undefined;
-      if (result?.kind !== "rankings") return;
-      const rank = historicWorldRankForKill(
-        kill,
-        kill.character.region,
-        result.rows
-      );
+      const noMatch =
+        result?.kind === "limitation" &&
+        result.code === "not_found" &&
+        result.guildNotFound === true;
+      if (result?.kind !== "rankings" && !noMatch) return;
+      const rank =
+        result.kind === "rankings"
+          ? historicWorldRankForKill(kill, kill.character.region, result.rows)
+          : null;
       // The dossier remains readable if a legacy write-through fails. The
       // fallback will retry on a later read instead of claiming it was stored.
       await options
