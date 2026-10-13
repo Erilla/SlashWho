@@ -403,14 +403,16 @@ it("returns the new response's own details without persisting them", async () =>
         battletag: "Old#123",
         discordId: "111",
         characterName: "Aria",
-        linkCell: a
+        linkCell: a,
+        submittedSerial: undefined
       },
       {
         row: 3,
         battletag: "Ivy#456",
         discordId,
         characterName: "Ivy",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       }
     ],
     backlogLimit: 1000
@@ -442,14 +444,16 @@ it("attributes a repeated character submission to the later response", async () 
         battletag: "First#111",
         discordId: "111",
         characterName: "First",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       },
       {
         row: 3,
         battletag: "Second#222",
         discordId: "222",
         characterName: "Second",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       }
     ],
     backlogLimit: 1000
@@ -475,7 +479,8 @@ it("adds a dossier path when a numeric Warcraft Logs link resolves", async () =>
         battletag: "Numeric#777",
         discordId: "777",
         characterName: "Nora",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       }
     ],
     resolveDossierPath: (identity) =>
@@ -499,14 +504,16 @@ it("keeps each duplicate response's details when an earlier occurrence is deferr
       battletag: "First#111",
       discordId: "111",
       characterName: "Piper One",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     },
     {
       row: 3,
       battletag: "Second#222",
       discordId: "222",
       characterName: "Piper Two",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     }
   ];
   let calls = 0;
@@ -594,14 +601,16 @@ it("keeps a deferred duplicate's own details across a parser version change", as
       battletag: "First#333",
       discordId: "333",
       characterName: "Uma One",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     },
     {
       row: 3,
       battletag: "Second#444",
       discordId: "444",
       characterName: "Uma Two",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     }
   ];
   await pollApplicantSheet({

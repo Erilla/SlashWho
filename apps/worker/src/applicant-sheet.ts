@@ -1,4 +1,5 @@
 import { createSign } from "node:crypto";
+import { parseApplicantCandidates } from "./applicant-candidates";
 
 const scope = "https://www.googleapis.com/auth/spreadsheets.readonly";
 
@@ -8,6 +9,7 @@ export type ApplicantSheetRow = {
   discordId: unknown;
   characterName: unknown;
   linkCell: unknown;
+  submittedSerial: number | undefined;
 };
 
 // `Array.isArray` narrows `unknown` to `any[]`; sheet cells stay `unknown`
@@ -150,6 +152,56 @@ export function createApplicantSheetClient(
         links.length > 5_000
       )
         throw new Error("applicant_sheet_bounds_exceeded");
+      // The timestamp is read unformatted, as the spreadsheet's own serial, in
+      // a request of its own: unformatted values would turn an 18-digit Discord
+      // id in the first read into a lossy double. The link column comes back
+      // with it so the two reads can be proved to describe the same rows.
+      const serialParams = new URLSearchParams({
+        majorDimension: "ROWS",
+        valueRenderOption: "UNFORMATTED_VALUE",
+        dateTimeRenderOption: "SERIAL_NUMBER"
+      });
+      serialParams.append("ranges", "'Form Responses'!A2:A");
+      serialParams.append("ranges", range);
+      const second = await readBody(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(options.sheetId)}/values:batchGet?${serialParams.toString().replaceAll("+", "%20")}`
+      );
+      if (!isList(second.valueRanges) || second.valueRanges.length !== 2)
+        throw new Error("applicant_sheet_response_invalid");
+      const [serials, recheck] = second.valueRanges.map((item) =>
+        item && typeof item === "object" && "values" in item ? item.values : []
+      );
+      if (
+        !isList(serials) ||
+        !isList(recheck) ||
+        serials.length > 5_000 ||
+        recheck.length > 5_000
+      )
+        throw new Error("applicant_sheet_bounds_exceeded");
+      // Forms appends, so a longer second read is rows submitted between the
+      // two; anything else -- a sort, a deletion -- would misalign them.
+      //
+      // The reads use different render options, so the raw cells are not
+      // comparable: a bare number, date or boolean renders as text in the first
+      // and as a number in the second, and `!==` would fail every tick. Compare
+      // what intake actually reads from each cell -- its accepted candidate
+      // identities, in order -- instead.
+      const cellOf = (rows: readonly unknown[], index: number) => {
+        const row = rows[index];
+        return isList(row) ? row[0] : undefined;
+      };
+      const identitiesOf = (rows: readonly unknown[], index: number) =>
+        parseApplicantCandidates(cellOf(rows, index))
+          .candidates.map((candidate) => candidate.identity)
+          .join("\n");
+      for (let index = 0; index < links.length; index++) {
+        if (identitiesOf(links, index) !== identitiesOf(recheck, index))
+          throw new Error("applicant_sheet_rows_moved");
+      }
+      for (let index = links.length; index < recheck.length; index++) {
+        if (index < details.length && identitiesOf(recheck, index) !== "")
+          throw new Error("applicant_sheet_rows_moved");
+      }
       return Array.from(
         { length: Math.max(details.length, links.length) },
         (_, index) => {
@@ -160,7 +212,13 @@ export function createApplicantSheetClient(
             battletag: isList(detail) ? detail[0] : undefined,
             discordId: isList(detail) ? detail[1] : undefined,
             characterName: isList(detail) ? detail[2] : undefined,
-            linkCell: isList(link) ? link[0] : undefined
+            linkCell: isList(link) ? link[0] : undefined,
+            submittedSerial: (() => {
+              const value = cellOf(serials, index);
+              return typeof value === "number" && Number.isFinite(value)
+                ? value
+                : undefined;
+            })()
           };
         }
       );
