@@ -173,3 +173,5 @@ export {
   encryptCredential,
   parseEncryptionKey
 } from "./credential-encryption";
+
+export { errorFields, type ErrorFields } from "./error-fields";
