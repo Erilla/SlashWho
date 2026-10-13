@@ -1,3 +1,4 @@
+import { evidenceRunPriority } from "@slashwho/database/evidence-priority";
 import type { DiscoveryQueue, Repositories } from "@slashwho/database";
 import type { CharacterKey, RaiderIoGateway } from "@slashwho/domain";
 import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
@@ -12,7 +13,10 @@ export async function startApplicantCollection(input: {
     Repositories,
     "searchReservations" | "suppressions" | "evidence"
   >;
-  queue: Pick<DiscoveryQueue, "enqueue" | "enqueueCharacterEvidence">;
+  queue: Pick<
+    DiscoveryQueue,
+    "enqueue" | "enqueueCharacterEvidence" | "promoteCharacterEvidence"
+  >;
   raiderio: Pick<RaiderIoGateway, "getCharacter">;
 }): Promise<"started" | "reused" | "suppressed" | "unavailable"> {
   const { key, repositories, queue } = input;
@@ -91,20 +95,35 @@ export async function startApplicantCollection(input: {
   if (evidence.kind === "reserved") {
     const queueJobId = await queue.enqueueCharacterEvidence(evidence.run.id, {
       enqueuedAt: new Date().toISOString(),
-      mode: "full"
+      mode: "full",
+      priority: Math.max(
+        evidenceRunPriority(evidence.run.origin ?? "applicant_sheet"),
+        evidenceRunPriority("applicant_sheet")
+      )
     });
     await repositories.evidence.markEnqueued(evidence.run.id, queueJobId);
   }
-  if (
-    evidence.kind === "active" &&
-    evidence.run.status === "queued" &&
-    evidence.run.queueJobId === null
-  ) {
-    const queueJobId = await queue.enqueueCharacterEvidence(evidence.run.id, {
+  const joined =
+    evidence.kind === "fresh"
+      ? evidence.active
+      : evidence.kind === "active"
+        ? evidence.run
+        : null;
+  if (joined?.queueJobId)
+    await queue.promoteCharacterEvidence(
+      joined.queueJobId,
+      evidenceRunPriority("applicant_sheet")
+    );
+  if (joined && joined.status === "queued" && joined.queueJobId === null) {
+    const queueJobId = await queue.enqueueCharacterEvidence(joined.id, {
       enqueuedAt: new Date().toISOString(),
-      mode: "full"
+      mode: joined.lightRefresh ? "light" : "full",
+      priority: Math.max(
+        evidenceRunPriority(joined.origin ?? "applicant_sheet"),
+        evidenceRunPriority("applicant_sheet")
+      )
     });
-    await repositories.evidence.markEnqueued(evidence.run.id, queueJobId);
+    await repositories.evidence.markEnqueued(joined.id, queueJobId);
   }
   return discovery.kind === "reserved" || evidence.kind === "reserved"
     ? "started"

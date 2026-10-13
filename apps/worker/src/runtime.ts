@@ -25,6 +25,7 @@ import {
 import {
   collectCharacterEvidenceQueueName,
   createDiscoveryQueue,
+  evidenceRunPriority,
   createPostgresRepositories,
   DiscoveryQueueStopTimeoutError,
   discoverCharacterQueueName,
@@ -567,6 +568,7 @@ function buildHandlers(
         return;
       }
       const queueJobId = await queue.enqueueCharacterEvidence(run.id, {
+        priority: evidenceRunPriority(run.origin ?? "discovery"),
         enqueuedAt: at.toISOString(),
         // Repair another caller's run with its original collection policy.
         mode: run.lightRefresh ? "light" : "full"
@@ -587,10 +589,36 @@ function buildHandlers(
         at,
         phasePlan: fullEvidencePhasePlan()
       });
-      if (reservation.kind !== "reserved") return;
+      if (reservation.kind !== "reserved") {
+        const active =
+          reservation.kind === "fresh" ? reservation.active : reservation.run;
+        if (active?.queueJobId)
+          await queue.promoteCharacterEvidence(
+            active.queueJobId,
+            evidenceRunPriority("fingerprint_admission")
+          );
+        else if (active?.status === "queued" && active.queueJobId === null) {
+          const jobId = await queue.enqueueCharacterEvidence(active.id, {
+            priority: Math.max(
+              evidenceRunPriority(active.origin ?? "fingerprint_admission"),
+              evidenceRunPriority("fingerprint_admission")
+            ),
+            enqueuedAt: at.toISOString(),
+            mode: active.lightRefresh ? "light" : "full"
+          });
+          await repositories.evidence.markEnqueued(active.id, jobId);
+        }
+        return;
+      }
       const queueJobId = await queue.enqueueCharacterEvidence(
         reservation.run.id,
-        { enqueuedAt: at.toISOString(), mode: "full" }
+        {
+          enqueuedAt: at.toISOString(),
+          mode: "full",
+          priority: evidenceRunPriority(
+            reservation.run.origin ?? "fingerprint_admission"
+          )
+        }
       );
       await repositories.evidence.markEnqueued(reservation.run.id, queueJobId);
     },

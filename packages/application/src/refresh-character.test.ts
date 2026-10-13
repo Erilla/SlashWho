@@ -103,7 +103,7 @@ describe("refreshCharacter", () => {
     );
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
-      expect.objectContaining({ mode: "full" })
+      expect.objectContaining({ mode: "full", priority: 0 })
     );
   });
 
@@ -114,7 +114,7 @@ describe("refreshCharacter", () => {
 
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
-      expect.objectContaining({ mode: "light" })
+      expect.objectContaining({ mode: "light", priority: 0 })
     );
     // The run records it too, so the dossier does not take a one-page read
     // for a collection that re-reads the last full run's shortfalls (#526).
@@ -348,7 +348,7 @@ describe("refreshCharacter", () => {
 
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
-      expect.objectContaining({ mode: "light" })
+      expect.objectContaining({ mode: "light", priority: 0 })
     );
   });
 
@@ -442,7 +442,7 @@ describe("refreshCharacter", () => {
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledTimes(1);
     expect(h.enqueueCharacterEvidence).toHaveBeenCalledWith(
       "run-1",
-      expect.objectContaining({ mode: "full" })
+      expect.objectContaining({ mode: "full", priority: 0 })
     );
   });
 

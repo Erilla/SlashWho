@@ -1,3 +1,4 @@
+import { evidenceRunPriority } from "@slashwho/database/evidence-priority";
 import type {
   CharacterEvidenceRun,
   DiscoveryQueue,
@@ -52,7 +53,10 @@ export async function searchCharacterTier(options: {
   raidId: string;
   at: Date;
   repositories: Pick<Repositories, "evidence">;
-  queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  queue: Pick<
+    DiscoveryQueue,
+    "enqueueCharacterEvidence" | "promoteCharacterEvidence"
+  >;
   credentials?: { accountId: string; credentialVersion: number } | undefined;
   scope?: MeasurementScope;
 }): Promise<SearchCharacterTierResult> {
@@ -78,12 +82,38 @@ export async function searchCharacterTier(options: {
     case "reserved": {
       const queueJobId = await options.queue.enqueueCharacterEvidence(
         reservation.run.id,
-        { enqueuedAt: options.at.toISOString(), mode: "full" }
+        {
+          enqueuedAt: options.at.toISOString(),
+          mode: "full",
+          priority: evidenceRunPriority(reservation.run.origin ?? "tier_search")
+        }
       );
       await evidence.markEnqueued(reservation.run.id, queueJobId);
       return { kind: "queued" };
     }
     case "active":
+      if (reservation.run.queueJobId)
+        await options.queue.promoteCharacterEvidence(
+          reservation.run.queueJobId,
+          evidenceRunPriority("tier_search")
+        );
+      else if (
+        reservation.run.status === "queued" &&
+        reservation.run.queueJobId === null
+      ) {
+        const jobId = await options.queue.enqueueCharacterEvidence(
+          reservation.run.id,
+          {
+            enqueuedAt: options.at.toISOString(),
+            mode: reservation.run.lightRefresh ? "light" : "full",
+            priority: Math.max(
+              evidenceRunPriority(reservation.run.origin),
+              evidenceRunPriority("tier_search")
+            )
+          }
+        );
+        await evidence.markEnqueued(reservation.run.id, jobId);
+      }
       return {
         kind: "busy",
         searchingThisTier:

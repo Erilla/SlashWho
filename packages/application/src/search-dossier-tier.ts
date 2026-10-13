@@ -60,7 +60,10 @@ export async function searchDossierTier(options: {
   raidId: string;
   at: Date;
   repositories: Pick<Repositories, "evidence">;
-  queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
+  queue: Pick<
+    DiscoveryQueue,
+    "enqueueCharacterEvidence" | "promoteCharacterEvidence"
+  >;
   credentials?: { accountId: string; credentialVersion: number } | undefined;
   scope?: MeasurementScope;
   limit?: number;

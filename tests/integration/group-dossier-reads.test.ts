@@ -788,7 +788,10 @@ describe("consistent group dossier projection", () => {
     };
     const dossiers = createApplicantDossierService({
       repositories,
-      queue: { enqueueCharacterEvidence: unavailable },
+      queue: {
+        enqueueCharacterEvidence: unavailable,
+        promoteCharacterEvidence: async () => undefined
+      },
       search: { create: unavailable },
       blizzard: { getCompletedAchievements: unavailable },
       raiderio: {
