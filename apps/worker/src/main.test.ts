@@ -16,7 +16,8 @@ const config: WorkerConfig = {
     perDay: 5,
     backlog: 100,
     queueDepth: 10,
-    minimumPoints: 3500
+    minimumPoints: 3500,
+    linkingEnabled: false
   },
   databaseUrl: "postgres://unused",
   healthHost: "127.0.0.1",

@@ -340,7 +340,8 @@ it("does not admit against points already reserved by queued evidence", async ()
         perDay: 5,
         backlog: 100,
         queueDepth: 10,
-        minimumPoints: 3500
+        minimumPoints: 3500,
+        linkingEnabled: false
       }
     } as WorkerConfig,
     repositories,
