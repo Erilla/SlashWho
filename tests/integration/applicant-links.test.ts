@@ -435,3 +435,73 @@ it("links a member with no links of its own even when the root's component is ca
     })
   ).toMatchObject({ linked: 1, skipped_cross_group: 0 });
 });
+
+it("decides a member suppressed at intake through a Warcraft Logs id as suppressed, not waiting", async () => {
+  // Intake records such an intent as suppressed with no canonical identity,
+  // so it has no character key; it must not wait seven days and expire.
+  await character("wclsuppressroot");
+  const root = await intent(id("wclsuppressroot"), "done");
+  const member = await intent(
+    "warcraftlogs_id:12",
+    "suppressed",
+    null as never
+  );
+  await application({ identity: id("wclsuppressroot"), sequence: root }, [
+    { identity: "warcraftlogs_id:12", sequence: member }
+  ]);
+  expect(await link()).toMatchObject({ suppressed: 1, waiting: 0, linked: 0 });
+  const closed = await pool.query(
+    "SELECT closed_at, suppressed_count FROM applicant_source_applications"
+  );
+  expect(closed.rows[0]).toMatchObject({ suppressed_count: 1 });
+  expect(closed.rows[0].closed_at).not.toBeNull();
+  expect(await links()).toEqual([]);
+});
+
+it("contains a failing application, moves it to the back, and still links the rest", async () => {
+  await character("failroot");
+  await character("failmember");
+  await character("healthyroot");
+  await character("healthymember");
+  const failRoot = await intent(id("failroot"), "done");
+  const failMember = await intent(id("failmember"), "done");
+  const failing = await application(
+    { identity: id("failroot"), sequence: failRoot },
+    [{ identity: id("failmember"), sequence: failMember }]
+  );
+  const healthyRoot = await intent(id("healthyroot"), "done");
+  const healthyMember = await intent(id("healthymember"), "done");
+  await application({ identity: id("healthyroot"), sequence: healthyRoot }, [
+    { identity: id("healthymember"), sequence: healthyMember }
+  ]);
+  // Recording the failing application's outcome overflows its count column:
+  // a deterministic error inside that application's processing. It is the
+  // older application, so the pass reaches it first.
+  await pool.query(
+    "UPDATE applicant_source_applications SET linked_count = 2147483647, created_at = now() - interval '1 minute' WHERE id = $1",
+    [failing]
+  );
+  expect(await link()).toMatchObject({ failed: 1, linked: 1 });
+  expect(await links()).toContainEqual({
+    root: "healthyroot",
+    connected: "healthymember",
+    origin: "applicant_sheet"
+  });
+  const rows = await pool.query<{
+    id: string;
+    closed_at: Date | null;
+    last_checked_at: Date | null;
+  }>(
+    "SELECT id, closed_at, last_checked_at FROM applicant_source_applications"
+  );
+  const failed = rows.rows.find((row) => row.id === failing)!;
+  expect(failed.closed_at).toBeNull();
+  expect(failed.last_checked_at).not.toBeNull();
+  const healthy = rows.rows.find((row) => row.id !== failing)!;
+  expect(healthy.closed_at).not.toBeNull();
+  const outcome = await pool.query(
+    "SELECT outcome FROM applicant_source_application_members WHERE application_id = $1",
+    [failing]
+  );
+  expect(outcome.rows).toEqual([{ outcome: null }]);
+});

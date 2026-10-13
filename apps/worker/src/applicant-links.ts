@@ -13,11 +13,13 @@ export type ApplicantLinkCounts = {
   skipped_cross_group: number;
   needed_link_pairs: number;
   expired: number;
+  /** Applications whose processing threw; rolled back and moved to the back. */
+  failed: number;
 };
 
 type Outcome = Exclude<
   keyof ApplicantLinkCounts,
-  "waiting" | "needed_link_pairs"
+  "waiting" | "needed_link_pairs" | "failed"
 >;
 
 const settleAfterDays = 7;
@@ -32,9 +34,34 @@ function emptyCounts(): ApplicantLinkCounts {
     skipped_excluded: 0,
     skipped_cross_group: 0,
     needed_link_pairs: 0,
-    expired: 0
+    expired: 0,
+    failed: 0
   };
 }
+
+function addCounts(
+  total: ApplicantLinkCounts,
+  part: ApplicantLinkCounts
+): void {
+  for (const name of Object.keys(total) as Array<keyof ApplicantLinkCounts>)
+    total[name] += part[name];
+}
+
+type PickedApplication = {
+  id: string;
+  settled_at: Date;
+  root_state: string;
+  root_canonical: string | null;
+};
+
+type LinkInput = {
+  pool: Pool;
+  repositories: Pick<Repositories, "manualConnections" | "suppressions">;
+  now?: Date;
+  batch?: number;
+  /** The counting-component walk's node cap; defaults to 2,000. A test seam. */
+  componentCap?: number;
+};
 
 /** Undefined for a numeric identity, or one that does not decode: one bad row never fails the pass. */
 function keyOf(canonicalIdentity: string): CharacterKey | undefined {
@@ -146,17 +173,168 @@ export async function settleApplicantApplications(pool: Pool): Promise<number> {
 }
 
 /**
+ * One application's decisions. A throw leaves the caller to roll back to its
+ * savepoint; adds already made are harmless repeats on the next pass.
+ */
+async function linkApplication(
+  client: PoolClient,
+  input: LinkInput,
+  application: PickedApplication,
+  now: Date,
+  counts: ApplicantLinkCounts
+): Promise<void> {
+  const members = await client.query<{
+    ordinal: number;
+    identity: string;
+    state: string | null;
+    canonical: string | null;
+  }>(
+    `SELECT member.ordinal, member.identity, intent.state, intent.canonical_identity AS canonical
+       FROM applicant_source_application_members member
+       LEFT JOIN applicant_source_intents intent ON intent.sequence = member.member_intent_sequence
+      WHERE member.application_id = $1 AND member.outcome IS NULL
+      ORDER BY member.ordinal`,
+    [application.id]
+  );
+  const expired =
+    now.getTime() - application.settled_at.getTime() >=
+    settleAfterDays * 86_400_000;
+  const rootKey = application.root_canonical
+    ? keyOf(application.root_canonical)
+    : undefined;
+  const rootSuppressed =
+    application.root_state === "suppressed" ||
+    (rootKey !== undefined &&
+      (await input.repositories.suppressions.isActive(rootKey, now)));
+  if (rootSuppressed) {
+    for (const member of members.rows)
+      await decide(
+        client,
+        application.id,
+        member.ordinal,
+        "suppressed",
+        counts
+      );
+    await close(client, application.id);
+    return;
+  }
+  const rootId = rootKey ? await characterId(client, rootKey) : undefined;
+  let open = 0;
+  for (const member of members.rows) {
+    // Suppressed at intake: decided at once. A Warcraft Logs id suppressed
+    // there has no canonical identity, so it would otherwise wait for a key
+    // it can never get, and expire.
+    if (member.state === "suppressed") {
+      await decide(
+        client,
+        application.id,
+        member.ordinal,
+        "suppressed",
+        counts
+      );
+      continue;
+    }
+    const settled = member.state === "done";
+    const memberKey = member.canonical
+      ? keyOf(member.canonical)
+      : keyOf(member.identity);
+    if (!rootId || !settled || !memberKey) {
+      if (expired)
+        await decide(client, application.id, member.ordinal, "expired", counts);
+      else open++;
+      continue;
+    }
+    if (await input.repositories.suppressions.isActive(memberKey, now)) {
+      await decide(
+        client,
+        application.id,
+        member.ordinal,
+        "suppressed",
+        counts
+      );
+      continue;
+    }
+    // A character identity is its own canonical identity.
+    if ((member.canonical ?? member.identity) === application.root_canonical) {
+      await decide(
+        client,
+        application.id,
+        member.ordinal,
+        "same_character",
+        counts
+      );
+      continue;
+    }
+    const memberId = await characterId(client, memberKey);
+    if (!memberId) {
+      if (expired)
+        await decide(client, application.id, member.ordinal, "expired", counts);
+      else open++;
+      continue;
+    }
+    if (memberKey.region !== rootKey!.region) {
+      await decide(
+        client,
+        application.id,
+        member.ordinal,
+        "skipped_region",
+        counts
+      );
+      continue;
+    }
+    if (
+      (await hasExcluded(client, rootId, memberKey)) ||
+      (await hasExcluded(client, memberId, rootKey!))
+    ) {
+      await decide(
+        client,
+        application.id,
+        member.ordinal,
+        "skipped_excluded",
+        counts
+      );
+      continue;
+    }
+    const components = await countingComponents(
+      input.pool,
+      rootId,
+      memberId,
+      input.componentCap
+    );
+    if (!components.same) {
+      counts.needed_link_pairs++;
+      // A capped walk leaves "same" unknown, so treat the pair as two
+      // groups -- but a member with no links of its own merges nothing,
+      // and links whatever the root's component size.
+      if (components.rootShared && components.memberShared) {
+        await decide(
+          client,
+          application.id,
+          member.ordinal,
+          "skipped_cross_group",
+          counts
+        );
+        continue;
+      }
+    }
+    await input.repositories.manualConnections.add(rootKey!, memberKey, {
+      origin: "applicant_sheet",
+      applicationId: application.id
+    });
+    await decide(client, application.id, member.ordinal, "linked", counts);
+  }
+  counts.waiting += open;
+  if (open === 0) await close(client, application.id);
+}
+
+/**
  * Links each settled application's members to its root, one decision per
  * member, never deciding on a character that does not exist yet. Makes no
  * provider calls. Settlement is not its job: see settleApplicantApplications.
  */
-export async function linkApplicantApplications(input: {
-  pool: Pool;
-  repositories: Pick<Repositories, "manualConnections" | "suppressions">;
-  now?: Date;
-  batch?: number;
-  componentCap?: number;
-}): Promise<ApplicantLinkCounts> {
+export async function linkApplicantApplications(
+  input: LinkInput
+): Promise<ApplicantLinkCounts> {
   const now = input.now ?? new Date();
   const counts = emptyCounts();
   const client = await input.pool.connect();
@@ -166,12 +344,7 @@ export async function linkApplicantApplications(input: {
     // connection, and its foreign key to this row takes FOR KEY SHARE, which
     // FOR UPDATE would block until this transaction ends -- forever. NO KEY
     // UPDATE still keeps a second worker off the row through SKIP LOCKED.
-    const picked = await client.query<{
-      id: string;
-      settled_at: Date;
-      root_state: string;
-      root_canonical: string | null;
-    }>(
+    const picked = await client.query<PickedApplication>(
       `SELECT application.id, application.settled_at,
               intent.state AS root_state, intent.canonical_identity AS root_canonical
          FROM applicant_source_applications application
@@ -183,158 +356,23 @@ export async function linkApplicantApplications(input: {
       [input.batch ?? 50]
     );
     for (const application of picked.rows) {
+      // Bumped outside the savepoint, so a failing application still moves
+      // to the back of the queue and cannot starve the rest.
       await client.query(
         "UPDATE applicant_source_applications SET last_checked_at = now() WHERE id = $1",
         [application.id]
       );
-      const members = await client.query<{
-        ordinal: number;
-        identity: string;
-        state: string | null;
-        canonical: string | null;
-      }>(
-        `SELECT member.ordinal, member.identity, intent.state, intent.canonical_identity AS canonical
-           FROM applicant_source_application_members member
-           LEFT JOIN applicant_source_intents intent ON intent.sequence = member.member_intent_sequence
-          WHERE member.application_id = $1 AND member.outcome IS NULL
-          ORDER BY member.ordinal`,
-        [application.id]
-      );
-      const expired =
-        now.getTime() - application.settled_at.getTime() >=
-        settleAfterDays * 86_400_000;
-      const rootKey = application.root_canonical
-        ? keyOf(application.root_canonical)
-        : undefined;
-      const rootSuppressed =
-        application.root_state === "suppressed" ||
-        (rootKey !== undefined &&
-          (await input.repositories.suppressions.isActive(rootKey, now)));
-      if (rootSuppressed) {
-        for (const member of members.rows)
-          await decide(
-            client,
-            application.id,
-            member.ordinal,
-            "suppressed",
-            counts
-          );
-        await close(client, application.id);
-        continue;
+      const local = emptyCounts();
+      await client.query("SAVEPOINT application");
+      try {
+        await linkApplication(client, input, application, now, local);
+        await client.query("RELEASE SAVEPOINT application");
+        addCounts(counts, local);
+      } catch {
+        // Count only: an error message can carry identities.
+        await client.query("ROLLBACK TO SAVEPOINT application");
+        counts.failed++;
       }
-      const rootId = rootKey ? await characterId(client, rootKey) : undefined;
-      let open = 0;
-      for (const member of members.rows) {
-        const settled =
-          member.state === "done" || member.state === "suppressed";
-        const memberKey = member.canonical
-          ? keyOf(member.canonical)
-          : keyOf(member.identity);
-        if (!rootId || !settled || !memberKey) {
-          if (expired)
-            await decide(
-              client,
-              application.id,
-              member.ordinal,
-              "expired",
-              counts
-            );
-          else open++;
-          continue;
-        }
-        if (
-          member.state === "suppressed" ||
-          (await input.repositories.suppressions.isActive(memberKey, now))
-        ) {
-          await decide(
-            client,
-            application.id,
-            member.ordinal,
-            "suppressed",
-            counts
-          );
-          continue;
-        }
-        // An intent suppressed at intake was never admitted, so it has no
-        // canonical identity; a character identity is its own.
-        if (
-          (member.canonical ?? member.identity) === application.root_canonical
-        ) {
-          await decide(
-            client,
-            application.id,
-            member.ordinal,
-            "same_character",
-            counts
-          );
-          continue;
-        }
-        const memberId = await characterId(client, memberKey);
-        if (!memberId) {
-          if (expired)
-            await decide(
-              client,
-              application.id,
-              member.ordinal,
-              "expired",
-              counts
-            );
-          else open++;
-          continue;
-        }
-        if (memberKey.region !== rootKey!.region) {
-          await decide(
-            client,
-            application.id,
-            member.ordinal,
-            "skipped_region",
-            counts
-          );
-          continue;
-        }
-        if (
-          (await hasExcluded(client, rootId, memberKey)) ||
-          (await hasExcluded(client, memberId, rootKey!))
-        ) {
-          await decide(
-            client,
-            application.id,
-            member.ordinal,
-            "skipped_excluded",
-            counts
-          );
-          continue;
-        }
-        const components = await countingComponents(
-          input.pool,
-          rootId,
-          memberId,
-          input.componentCap
-        );
-        if (!components.same) {
-          counts.needed_link_pairs++;
-          // A capped walk leaves "same" unknown, so treat the pair as two
-          // groups -- but a member with no links of its own merges nothing,
-          // and links whatever the root's component size.
-          if (components.rootShared && components.memberShared) {
-            await decide(
-              client,
-              application.id,
-              member.ordinal,
-              "skipped_cross_group",
-              counts
-            );
-            continue;
-          }
-        }
-        await input.repositories.manualConnections.add(rootKey!, memberKey, {
-          origin: "applicant_sheet",
-          applicationId: application.id
-        });
-        await decide(client, application.id, member.ordinal, "linked", counts);
-      }
-      counts.waiting += open;
-      if (open === 0) await close(client, application.id);
     }
     await client.query("COMMIT");
   } catch (error) {
@@ -354,24 +392,35 @@ export async function closeStaleApplicantApplications(
   pool: Pool,
   now = new Date()
 ): Promise<{ expired: number; deleted: number }> {
-  const stale = await pool.query<{ id: string }>(
-    `UPDATE applicant_source_applications application
-        SET closed_at = $1::timestamptz,
-            expired_count = expired_count + (
-              SELECT count(*) FROM applicant_source_application_members m
-               WHERE m.application_id = application.id AND m.outcome IS NULL)
-      WHERE closed_at IS NULL AND created_at <= $1::timestamptz - interval '30 days'
-      RETURNING id`,
-    [now]
-  );
-  if (stale.rowCount)
-    await pool.query(
-      "DELETE FROM applicant_source_application_members WHERE application_id = ANY($1)",
-      [stale.rows.map((row) => row.id)]
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // One transaction: a closed application never keeps its member rows.
+    const stale = await client.query<{ id: string }>(
+      `UPDATE applicant_source_applications application
+          SET closed_at = $1::timestamptz,
+              expired_count = expired_count + (
+                SELECT count(*) FROM applicant_source_application_members m
+                 WHERE m.application_id = application.id AND m.outcome IS NULL)
+        WHERE closed_at IS NULL AND created_at <= $1::timestamptz - interval '30 days'
+        RETURNING id`,
+      [now]
     );
-  const deleted = await pool.query(
-    "DELETE FROM applicant_source_applications WHERE closed_at <= $1::timestamptz - interval '30 days'",
-    [now]
-  );
-  return { expired: stale.rowCount ?? 0, deleted: deleted.rowCount ?? 0 };
+    if (stale.rowCount)
+      await client.query(
+        "DELETE FROM applicant_source_application_members WHERE application_id = ANY($1)",
+        [stale.rows.map((row) => row.id)]
+      );
+    const deleted = await client.query(
+      "DELETE FROM applicant_source_applications WHERE closed_at <= $1::timestamptz - interval '30 days'",
+      [now]
+    );
+    await client.query("COMMIT");
+    return { expired: stale.rowCount ?? 0, deleted: deleted.rowCount ?? 0 };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
