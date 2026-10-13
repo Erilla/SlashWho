@@ -5609,6 +5609,35 @@ describe("applicant evidence job handler", () => {
         }
       );
 
+      it("publishes complete evidence when the Raider.IO ranking cap limits its phase", async () => {
+        // Accepted exception for #846: ranking coverage is a bounded
+        // enrichment phase. Its cap stays on the phase ledger and does not
+        // make the evidence publication partial, so fingerprint admission
+        // treats this complete full run as reusable.
+        const evidence = store();
+        const phases = trackRankPhase(evidence);
+        const kills = Array.from({ length: 51 }, (_, index) =>
+          rankedKill(`Guild ${index}`, index + 1)
+        );
+        const getMythicBossRankings = vi.fn(async () => ({
+          kind: "rankings" as const,
+          rows: []
+        }));
+
+        await terminalHandler(
+          evidence,
+          response(kills),
+          {},
+          { raiderio: { getMythicBossRankings } }
+        ).execute(run.id);
+
+        expect(getMythicBossRankings).toHaveBeenCalledTimes(50);
+        expect(
+          phases.find((phase) => phase.id === "raiderio_rankings")
+        ).toMatchObject({ state: "limited", limitationCode: "request_cap" });
+        expect(evidence.published[0]?.result.state).toBe("complete");
+      });
+
       it.each([
         ["2026-09-18T12:00:00.000Z", false],
         ["2026-09-11T12:00:00.001Z", false],
