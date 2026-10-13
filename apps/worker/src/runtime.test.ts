@@ -234,6 +234,7 @@ function runtimeFakes(
     | undefined;
   let maintenanceHandler: (() => Promise<void>) | undefined;
   let evidenceResumeHandler: (() => Promise<void>) | undefined;
+  let applicantSheetTickHandler: (() => Promise<void>) | undefined;
   let admissionHandler: ((runId: string) => Promise<void>) | undefined;
   let evidenceWorkHandler:
     | ((
@@ -287,6 +288,9 @@ function runtimeFakes(
     },
     async scheduleEvidenceResume(handler) {
       evidenceResumeHandler = handler;
+    },
+    async scheduleApplicantSheetTick(handler) {
+      applicantSheetTickHandler = handler;
     },
     async settledEvidenceJobIds(jobIds: readonly string[]) {
       return jobIds.filter((id) => settledEvidenceJobs.includes(id));
@@ -536,6 +540,9 @@ function runtimeFakes(
     queueDepthQueries,
     get evidenceResumeHandler() {
       return evidenceResumeHandler;
+    },
+    get applicantSheetTickHandler() {
+      return applicantSheetTickHandler;
     },
     resumable,
     listResumable,
