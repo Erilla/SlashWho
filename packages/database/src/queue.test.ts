@@ -11,6 +11,7 @@ const queueFakes = vi.hoisted(() => {
   return {
     createQueue: vi.fn(async () => {}),
     updateQueue: vi.fn(async () => {}),
+    schedule: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
     send: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "job-id"),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
@@ -29,6 +30,7 @@ vi.mock("pg-boss", () => ({
     stop = queueFakes.stop;
     createQueue = queueFakes.createQueue;
     updateQueue = queueFakes.updateQueue;
+    schedule = queueFakes.schedule;
     send = queueFakes.send;
     work = queueFakes.work;
     getDb = queueFakes.getDb;
@@ -36,6 +38,7 @@ vi.mock("pg-boss", () => ({
 }));
 
 import {
+  applicantSheetTickQueueName,
   createDiscoveryQueue,
   DiscoveryQueueStopTimeoutError,
   collectCharacterEvidenceQueueName,
@@ -634,5 +637,39 @@ describe("shutdown", () => {
 
     expect(released).toBe(true);
     await queue.stop({ graceful: false, timeoutMs: 10 });
+  });
+});
+
+describe("applicant sheet tick queue", () => {
+  it("runs the watcher every minute, never two at once, without retries", async () => {
+    // Break caught: the watcher only ran inside the five-minute evidence
+    // resume cron, so no cadence setting could poll more often than that.
+    const queue = createDiscoveryQueue({
+      connectionString: "postgres://worker:secret@database/slashwho"
+    });
+    const ticks: string[] = [];
+    await queue.start();
+    await queue.scheduleApplicantSheetTick(async () => {
+      ticks.push("tick");
+    });
+    await queue.scheduleApplicantSheetTick(async () => {
+      ticks.push("second registration");
+    });
+
+    expect(queueFakes.createQueue).toHaveBeenCalledWith(
+      applicantSheetTickQueueName,
+      { policy: "exclusive", retryLimit: 0, expireInSeconds: 300 }
+    );
+    expect(
+      queueFakes.schedule.mock.calls.filter(
+        ([name]) => name === applicantSheetTickQueueName
+      )
+    ).toEqual([[applicantSheetTickQueueName, "* * * * *", {}, { tz: "UTC" }]]);
+    const worker = queueFakes.workers.filter(
+      ({ name }) => name === applicantSheetTickQueueName
+    );
+    expect(worker).toHaveLength(1);
+    await worker[0]?.handler([]);
+    expect(ticks).toEqual(["tick"]);
   });
 });

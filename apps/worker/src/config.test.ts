@@ -433,6 +433,21 @@ it("reserves part of the drain budget for aborting work that cannot finish", () 
   ).toThrow("invalid_worker_abort_grace");
 });
 
+it("accepts a one-minute applicant poll cadence and nothing shorter", () => {
+  // Break caught: the floor was five minutes, so the watcher could never
+  // notice a new application sooner than that.
+  expect(
+    loadWorkerConfig({ ...environment, APPLICANT_POLL_CADENCE_MS: "60000" })
+      .applicantWatcher.cadenceMs
+  ).toBe(60_000);
+  expect(() =>
+    loadWorkerConfig({ ...environment, APPLICANT_POLL_CADENCE_MS: "59999" })
+  ).toThrow("invalid_applicant_poll_cadence");
+  expect(loadWorkerConfig(environment).applicantWatcher.cadenceMs).toBe(
+    300_000
+  );
+});
+
 it("enables account mail only with complete private configuration", () => {
   expect(loadWorkerConfig(environment).accountMail).toBeUndefined();
   expect(() =>

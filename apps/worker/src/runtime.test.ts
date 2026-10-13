@@ -234,6 +234,7 @@ function runtimeFakes(
     | undefined;
   let maintenanceHandler: (() => Promise<void>) | undefined;
   let evidenceResumeHandler: (() => Promise<void>) | undefined;
+  let applicantSheetTickHandler: (() => Promise<void>) | undefined;
   let admissionHandler: ((runId: string) => Promise<void>) | undefined;
   let evidenceWorkHandler:
     | ((
@@ -288,6 +289,9 @@ function runtimeFakes(
     },
     async scheduleEvidenceResume(handler) {
       evidenceResumeHandler = handler;
+    },
+    async scheduleApplicantSheetTick(handler) {
+      applicantSheetTickHandler = handler;
     },
     async settledEvidenceJobIds(jobIds: readonly string[]) {
       return jobIds.filter((id) => settledEvidenceJobs.includes(id));
@@ -537,6 +541,9 @@ function runtimeFakes(
     queueDepthQueries,
     get evidenceResumeHandler() {
       return evidenceResumeHandler;
+    },
+    get applicantSheetTickHandler() {
+      return applicantSheetTickHandler;
     },
     resumable,
     listResumable,
@@ -2298,7 +2305,7 @@ describe("worker runtime", () => {
   it("times the applicant sheet poll and drain", async () => {
     // Break caught (#507): the poll and drain logged counts but no duration,
     // so a slow Sheet read that held up the resume tick could not be seen.
-    // The stepping clock is read at the sweep, the tick, the poll and the
+    // The stepping clock is read at the tick, the poll and the
     // drain, each start and record 25ms apart.
     vi.mocked(pollApplicantSheet).mockResolvedValueOnce({
       baseline: false,
@@ -2312,7 +2319,8 @@ describe("worker runtime", () => {
     vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
       admitted: 1,
       suppressed: 0,
-      deferred: 0
+      deferred: 0,
+      pointsBlocked: false
     });
     const fakes = runtimeFakes();
     const logger = { info: vi.fn() };
@@ -2326,7 +2334,7 @@ describe("worker runtime", () => {
       logger
     );
 
-    await fakes.evidenceResumeHandler?.();
+    await fakes.applicantSheetTickHandler?.();
 
     expect(applicantRecords(logger)).toEqual([
       {
@@ -2344,6 +2352,7 @@ describe("worker runtime", () => {
         admitted: 1,
         suppressed: 0,
         deferred: 0,
+        pointsBlocked: false,
         durationMs: 25
       }
     ]);
@@ -2372,7 +2381,7 @@ describe("worker runtime", () => {
       logger
     );
 
-    await fakes.evidenceResumeHandler?.();
+    await fakes.applicantSheetTickHandler?.();
 
     expect(applicantRecords(logger)).toEqual([
       {
@@ -2393,6 +2402,358 @@ describe("worker runtime", () => {
       "private-value"
     );
     await runtime.stop();
+  });
+
+  it("runs the applicant watcher on its own schedule, not the evidence resume sweep", async () => {
+    // Break caught: inside the five-minute resume cron, no cadence setting
+    // could poll more often than every five minutes.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    try {
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      vi.mocked(pollApplicantSheet).mockResolvedValue({
+        baseline: false,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        newApplicants: []
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+
+      await fakes.evidenceResumeHandler?.();
+      expect(pollApplicantSheet).not.toHaveBeenCalled();
+
+      await fakes.applicantSheetTickHandler?.();
+      expect(pollApplicantSheet).toHaveBeenCalledTimes(1);
+      await runtime.stop();
+    } finally {
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("skips the drain and its points probe for five minutes after a points block", async () => {
+    // Break caught: each minute's drain probed the WCL allowance, at 1 point
+    // a probe, sixty times an hour while the gate was already blocking.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      vi.mocked(pollApplicantSheet).mockResolvedValue({
+        baseline: false,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        newApplicants: []
+      });
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: true
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+
+      await fakes.applicantSheetTickHandler?.();
+      vi.setSystemTime(start + 4 * 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(drainApplicantIntents).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(start + 5 * 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(drainApplicantIntents).toHaveBeenCalledTimes(2);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("alerts once polls have failed for fifteen minutes, however many attempts that took", async () => {
+    // Break caught: at a one-minute cadence, three failures came about six
+    // minutes in, and a short Sheets outage paged the maintainer.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      vi.mocked(pollApplicantSheet).mockRejectedValue(new Error("sheet_down"));
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      const notify = vi.fn<(alert: { event: string }) => Promise<undefined>>(
+        async () => undefined
+      );
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(
+        {
+          ...applicantConfig,
+          applicantWatcher: {
+            ...applicantConfig.applicantWatcher,
+            cadenceMs: 60_000
+          }
+        },
+        {
+          ...fakes.dependencies,
+          createEvidenceGateway: applicantGateway,
+          createFingerprintAlertNotifier: () => ({ notify })
+        }
+      );
+      const tickAt = async (minutes: number) => {
+        vi.setSystemTime(start + minutes * 60_000);
+        await fakes.applicantSheetTickHandler?.();
+      };
+      const pollAlerts = () =>
+        notify.mock.calls.filter(
+          ([alert]) => alert.event === "applicant_poll_failed"
+        );
+
+      // Back-off from a one-minute base: attempts land at 0, 2, 6, 14 and
+      // (next) 30 minutes. The alert must not wait for that 30: it is checked
+      // on every tick, so the skipped tick at 15 sends it.
+      await tickAt(0);
+      await tickAt(2);
+      await tickAt(6);
+      await tickAt(14);
+      expect(pollApplicantSheet).toHaveBeenCalledTimes(4);
+      expect(pollAlerts()).toEqual([]);
+
+      await tickAt(15);
+      expect(pollApplicantSheet).toHaveBeenCalledTimes(4);
+      expect(pollAlerts()).toEqual([
+        [
+          {
+            event: "applicant_poll_failed",
+            details: { failures: 4, failingMinutes: 15 }
+          }
+        ]
+      ]);
+
+      // The hourly throttle: further ticks inside the hour send no second one.
+      await tickAt(16);
+      await tickAt(30);
+      await tickAt(74);
+      expect(pollAlerts()).toHaveLength(1);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("restarts the failure clock after a successful poll", async () => {
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      const ok = {
+        baseline: false,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        newApplicants: []
+      };
+      vi.mocked(pollApplicantSheet)
+        .mockRejectedValueOnce(new Error("sheet_down"))
+        .mockResolvedValueOnce(ok)
+        .mockRejectedValue(new Error("sheet_down"));
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      const notify = vi.fn<(alert: { event: string }) => Promise<undefined>>(
+        async () => undefined
+      );
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(
+        {
+          ...applicantConfig,
+          applicantWatcher: {
+            ...applicantConfig.applicantWatcher,
+            cadenceMs: 60_000
+          }
+        },
+        {
+          ...fakes.dependencies,
+          createEvidenceGateway: applicantGateway,
+          createFingerprintAlertNotifier: () => ({ notify })
+        }
+      );
+      const tickAt = async (minutes: number) => {
+        vi.setSystemTime(start + minutes * 60_000);
+        await fakes.applicantSheetTickHandler?.();
+      };
+
+      await tickAt(0); // fails
+      await tickAt(2); // succeeds, so the streak ends
+      await tickAt(10); // fails: the streak starts again here
+      await tickAt(20); // 10 minutes into the new streak
+      expect(
+        notify.mock.calls.filter(
+          ([alert]) => alert.event === "applicant_poll_failed"
+        )
+      ).toEqual([]);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("defers a numeric Warcraft Logs id on a low allowance and pauses the drain for five minutes", async () => {
+    // Break caught: the poll's own id check set no block, so each minute's
+    // poll probed the allowance again and the drain ran straight after it.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const start = new Date("2026-10-13T12:00:00.000Z").getTime();
+      vi.setSystemTime(start);
+      const decisions: unknown[] = [];
+      vi.mocked(pollApplicantSheet).mockImplementation(async (input) => {
+        decisions.push(
+          await input.isSuppressed?.("warcraftlogs_id:42", new Date())
+        );
+        return {
+          baseline: false,
+          rebaselined: false,
+          created: 0,
+          backlog: 0,
+          invalid: 0,
+          truncated: 0,
+          newApplicants: []
+        };
+      });
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      const gateway = applicantGateway();
+      vi.mocked(gateway.getRateLimit).mockResolvedValue({
+        kind: "rate_limit",
+        limitPerHour: 3_600,
+        pointsSpentThisHour: 3_000,
+        pointsResetInSeconds: 600
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: () => gateway
+      });
+
+      await fakes.applicantSheetTickHandler?.();
+      expect(decisions).toEqual(["defer"]);
+      expect(gateway.getRateLimit).toHaveBeenCalledTimes(1);
+      expect(gateway.resolveCharacterById).not.toHaveBeenCalled();
+      expect(drainApplicantIntents).not.toHaveBeenCalled();
+
+      // Inside the block: the id check defers without another probe, and
+      // the drain stays paused.
+      vi.setSystemTime(start + 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(decisions).toEqual(["defer", "defer"]);
+      expect(gateway.getRateLimit).toHaveBeenCalledTimes(1);
+      expect(drainApplicantIntents).not.toHaveBeenCalled();
+
+      // The block has lapsed, so the poll probes again; the allowance is
+      // still low, so it blocks again and the drain stays paused.
+      vi.setSystemTime(start + 5 * 60_000);
+      await fakes.applicantSheetTickHandler?.();
+      expect(gateway.getRateLimit).toHaveBeenCalledTimes(2);
+      expect(drainApplicantIntents).not.toHaveBeenCalled();
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("registers no applicant tick while the watcher is disabled", async () => {
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.applicantSheetTickHandler).toBeUndefined();
+    await runtime.stop();
+  });
+
+  it("stamps a poll with the time it started, not the time its read finished", async () => {
+    // Break caught: stamping after the read made every next tick look early.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const startedAt = new Date("2026-10-13T12:00:00.000Z");
+      vi.setSystemTime(startedAt);
+      let stamped: Date | undefined;
+      vi.mocked(pollApplicantSheet).mockImplementationOnce(async (input) => {
+        vi.setSystemTime(new Date(startedAt.getTime() + 5_000));
+        stamped = input.now?.();
+        return {
+          baseline: false,
+          rebaselined: false,
+          created: 0,
+          backlog: 0,
+          invalid: 0,
+          truncated: 0,
+          newApplicants: []
+        };
+      });
+      vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: false
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+
+      await fakes.applicantSheetTickHandler?.();
+
+      expect(stamped).toEqual(startedAt);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
   });
 
   it("completes an abandoned run from its staged scan, and says so in counts alone", async () => {
