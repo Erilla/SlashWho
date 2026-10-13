@@ -50,6 +50,11 @@ import { Pool } from "pg";
 import { createApplicantSheetClient } from "./applicant-sheet";
 import { decodeApplicantIdentity } from "./applicant-identity";
 import {
+  closeStaleApplicantApplications,
+  linkApplicantApplications,
+  settleApplicantApplications
+} from "./applicant-links";
+import {
   drainApplicantIntents,
   isApplicantPollDue,
   pollApplicantSheet,
@@ -1123,6 +1128,38 @@ function createApplicantSheetTick(
           durationMs: elapsedMs(clock, drainStartedAt)
         });
       }
+      try {
+        // Whatever the linking flag says: expiry must run from when each root
+        // settled, not from when linking was switched on. It also runs while
+        // a points block skips the drain.
+        await settleApplicantApplications(pool as Pool);
+      } catch (error) {
+        logger?.info({
+          event: "applicant_applications_settle_failed",
+          errorName: errorName(error)
+        });
+      }
+      if (config.applicantWatcher.linkingEnabled) {
+        const linkStartedAt = clock();
+        try {
+          const linked = await linkApplicantApplications({
+            pool: pool as Pool,
+            repositories
+          });
+          logger?.info({
+            event: "applicant_links",
+            ...linked,
+            durationMs: elapsedMs(clock, linkStartedAt)
+          });
+        } catch (error) {
+          // Linking is best effort: a failure never stops intake or the drain.
+          logger?.info({
+            event: "applicant_links_failed",
+            durationMs: elapsedMs(clock, linkStartedAt),
+            errorName: errorName(error)
+          });
+        }
+      }
     } catch (error) {
       logger?.info({
         event: "applicant_sheet_tick_failed",
@@ -1189,6 +1226,23 @@ const CHARACTER_GROUPS_RECOMPUTE_BUDGET_MS = 30_000;
 async function maintenanceCleanup(context: WorkerContext): Promise<void> {
   try {
     await cacheCleanup(context);
+    if (context.config.applicantWatcher.enabled) {
+      // Its own try/catch: a failure here must never skip the recompute.
+      try {
+        const cleaned = await closeStaleApplicantApplications(
+          context.pool as Pool
+        );
+        context.logger?.info({
+          event: "applicant_applications_cleanup",
+          ...cleaned
+        });
+      } catch (error) {
+        context.logger?.info({
+          event: "applicant_applications_cleanup_failed",
+          errorName: errorName(error)
+        });
+      }
+    }
   } finally {
     await characterGroupsRecompute(context);
   }
