@@ -890,6 +890,9 @@ function serializeDossierSubject(
           : character.source === "fingerprint"
             ? ("fingerprint_derived" as const)
             : ("raiderio_declared" as const),
+    ...(character.origin === "application"
+      ? { origin: "application" as const }
+      : {}),
     ...(excluded ? { excluded: true as const } : {}),
     ...(evidence
       ? {

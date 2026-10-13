@@ -52,6 +52,11 @@ import { Pool } from "pg";
 import { createApplicantSheetClient } from "./applicant-sheet";
 import { decodeApplicantIdentity } from "./applicant-identity";
 import {
+  closeStaleApplicantApplications,
+  linkApplicantApplications,
+  settleApplicantApplications
+} from "./applicant-links";
+import {
   drainApplicantIntents,
   isApplicantPollDue,
   pollApplicantSheet,
@@ -984,7 +989,8 @@ function createApplicantSheetTick(
           }
           return wasSuppressedAt(pool as Pool, decoded.key, observedAt);
         },
-        backlogLimit: config.applicantWatcher.backlog
+        backlogLimit: config.applicantWatcher.backlog,
+        linkingEnabled: config.applicantWatcher.linkingEnabled
       });
       applicantPollFailures = 0;
       applicantFailingSince = null;
@@ -997,6 +1003,7 @@ function createApplicantSheetTick(
         backlog: poll.backlog,
         invalid: poll.invalid,
         truncated: poll.truncated,
+        applications: poll.applications,
         durationMs: elapsedMs(clock, pollStartedAt)
       });
       await announceNewApplicantIntents(
@@ -1070,8 +1077,8 @@ function createApplicantSheetTick(
   }
 
   return async () => {
-    // Outside the try, so a tick that fails anywhere -- the due check, the
-    // poll's alerts or the drain -- still reports how long it ran.
+    // Outside the try, so a tick that fails anywhere -- the due check or the
+    // poll's alerts -- still reports how long it ran.
     const tickStartedAt = clock();
     try {
       const due = await pool.query(
@@ -1092,27 +1099,70 @@ function createApplicantSheetTick(
       await alertOnLongFailure();
       if (Date.now() >= pointsBlockedUntil) {
         const drainStartedAt = clock();
-        const wcl = evidenceGateway;
-        if (!wcl.resolveCharacterById)
-          throw new Error("applicant_resolver_unavailable");
-        const drained = await drainApplicantIntents({
-          pool: pool as Pool,
-          config,
-          repositories,
-          queue,
-          raiderio: gateway,
-          warcraftlogs: {
-            getRateLimit: wcl.getRateLimit,
-            resolveCharacterById: wcl.resolveCharacterById
-          }
-        });
-        if (drained.pointsBlocked)
-          pointsBlockedUntil = Date.now() + pointsBlockMs;
+        // Its own try/catch: a failing drain must never skip settlement or
+        // linking below.
+        try {
+          const wcl = evidenceGateway;
+          if (!wcl.resolveCharacterById)
+            throw new Error("applicant_resolver_unavailable");
+          const drained = await drainApplicantIntents({
+            pool: pool as Pool,
+            config,
+            repositories,
+            queue,
+            raiderio: gateway,
+            warcraftlogs: {
+              getRateLimit: wcl.getRateLimit,
+              resolveCharacterById: wcl.resolveCharacterById
+            }
+          });
+          if (drained.pointsBlocked)
+            pointsBlockedUntil = Date.now() + pointsBlockMs;
+          logger?.info({
+            event: "applicant_sheet_drain",
+            ...drained,
+            durationMs: elapsedMs(clock, drainStartedAt)
+          });
+        } catch (error) {
+          // The name only: an error message can carry identities.
+          logger?.info({
+            event: "applicant_sheet_drain_failed",
+            durationMs: elapsedMs(clock, drainStartedAt),
+            errorName: errorName(error)
+          });
+        }
+      }
+      try {
+        // Whatever the linking flag says: expiry must run from when each root
+        // settled, not from when linking was switched on. It also runs while
+        // a points block skips the drain.
+        await settleApplicantApplications(pool as Pool);
+      } catch (error) {
         logger?.info({
-          event: "applicant_sheet_drain",
-          ...drained,
-          durationMs: elapsedMs(clock, drainStartedAt)
+          event: "applicant_applications_settle_failed",
+          errorName: errorName(error)
         });
+      }
+      if (config.applicantWatcher.linkingEnabled) {
+        const linkStartedAt = clock();
+        try {
+          const linked = await linkApplicantApplications({
+            pool: pool as Pool,
+            repositories
+          });
+          logger?.info({
+            event: "applicant_links",
+            ...linked,
+            durationMs: elapsedMs(clock, linkStartedAt)
+          });
+        } catch (error) {
+          // Linking is best effort: a failure never stops intake or the drain.
+          logger?.info({
+            event: "applicant_links_failed",
+            durationMs: elapsedMs(clock, linkStartedAt),
+            errorName: errorName(error)
+          });
+        }
       }
     } catch (error) {
       logger?.info({
@@ -1180,6 +1230,23 @@ const CHARACTER_GROUPS_RECOMPUTE_BUDGET_MS = 30_000;
 async function maintenanceCleanup(context: WorkerContext): Promise<void> {
   try {
     await cacheCleanup(context);
+    // Whatever the watcher flag says: applications recorded before it was
+    // switched off must still expire and be deleted on time. Its own
+    // try/catch: a failure here must never skip the recompute.
+    try {
+      const cleaned = await closeStaleApplicantApplications(
+        context.pool as Pool
+      );
+      context.logger?.info({
+        event: "applicant_applications_cleanup",
+        ...cleaned
+      });
+    } catch (error) {
+      context.logger?.info({
+        event: "applicant_applications_cleanup_failed",
+        errorName: errorName(error)
+      });
+    }
   } finally {
     await characterGroupsRecompute(context);
   }

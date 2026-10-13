@@ -25,6 +25,7 @@ export type WorkerConfig = {
     backlog: number;
     queueDepth: number;
     minimumPoints: number;
+    linkingEnabled: boolean;
   };
   accountMail?: AccountMailConfig;
   accountCredentialEncryptionKey?: Buffer;
@@ -140,6 +141,12 @@ export function loadWorkerConfig(
     !["true", "false"].includes(environment.APPLICANT_WATCHER_ENABLED)
   )
     throw new Error("invalid_applicant_watcher_enabled");
+  if (
+    // An empty value is unset, as for APPLICANT_WATCHER_ENABLED: off.
+    environment.APPLICANT_LINKING_ENABLED &&
+    !["true", "false"].includes(environment.APPLICANT_LINKING_ENABLED)
+  )
+    throw new Error("invalid_applicant_linking_enabled");
   const applicantWatcher = {
     enabled: applicantEnabled,
     sheetId: applicantSheetId(environment),
@@ -195,7 +202,8 @@ export function loadWorkerConfig(
       1,
       100_000,
       "invalid_applicant_minimum_points"
-    )
+    ),
+    linkingEnabled: environment.APPLICANT_LINKING_ENABLED === "true"
   };
   if (
     applicantWatcher.apiKey &&

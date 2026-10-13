@@ -18,6 +18,8 @@ export type DossierSubject = Readonly<{
   guild: CharacterGuild | null;
   raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
+  /** Set on a manual connection the applicant sheet watcher made; label only. */
+  origin?: "application";
   /**
    * Other dossier keys that resolved to this character's Warcraft Logs ID, so
    * are the same character under another name (#423). Each keeps its own
@@ -150,8 +152,18 @@ export async function legacyResolveSubjects(
     // exclusion can be reversed from the same row. Its own discoveries
     // still follow: excluding one character is not undoing the add, and
     // those characters stand on their own evidence.
+    // The list row's own origin names who wrote it; the subject carries only
+    // the label-relevant one, so drop it before spreading.
+    const { origin, ...rest } = character;
     admit(
-      { ...character, guild: connectedGuild, source: "manually_added" },
+      {
+        ...rest,
+        guild: connectedGuild,
+        source: "manually_added",
+        ...(origin === "applicant_sheet"
+          ? { origin: "application" as const }
+          : {})
+      },
       character.excluded ? excluded : manual
     );
     if (character.pending) continue;

@@ -171,6 +171,19 @@ it("offers the reverse action for a character already excluded", async () => {
   );
 });
 
+it("still offers Remove for a link from an application", async () => {
+  stubFetch();
+  render(
+    <DossierCharacterMenu
+      character={{ ...character, origin: "application" }}
+      root={root}
+    />
+  );
+
+  await openMenu();
+  expect(screen.getByRole("menuitem", { name: "Remove…" })).toBeVisible();
+});
+
 it("confirms a removal by naming the exact character", async () => {
   stubFetch();
   render(<DossierCharacterMenu character={character} root={root} />);

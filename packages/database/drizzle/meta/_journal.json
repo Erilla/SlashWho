@@ -512,6 +512,13 @@
       "when": 1792011600024,
       "tag": "0073_roster_profile_resolutions",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1792098000000,
+      "tag": "0074_applicant_applications",
+      "breakpoints": true
     }
   ]
 }

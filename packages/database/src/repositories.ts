@@ -204,6 +204,8 @@ export interface ManualConnectionCharacter {
   level: number;
   raiderIoUrl: string;
   pending: boolean;
+  /** A reviewer's own link, or one the applicant sheet watcher made. */
+  origin: "dossier" | "applicant_sheet";
   /** A reviewer has hidden this character from the dossier evidence. */
   excluded: boolean;
 }
@@ -221,7 +223,8 @@ export interface ManualConnectionRepository {
   list(root: CharacterKey): Promise<readonly ManualConnectionCharacter[]>;
   add(
     root: CharacterKey,
-    character: CharacterKey
+    character: CharacterKey,
+    options?: { origin: "applicant_sheet"; applicationId: string }
   ): Promise<"added" | "duplicate">;
   /**
    * Hides the character from the dossier evidence, or restores it. Reports a

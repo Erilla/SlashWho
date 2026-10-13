@@ -26,6 +26,11 @@ import type { RaiderIoGateway } from "@slashwho/raiderio";
 import type { WarcraftLogsGateway } from "@slashwho/warcraftlogs";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  closeStaleApplicantApplications,
+  linkApplicantApplications,
+  settleApplicantApplications
+} from "./applicant-links";
 import { drainApplicantIntents, pollApplicantSheet } from "./applicant-watcher";
 import type { WorkerConfig } from "./config";
 import {
@@ -49,6 +54,25 @@ import {
 // where none of these is ever reached.
 vi.mock("./applicant-sheet", () => ({
   createApplicantSheetClient: vi.fn(() => ({ readRows: vi.fn(async () => []) }))
+}));
+vi.mock("./applicant-links", () => ({
+  linkApplicantApplications: vi.fn(async () => ({
+    linked: 1,
+    waiting: 0,
+    suppressed: 0,
+    same_character: 0,
+    skipped_region: 0,
+    skipped_excluded: 0,
+    skipped_cross_group: 0,
+    needed_link_pairs: 0,
+    expired: 0,
+    failed: 0
+  })),
+  closeStaleApplicantApplications: vi.fn(async () => ({
+    expired: 0,
+    deleted: 0
+  })),
+  settleApplicantApplications: vi.fn(async () => 0)
 }));
 vi.mock("./applicant-watcher", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./applicant-watcher")>()),
@@ -101,6 +125,44 @@ it("announces applicant details with both the character and dossier links", asyn
       dossierUrl: "https://web-test.example.test/dossiers/eu/example/aria"
     }
   });
+});
+
+it("sends a new response's detailed alert even when all of its links were deferred", async () => {
+  // Break caught: a response whose links were all deferred created nothing,
+  // and the early return on created === 0 dropped its only detailed alert.
+  const notify = vi.fn(async () => undefined);
+  await announceNewApplicantIntents(
+    {
+      baseline: false,
+      created: 0,
+      newApplicants: [
+        {
+          battletag: "Aria#123",
+          characterUrl: "https://raider.io/characters/eu/example/aria"
+        }
+      ]
+    },
+    { notify }
+  );
+  expect(notify).toHaveBeenCalledExactlyOnceWith({
+    event: "applicant_new_intents",
+    details: { count: 1 },
+    applicant: {
+      battletag: "Aria#123",
+      characterUrl: "https://raider.io/characters/eu/example/aria"
+    }
+  });
+});
+
+it("sends no count-only ping when a deferred occurrence is admitted later", async () => {
+  // Break caught: admitting an already-announced occurrence created an
+  // intent with no new response, and fell into a detail-less count ping.
+  const notify = vi.fn(async () => undefined);
+  await announceNewApplicantIntents(
+    { baseline: false, created: 1, newApplicants: [] },
+    { notify }
+  );
+  expect(notify).not.toHaveBeenCalled();
 });
 
 it("does not let an applicant alert failure interrupt intake", async () => {
@@ -181,7 +243,8 @@ const config: WorkerConfig = {
     perDay: 5,
     backlog: 100,
     queueDepth: 10,
-    minimumPoints: 3500
+    minimumPoints: 3500,
+    linkingEnabled: false
   },
   databaseUrl: "postgres://worker:secret@database/slashwho",
   healthHost: "127.0.0.1",
@@ -1093,6 +1156,76 @@ describe("worker runtime", () => {
       "Dossier: https://web-test.example.test/dossiers/eu/example/aria"
     );
     expect(body.allowed_mentions).toEqual({ parse: [] });
+  });
+
+  it("renders how many other characters an application listed and whether they will be linked", async () => {
+    const fetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) => {
+        void _url;
+        void _init;
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+    await notifier.notify({
+      event: "applicant_new_intents",
+      details: { count: 1, otherCharacters: 2 },
+      applicant: {
+        characterUrl: "https://raider.io/characters/eu/hyjal/tropipe",
+        dossierUrl: "https://slashwho.com/dossiers/eu/hyjal/tropipe",
+        linking: "pending"
+      }
+    });
+    const posted = [
+      (
+        JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as {
+          content: string;
+        }
+      ).content
+    ];
+    expect(posted[0]).toContain("otherCharacters: 2");
+    expect(posted[0]).toContain(
+      "Linking: they'll be linked if they pass the checks"
+    );
+  });
+
+  it("renders the wording for an application whose linking is switched off", async () => {
+    const fetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) => {
+        void _url;
+        void _init;
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+    await notifier.notify({
+      event: "applicant_new_intents",
+      details: { count: 1, otherCharacters: 1 },
+      applicant: {
+        characterUrl: "https://raider.io/characters/eu/hyjal/tropipe",
+        linking: "disabled"
+      }
+    });
+    const content = (
+      JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as {
+        content: string;
+      }
+    ).content;
+    expect(content).toContain("Linking: automatic linking is off");
   });
 
   it("swallows and logs a non-successful maintainer webhook response", async () => {
@@ -2314,7 +2447,8 @@ describe("worker runtime", () => {
       backlog: 0,
       invalid: 0,
       truncated: 0,
-      newApplicants: []
+      newApplicants: [],
+      applications: { recorded: 3, ambiguous: 1, overCap: 2 }
     });
     vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
       admitted: 1,
@@ -2345,6 +2479,7 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
+        applications: { recorded: 3, ambiguous: 1, overCap: 2 },
         durationMs: 25
       },
       {
@@ -2356,13 +2491,17 @@ describe("worker runtime", () => {
         durationMs: 25
       }
     ]);
+    const pollRecord = applicantRecords(logger)[0]!;
+    expect(pollRecord).not.toHaveProperty("risen");
+    expect(pollRecord).not.toHaveProperty("unmarkedOccurrences");
     await runtime.stop();
   });
 
-  it("times and names a failed applicant poll and a failed tick", async () => {
+  it("times and names a failed applicant poll and a failed drain", async () => {
     // Break caught (#507): a failed poll said only how many times it had
     // failed, and a failed tick said nothing but that it failed -- not what
-    // threw, nor how long it ran first.
+    // threw, nor how long it ran first. A failed drain is now caught on its
+    // own, so settlement and linking still run, and is timed from its start.
     vi.mocked(pollApplicantSheet).mockRejectedValueOnce(
       new TypeError("private-value")
     );
@@ -2390,17 +2529,301 @@ describe("worker runtime", () => {
         durationMs: 25,
         errorName: "TypeError"
       },
-      // Timed from the start of the tick: the due check, the failed poll and
-      // the drain that threw.
       {
-        event: "applicant_sheet_tick_failed",
-        durationMs: 100,
+        event: "applicant_sheet_drain_failed",
+        durationMs: 25,
         errorName: "RangeError"
       }
     ]);
     expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
       "private-value"
     );
+    await runtime.stop();
+  });
+
+  const linkingConfig: WorkerConfig = {
+    ...applicantConfig,
+    applicantWatcher: {
+      ...applicantConfig.applicantWatcher,
+      linkingEnabled: true
+    }
+  };
+  const quietPoll = () => {
+    vi.mocked(pollApplicantSheet).mockResolvedValue({
+      baseline: false,
+      rebaselined: false,
+      created: 0,
+      backlog: 0,
+      invalid: 0,
+      truncated: 0,
+      newApplicants: [],
+      applications: { recorded: 0, ambiguous: 0, overCap: 0 }
+    });
+    vi.mocked(drainApplicantIntents).mockResolvedValue({
+      admitted: 0,
+      suppressed: 0,
+      deferred: 0,
+      pointsBlocked: false
+    });
+  };
+  const resetPoll = () => {
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+  };
+
+  it("settles applications on every tick even with linking off", async () => {
+    // Break caught: settlement that ran only with linking on left a month of
+    // applications unsettled, then settled and linked them in one burst.
+    resetPoll();
+    try {
+      quietPoll();
+      vi.mocked(settleApplicantApplications).mockClear();
+      vi.mocked(linkApplicantApplications).mockClear();
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+      await fakes.applicantSheetTickHandler?.();
+      expect(settleApplicantApplications).toHaveBeenCalledTimes(1);
+      expect(linkApplicantApplications).not.toHaveBeenCalled();
+      await runtime.stop();
+    } finally {
+      resetPoll();
+    }
+  });
+
+  it("settles applications even while a points block skips the drain", async () => {
+    // Break caught: settlement placed inside the drain's block stopped for
+    // as long as the allowance was exhausted.
+    resetPoll();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-13T12:00:00.000Z").getTime());
+      quietPoll();
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0,
+        pointsBlocked: true
+      });
+      vi.mocked(settleApplicantApplications).mockClear();
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+      await fakes.applicantSheetTickHandler?.();
+      await fakes.applicantSheetTickHandler?.();
+      expect(drainApplicantIntents).toHaveBeenCalledTimes(1);
+      expect(settleApplicantApplications).toHaveBeenCalledTimes(2);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      resetPoll();
+    }
+  });
+
+  it("logs a failed settle step without failing the tick or skipping linking", async () => {
+    resetPoll();
+    try {
+      quietPoll();
+      vi.mocked(linkApplicantApplications).mockClear();
+      vi.mocked(settleApplicantApplications).mockRejectedValueOnce(
+        new TypeError("private-value")
+      );
+      const fakes = runtimeFakes();
+      const logger = { info: vi.fn() };
+      const runtime = await createWorkerRuntime(
+        linkingConfig,
+        { ...fakes.dependencies, createEvidenceGateway: applicantGateway },
+        logger
+      );
+      await fakes.applicantSheetTickHandler?.();
+      const records = logger.info.mock.calls.map(
+        ([record]) => record as Record<string, unknown>
+      );
+      expect(records).toContainEqual({
+        event: "applicant_applications_settle_failed",
+        errorName: "TypeError"
+      });
+      expect(records.map((record) => record.event)).not.toContain(
+        "applicant_sheet_tick_failed"
+      );
+      expect(linkApplicantApplications).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+        "private-value"
+      );
+      await runtime.stop();
+    } finally {
+      resetPoll();
+    }
+  });
+
+  it("still settles and links applications when the drain throws", async () => {
+    // Break caught: a drain throw jumped to the tick's outer catch, so a
+    // failing drain stopped settlement and linking for as long as it failed.
+    resetPoll();
+    try {
+      quietPoll();
+      vi.mocked(drainApplicantIntents).mockRejectedValueOnce(
+        new RangeError("private-value")
+      );
+      vi.mocked(settleApplicantApplications).mockClear();
+      vi.mocked(linkApplicantApplications).mockClear();
+      const fakes = runtimeFakes();
+      const logger = { info: vi.fn() };
+      const runtime = await createWorkerRuntime(
+        linkingConfig,
+        {
+          ...fakes.dependencies,
+          createEvidenceGateway: applicantGateway,
+          clock: steppingClock()
+        },
+        logger
+      );
+      await fakes.applicantSheetTickHandler?.();
+      const records = logger.info.mock.calls.map(
+        ([record]) => record as Record<string, unknown>
+      );
+      expect(records).toContainEqual({
+        event: "applicant_sheet_drain_failed",
+        durationMs: 25,
+        errorName: "RangeError"
+      });
+      expect(records.map((record) => record.event)).not.toContain(
+        "applicant_sheet_tick_failed"
+      );
+      expect(settleApplicantApplications).toHaveBeenCalledTimes(1);
+      expect(linkApplicantApplications).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+        "private-value"
+      );
+      await runtime.stop();
+    } finally {
+      resetPoll();
+    }
+  });
+
+  it("links applications after the drain only when linking is enabled", async () => {
+    resetPoll();
+    try {
+      quietPoll();
+      vi.mocked(linkApplicantApplications).mockClear();
+      const disabled = runtimeFakes();
+      const off = await createWorkerRuntime(applicantConfig, {
+        ...disabled.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+      await disabled.applicantSheetTickHandler?.();
+      expect(linkApplicantApplications).not.toHaveBeenCalled();
+      await off.stop();
+
+      const enabled = runtimeFakes();
+      const logger = { info: vi.fn() };
+      const on = await createWorkerRuntime(
+        linkingConfig,
+        { ...enabled.dependencies, createEvidenceGateway: applicantGateway },
+        logger
+      );
+      await enabled.applicantSheetTickHandler?.();
+      expect(linkApplicantApplications).toHaveBeenCalledTimes(1);
+      expect(
+        logger.info.mock.calls
+          .map(([record]) => record)
+          .find(
+            (record) =>
+              (record as { event: string }).event === "applicant_links"
+          )
+      ).toMatchObject({ event: "applicant_links", linked: 1, failed: 0 });
+      await on.stop();
+    } finally {
+      resetPoll();
+    }
+  });
+
+  it("logs a failed link step without failing the tick", async () => {
+    resetPoll();
+    try {
+      quietPoll();
+      vi.mocked(linkApplicantApplications).mockRejectedValueOnce(
+        new TypeError("private-value")
+      );
+      const fakes = runtimeFakes();
+      const logger = { info: vi.fn() };
+      const runtime = await createWorkerRuntime(
+        linkingConfig,
+        { ...fakes.dependencies, createEvidenceGateway: applicantGateway },
+        logger
+      );
+      await fakes.applicantSheetTickHandler?.();
+      const events = logger.info.mock.calls.map(
+        ([record]) => (record as { event: string }).event
+      );
+      expect(events).toContain("applicant_links_failed");
+      expect(events).not.toContain("applicant_sheet_tick_failed");
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(
+        "private-value"
+      );
+      await runtime.stop();
+    } finally {
+      resetPoll();
+    }
+  });
+
+  it("closes stale applications in hourly maintenance even with linking off", async () => {
+    vi.mocked(closeStaleApplicantApplications).mockClear();
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      applicantConfig,
+      { ...fakes.dependencies, createEvidenceGateway: applicantGateway },
+      logger
+    );
+    await fakes.maintenanceHandler?.();
+    expect(closeStaleApplicantApplications).toHaveBeenCalledTimes(1);
+    expect(logger.info.mock.calls.map(([record]) => record)).toContainEqual({
+      event: "applicant_applications_cleanup",
+      expired: 0,
+      deleted: 0
+    });
+    await runtime.stop();
+  });
+
+  it("closes stale applications even when the watcher is off", async () => {
+    // Break caught: switching the watcher off stopped retention, so open
+    // applications kept their member rows past the 7- and 30-day limits.
+    vi.mocked(closeStaleApplicantApplications).mockClear();
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+    await fakes.maintenanceHandler?.();
+    expect(closeStaleApplicantApplications).toHaveBeenCalledTimes(1);
+    await runtime.stop();
+  });
+
+  it("a failed stale close never skips the character groups recompute", async () => {
+    vi.mocked(closeStaleApplicantApplications).mockRejectedValueOnce(
+      new TypeError("private-value")
+    );
+    const fakes = runtimeFakes();
+    const logger = { info: vi.fn() };
+    const runtime = await createWorkerRuntime(
+      applicantConfig,
+      { ...fakes.dependencies, createEvidenceGateway: applicantGateway },
+      logger
+    );
+    await fakes.maintenanceHandler?.();
+    const records = logger.info.mock.calls.map(
+      ([record]) => record as Record<string, unknown>
+    );
+    expect(records).toContainEqual({
+      event: "applicant_applications_cleanup_failed",
+      errorName: "TypeError"
+    });
+    expect(records.map((record) => record.event)).toContain(
+      "evidence_cache_cleanup"
+    );
+    expect(JSON.stringify(records)).not.toContain("private-value");
     await runtime.stop();
   });
 
@@ -2423,7 +2846,8 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
-        newApplicants: []
+        newApplicants: [],
+        applications: { recorded: 0, ambiguous: 0, overCap: 0 }
       });
       const fakes = runtimeFakes();
       const runtime = await createWorkerRuntime(applicantConfig, {
@@ -2459,7 +2883,8 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
-        newApplicants: []
+        newApplicants: [],
+        applications: { recorded: 0, ambiguous: 0, overCap: 0 }
       });
       vi.mocked(drainApplicantIntents).mockResolvedValue({
         admitted: 0,
@@ -2580,7 +3005,8 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
-        newApplicants: []
+        newApplicants: [],
+        applications: { recorded: 0, ambiguous: 0, overCap: 0 }
       };
       vi.mocked(pollApplicantSheet)
         .mockRejectedValueOnce(new Error("sheet_down"))
@@ -2653,7 +3079,8 @@ describe("worker runtime", () => {
           backlog: 0,
           invalid: 0,
           truncated: 0,
-          newApplicants: []
+          newApplicants: [],
+          applications: { recorded: 0, ambiguous: 0, overCap: 0 }
         };
       });
       vi.mocked(drainApplicantIntents).mockResolvedValue({
@@ -2730,7 +3157,8 @@ describe("worker runtime", () => {
           backlog: 0,
           invalid: 0,
           truncated: 0,
-          newApplicants: []
+          newApplicants: [],
+          applications: { recorded: 0, ambiguous: 0, overCap: 0 }
         };
       });
       vi.mocked(drainApplicantIntents).mockResolvedValueOnce({

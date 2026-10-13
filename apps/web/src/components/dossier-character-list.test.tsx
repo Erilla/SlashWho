@@ -357,6 +357,35 @@ it("offers row actions for every connected character", () => {
   ).toBeVisible();
 });
 
+it("labels a link from an application as such, keeping it a manual connection", () => {
+  // Break caught: an applicant's claim read "Manually added", as if a
+  // reviewer had vetted it.
+  render(
+    <DossierCharacterList
+      characters={[
+        {
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          displayName: "Ryii",
+          className: "Mage",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/ryii",
+          source: "submitted"
+        },
+        {
+          key: { region: "eu", realm: "silvermoon", name: "manual" },
+          displayName: "Manual",
+          className: "Warrior",
+          raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
+          source: "manually_added",
+          origin: "application"
+        }
+      ]}
+      root={{ region: "eu", realm: "silvermoon", name: "ryii" }}
+    />
+  );
+  expect(screen.getByText("From application")).toBeInTheDocument();
+  expect(screen.queryByText("Manually added")).not.toBeInTheDocument();
+});
+
 it("hides the row actions from a read-only dossier", () => {
   // The demo dossier is frozen, so its rows must offer nothing to change.
   render(

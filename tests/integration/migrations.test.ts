@@ -45,6 +45,8 @@ describe("database migrations", () => {
       "account_request_attempts",
       "account_sessions",
       "accounts",
+      "applicant_source_application_members",
+      "applicant_source_applications",
       "applicant_source_counts",
       "applicant_source_intents",
       "applicant_source_state",
@@ -192,7 +194,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-41).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-42).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
@@ -234,8 +236,60 @@ describe("database migrations", () => {
       { idx: 69, tag: "0070_fingerprint_excluded_tournament_characters" },
       { idx: 70, tag: "0071_discovery_evidence_origin" },
       { idx: 71, tag: "0072_fingerprint_delivery" },
-      { idx: 72, tag: "0073_roster_profile_resolutions" }
+      { idx: 72, tag: "0073_roster_profile_resolutions" },
+      { idx: 73, tag: "0074_applicant_applications" }
     ]);
+  });
+
+  it("adds application tables and a reviewer-default origin to manual connections", async () => {
+    // Break caught: a NOT NULL origin without a default would fail every
+    // existing manual connection, and an application FK without SET NULL would
+    // block deleting closed applications.
+    const { pool, stop } = await startPostgres();
+    try {
+      await runMigrations(pool);
+      const root = await pool.query<{ id: string }>(
+        "INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url) VALUES ('eu', 'hyjal', 'tropipe', 'Tropipe', 'Mage', 80, 'https://raider.io/characters/eu/hyjal/tropipe') RETURNING id"
+      );
+      await pool.query(
+        "INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name) VALUES ($1, 'eu', 'hyjal', 'tropicos')",
+        [root.rows[0]!.id]
+      );
+      const origin = await pool.query<{ origin: string }>(
+        "SELECT origin FROM manual_dossier_connections"
+      );
+      expect(origin.rows).toEqual([{ origin: "dossier" }]);
+      await expect(
+        pool.query("UPDATE manual_dossier_connections SET origin = 'web'")
+      ).rejects.toThrow();
+
+      await pool.query(
+        "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at, parser_version) VALUES ('applicant_sheet', now(), now(), 2)"
+      );
+      const intent = await pool.query<{ sequence: string }>(
+        'INSERT INTO applicant_source_intents (source, identity, observed_at) VALUES (\'applicant_sheet\', \'character:["eu","hyjal","tropipe"]\', now()) RETURNING sequence'
+      );
+      const application = await pool.query<{ id: string }>(
+        'INSERT INTO applicant_source_applications (source, root_intent_sequence, root_identity, submitted_serial) VALUES (\'applicant_sheet\', $1, \'character:["eu","hyjal","tropipe"]\', 46308.45) RETURNING id',
+        [intent.rows[0]!.sequence]
+      );
+      await pool.query(
+        "UPDATE manual_dossier_connections SET origin = 'applicant_sheet', applicant_application_id = $1",
+        [application.rows[0]!.id]
+      );
+      await pool.query("DELETE FROM applicant_source_applications");
+      const after = await pool.query<{
+        origin: string;
+        applicant_application_id: string | null;
+      }>(
+        "SELECT origin, applicant_application_id FROM manual_dossier_connections"
+      );
+      expect(after.rows).toEqual([
+        { origin: "applicant_sheet", applicant_application_id: null }
+      ]);
+    } finally {
+      await stop();
+    }
   });
 
   it("backfills character groups from today's snapshots without touching them", async () => {

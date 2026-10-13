@@ -340,7 +340,8 @@ it("does not admit against points already reserved by queued evidence", async ()
         perDay: 5,
         backlog: 100,
         queueDepth: 10,
-        minimumPoints: 3500
+        minimumPoints: 3500,
+        linkingEnabled: false
       }
     } as WorkerConfig,
     repositories,
@@ -402,14 +403,16 @@ it("returns the new response's own details without persisting them", async () =>
         battletag: "Old#123",
         discordId: "111",
         characterName: "Aria",
-        linkCell: a
+        linkCell: a,
+        submittedSerial: undefined
       },
       {
         row: 3,
         battletag: "Ivy#456",
         discordId,
         characterName: "Ivy",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       }
     ],
     backlogLimit: 1000
@@ -441,14 +444,16 @@ it("attributes a repeated character submission to the later response", async () 
         battletag: "First#111",
         discordId: "111",
         characterName: "First",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       },
       {
         row: 3,
         battletag: "Second#222",
         discordId: "222",
         characterName: "Second",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       }
     ],
     backlogLimit: 1000
@@ -474,7 +479,8 @@ it("adds a dossier path when a numeric Warcraft Logs link resolves", async () =>
         battletag: "Numeric#777",
         discordId: "777",
         characterName: "Nora",
-        linkCell: characterUrl
+        linkCell: characterUrl,
+        submittedSerial: undefined
       }
     ],
     resolveDossierPath: (identity) =>
@@ -498,14 +504,16 @@ it("keeps each duplicate response's details when an earlier occurrence is deferr
       battletag: "First#111",
       discordId: "111",
       characterName: "Piper One",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     },
     {
       row: 3,
       battletag: "Second#222",
       discordId: "222",
       characterName: "Piper Two",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     }
   ];
   let calls = 0;
@@ -593,14 +601,16 @@ it("keeps a deferred duplicate's own details across a parser version change", as
       battletag: "First#333",
       discordId: "333",
       characterName: "Uma One",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     },
     {
       row: 3,
       battletag: "Second#444",
       discordId: "444",
       characterName: "Uma Two",
-      linkCell: characterUrl
+      linkCell: characterUrl,
+      submittedSerial: undefined
     }
   ];
   await pollApplicantSheet({
@@ -670,4 +680,554 @@ it("stamps last_polled_at with the time the poll was given", async () => {
     "SELECT last_polled_at FROM applicant_source_state WHERE source = 'applicant_sheet'"
   );
   expect(state.rows[0]?.last_polled_at).toEqual(startedAt);
+});
+
+async function resetApplicantSource() {
+  await pool.query(
+    "TRUNCATE applicant_source_application_members, applicant_source_applications, applicant_source_intents, applicant_source_counts, applicant_source_state CASCADE"
+  );
+}
+const tp = "https://raider.io/characters/eu/hyjal/tropipe";
+const tc = "https://raider.io/characters/eu/hyjal/tropicos";
+const tx = "https://raider.io/characters/eu/hyjal/tropixa";
+const tpId = 'character:["eu","hyjal","tropipe"]';
+const tcId = 'character:["eu","hyjal","tropicos"]';
+async function pollRows(rows: Array<[number | undefined, string]>) {
+  return pollApplicantSheet({
+    pool,
+    readRows: async () =>
+      rows.map(([serial, linkCell], index) => ({
+        row: index + 2,
+        battletag: "tag#1",
+        discordId: "1",
+        characterName: "Name",
+        linkCell,
+        submittedSerial: serial
+      })),
+    backlogLimit: 100,
+    isSuppressed: async () => false
+  });
+}
+async function applications() {
+  const result = await pool.query<{
+    root_identity: string;
+    submitted_serial: number;
+    over_cap: boolean;
+    members: string[] | null;
+  }>(
+    `SELECT a.root_identity, a.submitted_serial, a.over_cap,
+            array_agg(m.identity ORDER BY m.ordinal) FILTER (WHERE m.identity IS NOT NULL) AS members
+       FROM applicant_source_applications a
+       LEFT JOIN applicant_source_application_members m ON m.application_id = a.id
+      GROUP BY a.id ORDER BY a.created_at, a.submitted_serial`
+  );
+  return result.rows;
+}
+
+it("records an application, with members in cell order, for a new multi-link response", async () => {
+  await resetApplicantSource();
+  await pollRows([[10, tx]]); // baseline: sets the mark to 10
+  await pollRows([
+    [10, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(await applications()).toEqual([
+    {
+      root_identity: tpId,
+      submitted_serial: 20,
+      over_cap: false,
+      members: [tcId]
+    }
+  ]);
+});
+
+it("records nothing on the first poll after deploy, and only sets the mark", async () => {
+  await resetApplicantSource();
+  await pollRows([[10, tx]]);
+  await pool.query(
+    "UPDATE applicant_source_state SET submitted_serial_mark = NULL"
+  );
+  const result = await pollRows([
+    [10, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(await applications()).toEqual([]);
+  expect(result.newApplicants.length).toBeGreaterThan(0); // per-occurrence alerts, as today
+  const mark = await pool.query(
+    "SELECT submitted_serial_mark FROM applicant_source_state"
+  );
+  expect(mark.rows[0].submitted_serial_mark).toBe(20);
+});
+
+it("records nothing for single-link responses or a pre-mark response's later reference", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, `${tp} ${tc}`]]); // baseline
+  await pollRows([
+    [5, `${tp} ${tc}`],
+    [20, `${tx} ${tp}`],
+    [21, tc]
+  ]);
+  const rows = await applications();
+  expect(rows.map((row) => row.root_identity)).toEqual([
+    'character:["eu","hyjal","tropixa"]'
+  ]);
+});
+
+it("chooses the response by serial after the sheet is sorted", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollRows([
+    [20, `${tp} ${tc}`],
+    [5, tx]
+  ]);
+  expect((await applications())[0]).toMatchObject({
+    root_identity: tpId,
+    submitted_serial: 20
+  });
+});
+
+it("records an over-cap response without members", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  const six = ["a", "b", "c", "d", "e", "f"]
+    .map((name) => `https://raider.io/characters/eu/hyjal/over${name}`)
+    .join(" ");
+  await pollRows([
+    [5, tx],
+    [20, six]
+  ]);
+  expect(await applications()).toEqual([
+    {
+      root_identity: 'character:["eu","hyjal","overa"]',
+      submitted_serial: 20,
+      over_cap: true,
+      members: null
+    }
+  ]);
+  const closed = await pool.query(
+    "SELECT closed_at FROM applicant_source_applications"
+  );
+  expect(closed.rows[0].closed_at).not.toBeNull();
+});
+
+it("records a deferred root's application in a later poll, from the mark it carried", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => (identity === tpId ? "defer" : false)
+  });
+  expect(await applications()).toEqual([]);
+  await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(await applications()).toEqual([
+    {
+      root_identity: tpId,
+      submitted_serial: 20,
+      over_cap: false,
+      members: [tcId]
+    }
+  ]);
+  // The member was inserted a poll before its root, and is still tied to it.
+  const member = await pool.query<{ member_intent_sequence: string }>(
+    "SELECT member_intent_sequence FROM applicant_source_application_members"
+  );
+  const intent = await pool.query<{ sequence: string }>(
+    "SELECT sequence FROM applicant_source_intents WHERE identity = $1",
+    [tcId]
+  );
+  expect(intent.rows).toHaveLength(1);
+  expect(member.rows[0]?.member_intent_sequence).toBe(intent.rows[0]?.sequence);
+});
+
+it("ties a deferred root's member to its first intent, not a later resubmission's", async () => {
+  // Break caught: max(sequence) tied R's member to the intent M's later
+  // response (S30, Q's application) created, not the one from R's response.
+  await resetApplicantSource();
+  const tq = "https://raider.io/characters/eu/hyjal/tropiqua";
+  const tqId = 'character:["eu","hyjal","tropiqua"]';
+  const sheetRow = (row: number, serial: number, linkCell: string) => ({
+    row,
+    battletag: "t",
+    discordId: "1",
+    characterName: "N",
+    linkCell,
+    submittedSerial: serial
+  });
+  const first = [sheetRow(2, 5, tx), sheetRow(3, 20, `${tp} ${tc}`)];
+  const later = [...first, sheetRow(4, 30, `${tq} ${tc}`)];
+  const pollAt = (
+    rows: ReturnType<typeof sheetRow>[],
+    at: string,
+    deferred: string[]
+  ) =>
+    pollApplicantSheet({
+      pool,
+      readRows: async () => rows,
+      backlogLimit: 100,
+      now: () => new Date(at),
+      isSuppressed: async (identity) =>
+        deferred.includes(identity) ? "defer" : false
+    });
+  await pollAt([sheetRow(2, 5, tx)], "2026-10-13T10:00:00.000Z", []);
+  // t1: R (tropipe) and M (tropicos) both deferred.
+  await pollAt(first, "2026-10-13T10:01:00.000Z", [tpId, tcId]);
+  // M's deferred occurrence is admitted, observed at t1; R still waits.
+  await pollAt(first, "2026-10-13T10:02:00.000Z", [tpId]);
+  // t3: S30 [Q, M] arrives; Q's application takes M's new intent.
+  await pollAt(later, "2026-10-13T10:03:00.000Z", [tpId]);
+  // R is finally admitted, with its first sighting at t1.
+  await pollAt(later, "2026-10-13T10:04:00.000Z", []);
+  const memberIntents = await pool.query<{ sequence: string }>(
+    "SELECT sequence FROM applicant_source_intents WHERE identity = $1 ORDER BY sequence",
+    [tcId]
+  );
+  expect(memberIntents.rows).toHaveLength(2);
+  const members = await pool.query<{
+    root_identity: string;
+    member_intent_sequence: string;
+  }>(
+    `SELECT a.root_identity, m.member_intent_sequence
+       FROM applicant_source_application_members m
+       JOIN applicant_source_applications a ON a.id = m.application_id
+      ORDER BY a.root_identity`
+  );
+  // tropipe sorts before tropiqua.
+  expect(members.rows).toEqual([
+    {
+      root_identity: tpId,
+      member_intent_sequence: memberIntents.rows[0]?.sequence
+    },
+    {
+      root_identity: tqId,
+      member_intent_sequence: memberIntents.rows[1]?.sequence
+    }
+  ]);
+});
+
+it.each([
+  ["before", [tcId, tpId]],
+  ["after", [tpId, tcId]]
+] as const)(
+  "ties a deferred root's member to its first intent when the member's new intent is inserted %s the root in the same poll",
+  async (_order, identityOrder) => {
+    // Break caught: an intent the member took this poll, for a different
+    // response, overrode the min(sequence) rule whenever the poll reached the
+    // member before the deferred root.
+    await resetApplicantSource();
+    const tq = "https://raider.io/characters/eu/hyjal/tropiqua";
+    const tqId = 'character:["eu","hyjal","tropiqua"]';
+    const sheetRow = (row: number, serial: number, linkCell: string) => ({
+      row,
+      battletag: "t",
+      discordId: "1",
+      characterName: "N",
+      linkCell,
+      submittedSerial: serial
+    });
+    const first = [sheetRow(2, 5, tx), sheetRow(3, 20, `${tp} ${tc}`)];
+    const later = [...first, sheetRow(4, 30, `${tq} ${tc}`)];
+    const pollAt = (
+      rows: ReturnType<typeof sheetRow>[],
+      at: string,
+      deferred: string[]
+    ) =>
+      pollApplicantSheet({
+        pool,
+        readRows: async () => rows,
+        backlogLimit: 100,
+        now: () => new Date(at),
+        isSuppressed: async (identity) =>
+          deferred.includes(identity) ? "defer" : false
+      });
+    await pollAt([sheetRow(2, 5, tx)], "2026-10-13T10:00:00.000Z", []);
+    // t1: R (tropipe) is held back; M (tropicos) takes its first intent.
+    await pollAt(first, "2026-10-13T10:01:00.000Z", [tpId]);
+    // The poll walks the stored counts in heap order: rewrite the table so the
+    // order is the one under test.
+    const stored = await pool.query<{
+      source: string;
+      identity: string;
+      occurrence_count: number;
+      deferred_observed_ats: unknown;
+    }>("SELECT * FROM applicant_source_counts");
+    await pool.query("TRUNCATE applicant_source_counts");
+    const rank = (identity: string) => {
+      const at = (identityOrder as readonly string[]).indexOf(identity);
+      return at === -1 ? identityOrder.length : at;
+    };
+    for (const row of [...stored.rows].sort(
+      (left, right) => rank(left.identity) - rank(right.identity)
+    ))
+      await pool.query(
+        "INSERT INTO applicant_source_counts (source, identity, occurrence_count, deferred_observed_ats) VALUES ($1, $2, $3, $4::jsonb)",
+        [
+          row.source,
+          row.identity,
+          row.occurrence_count,
+          JSON.stringify(row.deferred_observed_ats)
+        ]
+      );
+    const heap = await pool.query<{ identity: string }>(
+      "SELECT identity FROM applicant_source_counts WHERE source = 'applicant_sheet'"
+    );
+    expect(
+      heap.rows
+        .map((row) => row.identity)
+        .filter((identity) => identity === tpId || identity === tcId)
+    ).toEqual(identityOrder);
+    // t2: R is admitted, and S30 [Q, M] gives M a second intent in the same
+    // poll.
+    await pollAt(later, "2026-10-13T10:02:00.000Z", []);
+    const memberIntents = await pool.query<{ sequence: string }>(
+      "SELECT sequence FROM applicant_source_intents WHERE identity = $1 ORDER BY sequence",
+      [tcId]
+    );
+    expect(memberIntents.rows).toHaveLength(2);
+    const members = await pool.query<{
+      root_identity: string;
+      member_intent_sequence: string;
+    }>(
+      `SELECT a.root_identity, m.member_intent_sequence
+         FROM applicant_source_application_members m
+         JOIN applicant_source_applications a ON a.id = m.application_id
+        ORDER BY a.root_identity`
+    );
+    // tropipe sorts before tropiqua.
+    expect(members.rows).toEqual([
+      {
+        root_identity: tpId,
+        member_intent_sequence: memberIntents.rows[0]?.sequence
+      },
+      {
+        root_identity: tqId,
+        member_intent_sequence: memberIntents.rows[1]?.sequence
+      }
+    ]);
+  }
+);
+
+it("ties each member to its own intent, filling a deferred member in later", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => (identity === tcId ? "defer" : false)
+  });
+  const before = await pool.query(
+    "SELECT member_intent_sequence FROM applicant_source_application_members"
+  );
+  expect(before.rows).toEqual([{ member_intent_sequence: null }]);
+  await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  const after = await pool.query<{
+    member_intent_sequence: string;
+    sequence: string;
+  }>(
+    `SELECT m.member_intent_sequence, i.sequence
+       FROM applicant_source_application_members m
+       JOIN applicant_source_intents i ON i.identity = m.identity`
+  );
+  expect(after.rows[0]?.member_intent_sequence).toBe(after.rows[0]?.sequence);
+});
+
+it("settles an application at intake when its root is inserted suppressed", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => identity === tpId
+  });
+  const settled = await pool.query(
+    "SELECT settled_at FROM applicant_source_applications"
+  );
+  expect(settled.rows[0].settled_at).not.toBeNull();
+});
+
+it("alerts once per new response, even when all its links are deferred", async () => {
+  // Break caught: a four-link response sent four alerts; and a response whose
+  // links were all deferred never alerted at all once the mark passed it.
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  const result = await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    linkingEnabled: true,
+    isSuppressed: async () => "defer"
+  });
+  expect(result.newApplicants).toEqual([
+    expect.objectContaining({
+      characterUrl: tp,
+      otherCharacters: 1,
+      linking: "pending"
+    })
+  ]);
+  const later = await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(later.newApplicants).toEqual([]);
+});
+
+it("alerts a link deferred on the first poll after deploy once it is admitted, without an application", async () => {
+  // Break caught: a link deferred while the mark was NULL carried mark null,
+  // so once admitted it was neither a new response nor an unmarked
+  // occurrence, and alerted nowhere.
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pool.query(
+    "UPDATE applicant_source_state SET submitted_serial_mark = NULL"
+  );
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => (identity === tpId ? "defer" : false)
+  });
+  const later = await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(later.newApplicants).toEqual([
+    expect.objectContaining({ characterUrl: tp })
+  ]);
+  expect(await applications()).toEqual([]);
+});
+
+it("sends no alert for an edited response whose counts did not rise", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, `${tp} ${tc}`]]);
+  const result = await pollRows([[30, `${tc} ${tp}`]]);
+  expect(result.newApplicants).toEqual([]);
+});
+
+it("says an over-cap response will not be linked", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  const six = ["a", "b", "c", "d", "e", "f"]
+    .map((name) => `https://raider.io/characters/eu/hyjal/capped${name}`)
+    .join(" ");
+  const result = await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: six,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    linkingEnabled: true,
+    isSuppressed: async () => false
+  });
+  expect(result.newApplicants).toEqual([
+    expect.objectContaining({ otherCharacters: 5, linking: "over_cap" })
+  ]);
 });

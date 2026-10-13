@@ -1,8 +1,9 @@
 # Linking the characters in each application, and polling every minute
 
-**Status (2026-10-13): proposed, revision 3.** Nothing here is built. The
-design went through one review with the Manager before being written. This
-revision folds in its reviews of the written drafts (38bb2789 and cf2e9d6e),
+**Status (2026-10-13): implemented, revision 3.** Change 1 shipped in #909.
+Change 2 is implemented on `feat/applicant-application-links`, behind
+`APPLICANT_LINKING_ENABLED` (off by default). The design went through one
+review with the Manager before being written. This revision folds in its reviews of the written drafts (38bb2789 and cf2e9d6e),
 plus the maintainer's answers.
 
 ## Problem
@@ -197,8 +198,8 @@ timestamp, as a raw serial, against a high-water mark.
   the text in link cells.
 - Serials are compared only with each other and never converted to UTC, so
   the spreadsheet's time zone and daylight saving don't matter.
-- **Aligning the reads.** The link column from the second request must match
-  the first request's link column, cell for cell.
+- **Aligning the reads.** The parsed character links in each row of the
+  second request must match those in the same row of the first request.
   - The second read may have extra rows at the end, appended by Forms
     between the reads. Drop them.
   - Any other difference fails the whole poll without advancing any state,
@@ -296,7 +297,7 @@ applications.
 - Ordered by `last_checked_at`, oldest first, so waiting applications don't
   starve newer ones. Each visit updates `last_checked_at`.
 - At most 50 per tick.
-- `FOR UPDATE SKIP LOCKED`.
+- `FOR NO KEY UPDATE OF application SKIP LOCKED`. `manualConnections.add` runs on another connection and its foreign-key check takes `FOR KEY SHARE`, which `FOR UPDATE` would block, hanging every link.
 
 For each application:
 
@@ -399,7 +400,7 @@ step adds first and marks second, so a crash between them repeats an add that
 **Logging.** Each tick emits one count-only event:
 `applicant_links { linked, waiting, suppressed, same_character,
 skipped_region, skipped_excluded, skipped_cross_group, needed_link_pairs,
-expired }`. A failure
+expired, failed }`. `failed` counts applications whose processing threw: each is rolled back to its own savepoint, moves to the back of the queue and is counted, without logging any message. A failure
 in the step is logged and never fails the drain.
 
 Members marked `linked` are never revisited, so a reviewer's removal holds

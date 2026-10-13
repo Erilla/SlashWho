@@ -67,30 +67,43 @@ export function createSmallStoreRepositories(
         );
         return "updated";
       },
-      async add(root, character) {
+      async add(root, character, options) {
         // The connected side is a key, so this records the link whether or not
         // the character has been discovered yet. Only the root must exist.
-        const result = await pool.query(
+        //
+        // The worker never overwrites a row. A reviewer's add converts the
+        // worker's row to a reviewer link (keeping any exclusion) but reports
+        // it as a duplicate: it was already linked. `xmax = 0` tells a fresh
+        // insert from that conversion; a reviewer row matches no update and
+        // returns nothing.
+        const conflict = options
+          ? "ON CONFLICT DO NOTHING"
+          : `ON CONFLICT (root_character_id, connected_region, connected_realm_slug, connected_normalized_name)
+             DO UPDATE SET origin = 'dossier', applicant_application_id = NULL
+             WHERE manual_dossier_connections.origin <> 'dossier'`;
+        const result = await pool.query<{ inserted: boolean }>(
           `INSERT INTO manual_dossier_connections
              (root_character_id, connected_region, connected_realm_slug,
-              connected_normalized_name)
-           SELECT root.id, $4, $5, $6
+              connected_normalized_name, origin, applicant_application_id)
+           SELECT root.id, $4, $5, $6, $7, $8
            FROM characters root
            WHERE root.region = $1
              AND root.realm_slug = $2
              AND root.normalized_name = $3
-           ON CONFLICT DO NOTHING
-           RETURNING root_character_id`,
+           ${conflict}
+           RETURNING (xmax = 0) AS inserted`,
           [
             root.region,
             root.realm,
             root.name,
             character.region,
             character.realm,
-            character.name
+            character.name,
+            options?.origin ?? "dossier",
+            options?.applicationId ?? null
           ]
         );
-        return result.rowCount === 1 ? "added" : "duplicate";
+        return result.rows[0]?.inserted === true ? "added" : "duplicate";
       },
 
       async list(root) {
@@ -102,6 +115,7 @@ export function createSmallStoreRepositories(
           class_name: string | null;
           level: number | null;
           raider_io_url: string | null;
+          origin: string;
           excluded: boolean;
         }>(
           // Left join: a connection linked before discovery has no character
@@ -114,6 +128,7 @@ export function createSmallStoreRepositories(
                   connected.class_name,
                   connected.level,
                   connected.raider_io_url,
+                  connection.origin,
                   connection.excluded_at IS NOT NULL AS excluded
            FROM manual_dossier_connections connection
            JOIN characters owner ON owner.id = connection.root_character_id
@@ -152,6 +167,7 @@ export function createSmallStoreRepositories(
             level: row.level ?? 0,
             raiderIoUrl: row.raider_io_url ?? toRaiderIoUrl(key),
             pending: row.display_name === null,
+            origin: row.origin as "dossier" | "applicant_sheet",
             excluded: row.excluded
           };
         });
