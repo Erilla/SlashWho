@@ -9,7 +9,7 @@ export type ErrorFields = Readonly<{
 export function errorFields(error: unknown): ErrorFields {
   const name =
     error instanceof Error
-      ? error.name && error.name !== "Error"
+      ? error.name && error.name.toLowerCase() !== "error"
         ? error.name
         : (error.constructor?.name ?? error.name)
       : typeof error;

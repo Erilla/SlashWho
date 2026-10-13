@@ -289,3 +289,17 @@ describe("safe error diagnostics", () => {
     ).toHaveLength(64);
   });
 });
+
+it.each(["error", "ERROR", "Error", ""])(
+  "uses the pg-shaped DatabaseError constructor for generic name %s",
+  (name) => {
+    class DatabaseError extends Error {
+      readonly code = "23505";
+    }
+    const error = Object.assign(new DatabaseError("private row"), { name });
+    expect(errorFields(error)).toEqual({
+      errorName: "DatabaseError",
+      errorCode: "23505"
+    });
+  }
+);
