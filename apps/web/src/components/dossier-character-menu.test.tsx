@@ -101,7 +101,7 @@ it("focuses the historic alias action on the opened character's menu", async () 
   trigger.focus();
   await user.keyboard("{Enter}");
   expect(
-    screen.queryByRole("menuitem", { name: "Exclude", exact: true })
+    screen.queryByRole("menuitem", { name: "Exclude" })
   ).not.toBeInTheDocument();
   expect(
     screen.getByRole("menuitem", { name: "Link historic alias…" })
