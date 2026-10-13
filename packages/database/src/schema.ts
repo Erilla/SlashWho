@@ -373,7 +373,11 @@ export const manualDossierConnections = pgTable(
      * When a reviewer hid this character from the dossier evidence. A timestamp
      * rather than a flag, so the moment the exclusion was made is recoverable.
      */
-    excludedAt: timestamp("excluded_at", { withTimezone: true })
+    excludedAt: timestamp("excluded_at", { withTimezone: true }),
+    /** `dossier` for reviewer links, `applicant_sheet` for application links. */
+    origin: text("origin").notNull().default("dossier"),
+    /** The application that created the link; null once that row is deleted. */
+    applicantApplicationId: uuid("applicant_application_id")
   },
   (table) => [
     primaryKey({
@@ -385,6 +389,85 @@ export const manualDossierConnections = pgTable(
         table.connectedNormalizedName
       ]
     })
+  ]
+);
+
+/*
+ * The applicant watcher tables (applicant_source_state, _intents) are managed
+ * by raw SQL migrations and are not modelled here, so the two tables below
+ * declare their foreign keys in the migration only.
+ */
+
+/** One multi-character application, keyed by its root intent. */
+export const applicantSourceApplications = pgTable(
+  "applicant_source_applications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    source: text("source").notNull(),
+    rootIntentSequence: bigint("root_intent_sequence", {
+      mode: "bigint"
+    }).notNull(),
+    rootIdentity: text("root_identity").notNull(),
+    submittedSerial: doublePrecision("submitted_serial").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    overCap: boolean("over_cap").notNull().default(false),
+    linkedCount: integer("linked_count").notNull().default(0),
+    suppressedCount: integer("suppressed_count").notNull().default(0),
+    sameCharacterCount: integer("same_character_count").notNull().default(0),
+    skippedRegionCount: integer("skipped_region_count").notNull().default(0),
+    skippedExcludedCount: integer("skipped_excluded_count")
+      .notNull()
+      .default(0),
+    skippedCrossGroupCount: integer("skipped_cross_group_count")
+      .notNull()
+      .default(0),
+    expiredCount: integer("expired_count").notNull().default(0)
+  },
+  (table) => [
+    uniqueIndex("applicant_source_applications_root_intent_sequence_key").on(
+      table.rootIntentSequence
+    ),
+    index("applicant_source_applications_root_idx").on(
+      table.rootIdentity,
+      table.submittedSerial
+    ),
+    index("applicant_source_applications_open_idx")
+      .on(table.lastCheckedAt.asc().nullsFirst(), table.createdAt)
+      .where(sql`${table.closedAt} IS NULL`)
+  ]
+);
+
+/** The characters named by an application, in sheet order. */
+export const applicantSourceApplicationMembers = pgTable(
+  "applicant_source_application_members",
+  {
+    applicationId: uuid("application_id")
+      .notNull()
+      .references(() => applicantSourceApplications.id, {
+        onDelete: "cascade"
+      }),
+    ordinal: integer("ordinal").notNull(),
+    identity: text("identity").notNull(),
+    memberIntentSequence: bigint("member_intent_sequence", { mode: "bigint" }),
+    outcome: text("outcome")
+  },
+  (table) => [
+    primaryKey({
+      name: "applicant_source_application_members_pkey",
+      columns: [table.applicationId, table.ordinal]
+    }),
+    check(
+      "applicant_source_application_members_ordinal_check",
+      sql`${table.ordinal} >= 1`
+    ),
+    index("applicant_source_application_members_waiting_idx")
+      .on(table.identity)
+      .where(sql`${table.memberIntentSequence} IS NULL`)
   ]
 );
 

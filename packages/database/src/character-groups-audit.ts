@@ -223,7 +223,7 @@ async function load(
     origin: string | null;
   }>(
     `SELECT manual.root_character_id AS maker, target.id AS target,
-            manual.excluded_at IS NOT NULL AS excluded, to_jsonb(manual)->>'origin' AS origin
+            manual.excluded_at IS NOT NULL AS excluded, manual.origin AS origin
      FROM manual_dossier_connections manual
      JOIN characters target ON target.region = manual.connected_region
        AND target.realm_slug = manual.connected_realm_slug
@@ -244,7 +244,7 @@ async function load(
             manual.connected_region AS region,
             manual.connected_realm_slug AS realm_slug,
             manual.connected_normalized_name AS normalized_name,
-            manual.excluded_at IS NOT NULL AS excluded, to_jsonb(manual)->>'origin' AS origin
+            manual.excluded_at IS NOT NULL AS excluded, manual.origin AS origin
      FROM manual_dossier_connections manual
      WHERE NOT EXISTS (
          SELECT 1 FROM characters target

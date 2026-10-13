@@ -83,10 +83,20 @@ export function createGroupEdits(
         pool,
         async (client, merges) => {
           if (await rejected(client, root, target)) return "rejected";
-          const inserted = await client.query<{ root_character_id: string }>(
-            `INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name)
-        SELECT id, $4, $5, $6 FROM characters WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
-        ON CONFLICT DO NOTHING RETURNING root_character_id`,
+          const inserted = await client.query<{
+            root_character_id: string;
+            inserted: boolean;
+          }>(
+            `INSERT INTO manual_dossier_connections
+               (root_character_id, connected_region, connected_realm_slug,
+                connected_normalized_name, origin, applicant_application_id)
+             SELECT id, $4, $5, $6, 'dossier', NULL
+             FROM characters
+             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+             ON CONFLICT (root_character_id, connected_region, connected_realm_slug, connected_normalized_name)
+             DO UPDATE SET origin = 'dossier', applicant_application_id = NULL
+             WHERE manual_dossier_connections.origin <> 'dossier'
+             RETURNING root_character_id, (xmax = 0) AS inserted`,
             [
               root.region,
               root.realm,
@@ -106,7 +116,7 @@ export function createGroupEdits(
             ).rows[0]?.id;
           if (!id) return "duplicate";
           merges.push(...(await recomputeComponent(client, id)).merges);
-          return inserted.rowCount ? "added" : "duplicate";
+          return inserted.rows[0]?.inserted === true ? "added" : "duplicate";
         },
         onMerged
       ),

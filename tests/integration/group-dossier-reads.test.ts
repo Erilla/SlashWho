@@ -628,6 +628,39 @@ describe("consistent group dossier projection", () => {
     expect(root!.groupId).toBe(alt!.groupId);
   });
 
+  it("a reviewer re-add converts an applicant-sheet link to a dossier link", async () => {
+    await grouped();
+    await pool.query(
+      "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at, parser_version) VALUES ('applicant_sheet', now(), now(), 2) ON CONFLICT DO NOTHING"
+    );
+    const rootIdentity = `character:[\"${rootKey.region}\",\"${rootKey.realm}\",\"${rootKey.name}\"]`;
+    const intent = await pool.query<{ sequence: string }>(
+      "INSERT INTO applicant_source_intents (source, identity, observed_at) VALUES ('applicant_sheet', $1, now()) RETURNING sequence",
+      [rootIdentity]
+    );
+    const application = await pool.query<{ id: string }>(
+      "INSERT INTO applicant_source_applications (source, root_intent_sequence, root_identity, submitted_serial) VALUES ('applicant_sheet', $1, $2, 1) RETURNING id",
+      [intent.rows[0]!.sequence, rootIdentity]
+    );
+
+    expect(
+      await repositories.manualConnections.add(rootKey, altKey, {
+        origin: "applicant_sheet",
+        applicationId: application.rows[0]!.id
+      })
+    ).toBe("added");
+    expect(
+      await repositories.manualConnections.addGroupConnection!(rootKey, altKey)
+    ).toBe("duplicate");
+    expect(
+      (
+        await pool.query(
+          "SELECT origin, applicant_application_id FROM manual_dossier_connections"
+        )
+      ).rows
+    ).toEqual([{ origin: "dossier", applicant_application_id: null }]);
+  });
+
   it("Include reports an unrelated target as missing", async () => {
     await grouped();
     expect(

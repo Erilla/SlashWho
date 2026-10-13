@@ -3849,7 +3849,8 @@ describe("manually connected characters", () => {
         level: 0,
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
-        pending: true
+        pending: true,
+        origin: "dossier"
       }
     ]);
     // An undiscovered character has no evidence run, so its reservation is a
@@ -3901,6 +3902,75 @@ describe("manually connected characters", () => {
     );
   });
 
+  it("labels a character linked from an application, and only that one, with its origin", async () => {
+    // Break caught: the service mapped each list row's origin by hand, so a
+    // dropped or misspelt mapping would have unlabelled every application
+    // link, or labelled a reviewer's own add as one.
+    const { dossiers, repositories } = fixture();
+    const sheetKey = {
+      region: "eu",
+      realm: "silvermoon",
+      name: "fromsheet"
+    } as const;
+    const pendingRow = (key: CharacterKey, origin: string) => ({
+      key,
+      displayName: key.name,
+      className: null,
+      level: 0,
+      guild: null,
+      raiderIoUrl: `https://raider.io/characters/eu/silvermoon/${key.name}`,
+      pending: true,
+      origin
+    });
+    (
+      repositories.manualConnections.list as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([
+      pendingRow(sheetKey, "applicant_sheet"),
+      pendingRow(manualKey, "dossier")
+    ]);
+    const reserve = repositories.evidence.reserve as ReturnType<typeof vi.fn>;
+    const reserveFresh = reserve.getMockImplementation() as (request: {
+      key: CharacterKey;
+    }) => Promise<unknown>;
+    reserve.mockImplementation(async (request: { key: CharacterKey }) =>
+      request.key.name === "manual" || request.key.name === "fromsheet"
+        ? {
+            kind: "reserved",
+            run: {
+              id:
+                request.key.name === "manual"
+                  ? "10000000-0000-4000-8000-000000000041"
+                  : "10000000-0000-4000-8000-000000000042",
+              key: request.key,
+              queueJobId: null,
+              status: "queued",
+              attempt: 1,
+              limitationCode: null,
+              parseLimitationCode: null,
+              errorCode: null,
+              createdAt: new Date("2026-09-15T12:00:00.000Z"),
+              startedAt: null,
+              completedAt: null
+            },
+            completed: null
+          }
+        : reserveFresh(request)
+    );
+
+    const result = await dossiers.read(root);
+    if (result.kind !== "ready") throw new Error("expected_ready");
+    const named = (name: string) =>
+      result.dossier.characters.find(
+        (character) => character.key.name === name
+      );
+    expect(named("fromsheet")).toMatchObject({
+      source: "manually_added",
+      origin: "application"
+    });
+    expect(named("manual")).toMatchObject({ source: "manually_added" });
+    expect(named("manual")).not.toHaveProperty("origin");
+  });
+
   it("merges the characters discovered from a manually connected character", async () => {
     // Break caught: adding a character starts a discovery run rooted at it,
     // which walks its Raider.IO alts and fingerprints its Blizzard guild
@@ -3917,7 +3987,8 @@ describe("manually connected characters", () => {
         level: 80,
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
-        pending: false
+        pending: false,
+        origin: "dossier"
       }
     ]);
     (
@@ -3984,6 +4055,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);
@@ -4018,6 +4090,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);
@@ -4047,6 +4120,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);
@@ -4099,6 +4173,7 @@ describe("manually connected characters", () => {
         guild: null,
         raiderIoUrl: "https://raider.io/characters/eu/silvermoon/manual",
         pending: false,
+        origin: "dossier",
         excluded: true
       }
     ]);

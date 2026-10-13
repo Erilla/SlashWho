@@ -762,6 +762,56 @@ async function logWrite(
   );
 }
 
+/**
+ * Whether two characters are already in one counting component, and whether
+ * each sits in a component with anyone else. Walks counting links only --
+ * never character_group_members, which lags until a recompute. Stops at
+ * `cap` nodes and reports `capped`, which callers treat as "different".
+ */
+export async function countingComponents(
+  pool: Pool,
+  rootId: string,
+  memberId: string,
+  cap = 2_000
+): Promise<{
+  same: boolean;
+  rootShared: boolean;
+  memberShared: boolean;
+  capped: boolean;
+}> {
+  const nodes = new Set<string>([rootId]);
+  let frontier = [rootId];
+  let capped = false;
+  while (frontier.length > 0 && !nodes.has(memberId)) {
+    const edges = await pool.query<{ a: string; b: string }>(
+      COUNTING_LINKS_FROM,
+      [frontier]
+    );
+    const next: string[] = [];
+    for (const edge of edges.rows)
+      for (const id of [edge.a, edge.b])
+        if (!nodes.has(id)) {
+          nodes.add(id);
+          next.push(id);
+        }
+    if (nodes.size > cap) {
+      capped = true;
+      break;
+    }
+    frontier = next;
+  }
+  const same = nodes.has(memberId);
+  const memberEdges = same
+    ? 1
+    : ((await pool.query(COUNTING_LINKS_FROM, [[memberId]])).rowCount ?? 0);
+  return {
+    same,
+    rootShared: nodes.size > 1,
+    memberShared: memberEdges > 0,
+    capped
+  };
+}
+
 /** Existing character ids by canonical key. Never inserts (P2). */
 export async function characterIds(
   client: Pick<PoolClient | Pool, "query">,

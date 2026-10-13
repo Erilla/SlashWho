@@ -116,6 +116,11 @@ export const dossierCharacterSchema = z
     guild: dossierGuildSchema.nullable().optional(),
     source: dossierSourceLabelSchema,
     hasManualConnection: z.boolean().optional(),
+    /**
+     * Set only on a manual connection the applicant sheet watcher made from an
+     * application. It changes the label alone; the connection is otherwise a
+     * manual one, with the same Remove and Exclude actions.
+     */
     origin: z.literal("application").optional(),
     evidenceState: dossierEvidenceStateSchema.optional(),
     /**

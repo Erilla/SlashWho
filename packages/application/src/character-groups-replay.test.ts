@@ -903,6 +903,32 @@ describe("page comparison", () => {
     ]);
   });
 
+  it("labels a manual connection made from an application as manually added, so origin weakens nothing", () => {
+    // Break caught: reading the applicant-sheet origin into the label would
+    // make the group page's manual row differ from today's page and raise a
+    // spurious label_weakened. `labelOf` is private, so this pins it through
+    // the comparison that uses it.
+    const graph = graphOf({
+      names: ["o", "a"],
+      links: [{ a: "o", b: "a", strength: "manual" }],
+      manual: [{ makerId: "o", targetId: "a", excluded: false }]
+    });
+    const fromApplication = {
+      ...row("a", "manually_added"),
+      subject: {
+        ...subject("a", "manually_added"),
+        origin: "application" as const
+      }
+    };
+    const legacy = legacyPages([
+      page("o", [row("o", "input"), fromApplication])
+    ]);
+    expect(
+      comparePages(baseAudit({ graph, roots: [key("o")] }), legacy, CONFIG)
+        .failures
+    ).toEqual([]);
+  });
+
   it("does not weaken a label that only changed within Raider.IO sources", () => {
     const graph = graphOf({
       names: ["o", "a"],

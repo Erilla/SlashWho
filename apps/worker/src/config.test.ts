@@ -448,6 +448,27 @@ it("accepts a one-minute applicant poll cadence and nothing shorter", () => {
   );
 });
 
+it("keeps applicant linking off unless explicitly enabled", () => {
+  // Break caught: linking writes reviewer-visible connections, so it must
+  // never start because a variable was missing or misspelt.
+  expect(loadWorkerConfig(environment).applicantWatcher.linkingEnabled).toBe(
+    false
+  );
+  expect(
+    loadWorkerConfig({ ...environment, APPLICANT_LINKING_ENABLED: "true" })
+      .applicantWatcher.linkingEnabled
+  ).toBe(true);
+  // An empty value is unset, as for APPLICANT_WATCHER_ENABLED: off, not a
+  // startup failure.
+  expect(
+    loadWorkerConfig({ ...environment, APPLICANT_LINKING_ENABLED: "" })
+      .applicantWatcher.linkingEnabled
+  ).toBe(false);
+  expect(() =>
+    loadWorkerConfig({ ...environment, APPLICANT_LINKING_ENABLED: "yes" })
+  ).toThrow("invalid_applicant_linking_enabled");
+});
+
 it("enables account mail only with complete private configuration", () => {
   expect(loadWorkerConfig(environment).accountMail).toBeUndefined();
   expect(() =>

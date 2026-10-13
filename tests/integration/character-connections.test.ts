@@ -8,6 +8,7 @@ import {
   altKey,
   startRepositoryDatabase
 } from "./repository-fixtures";
+import { countingComponents } from "../../packages/database/src";
 import type { TestRepositories } from "./test-repositories";
 
 const thirdKey = { region: "eu", realm: "draenor", name: "third" } as const;
@@ -1506,3 +1507,72 @@ const CHARACTER_GROUPS_TABLES = [
   "character_connection_write_log",
   "character_groups_maintenance"
 ];
+
+describe("character connections: counting components", () => {
+  let pool: Pool;
+  let stop: () => Promise<void>;
+
+  beforeAll(async () => {
+    ({ pool, stop } = await startRepositoryDatabase());
+  });
+  beforeEach(async () => {
+    await resetRepositoryTables(pool);
+  });
+  afterAll(async () => {
+    await stop();
+  });
+
+  async function insertCharacters(
+    names: string[]
+  ): Promise<Record<string, string>> {
+    const ids: Record<string, string> = {};
+    for (const name of names) {
+      const result = await pool.query<{ id: string }>(
+        `INSERT INTO characters
+           (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url)
+         VALUES ('eu', 'test', $1, $1, 'Mage', 80, $2) RETURNING id`,
+        [name, `https://raider.io/characters/eu/test/${name}`]
+      );
+      ids[name] = result.rows[0]!.id;
+    }
+    return ids;
+  }
+
+  async function insertObserved(a: string, b: string): Promise<void> {
+    const [low, high] = a < b ? [a, b] : [b, a];
+    await pool.query(
+      `INSERT INTO character_connections
+         (character_low_id, character_high_id, kind, source, observed_from_character_id, discovery_run_id, observed_at)
+       VALUES ($1, $2, 'observed', 'claimed', $1, gen_random_uuid(), now())`,
+      [low, high]
+    );
+  }
+
+  it("reports counting components from links alone", async () => {
+    const ids = await insertCharacters(["cca", "ccb", "ccc", "ccd", "cce"]);
+    // a-b observed; c-d via a manual link; e alone.
+    await insertObserved(ids.cca!, ids.ccb!);
+    await pool.query(
+      "INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name) VALUES ($1, 'eu', 'test', 'ccd')",
+      [ids.ccc]
+    );
+    expect(await countingComponents(pool, ids.cca!, ids.ccb!)).toEqual({
+      same: true,
+      rootShared: true,
+      memberShared: true,
+      capped: false
+    });
+    expect(await countingComponents(pool, ids.cca!, ids.ccc!)).toEqual({
+      same: false,
+      rootShared: true,
+      memberShared: true,
+      capped: false
+    });
+    expect(await countingComponents(pool, ids.cca!, ids.cce!)).toEqual({
+      same: false,
+      rootShared: true,
+      memberShared: false,
+      capped: false
+    });
+  });
+});

@@ -128,7 +128,18 @@ export function createFingerprintAlertNotifier(
             `Discord ID: ${escapeDiscord(applicant.discordId)}`,
             `Character: ${escapeDiscord(applicant.characterName)}`,
             `Character link: ${applicant.characterUrl}`,
-            `Dossier: ${applicant.dossierUrl ?? "pending character resolution"}`
+            `Dossier: ${applicant.dossierUrl ?? "pending character resolution"}`,
+            ...(applicant.linking
+              ? [
+                  `Linking: ${
+                    applicant.linking === "pending"
+                      ? "they'll be linked if they pass the checks"
+                      : applicant.linking === "over_cap"
+                        ? "too many to link automatically"
+                        : "automatic linking is off"
+                  }`
+                ]
+              : [])
           ].join("\n")
         : `${alert.event === "applicant_new_intents" ? "📨" : "⚠️"} ${alert.event} — ${details}`;
       const body = discordWebhook
@@ -159,8 +170,13 @@ export async function announceNewApplicantIntents(
   logger?: DiscoveryLogger,
   dossierBaseUrl?: string
 ): Promise<void> {
-  if (poll.baseline || poll.created === 0) return;
-  if (!poll.newApplicants?.length) {
+  if (poll.baseline) return;
+  // A new response alerts once, when first seen, whatever it created: its
+  // links may all be deferred. A deferred occurrence admitted later creates an
+  // intent but is not a new response, so it alerts nowhere. Only a caller that
+  // reports no per-response detail at all gets the count-only fallback.
+  if (poll.newApplicants === undefined) {
+    if (poll.created === 0) return;
     try {
       await notifier?.notify({
         event: "applicant_new_intents",
@@ -173,12 +189,13 @@ export async function announceNewApplicantIntents(
   }
   for (const applicant of poll.newApplicants) {
     try {
-      const { dossierPath, ...details } = applicant;
+      const { dossierPath, otherCharacters, linking, ...details } = applicant;
       await notifier?.notify({
         event: "applicant_new_intents",
-        details: { count: 1 },
+        details: { count: 1, ...(otherCharacters ? { otherCharacters } : {}) },
         applicant: {
           ...details,
+          ...(linking ? { linking } : {}),
           ...(dossierPath && dossierBaseUrl
             ? { dossierUrl: new URL(dossierPath, dossierBaseUrl).toString() }
             : {})

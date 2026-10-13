@@ -161,8 +161,7 @@ export function DossierCharacterList({
                 <CharacterProfileLinks character={character} />
               )}
               <span className="source-badge">
-                {character.source === "manually_added" &&
-                character.origin === "application"
+                {character.origin === "application"
                   ? "From application"
                   : sourceLabel[character.source]}
               </span>

@@ -174,6 +174,7 @@ export type FingerprintAlertNotifier = {
       characterName?: string | undefined;
       characterUrl: string;
       dossierUrl?: string;
+      linking?: "pending" | "over_cap" | "disabled";
     };
   }): Promise<void> | void;
 };

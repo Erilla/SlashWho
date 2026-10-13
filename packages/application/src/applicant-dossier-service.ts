@@ -898,7 +898,9 @@ function serializeDossierSubject(
     ...(character.hasManualConnection !== undefined
       ? { hasManualConnection: character.hasManualConnection }
       : {}),
-    ...(character.origin ? { origin: character.origin } : {}),
+    ...(character.origin === "application"
+      ? { origin: "application" as const }
+      : {}),
     ...(excluded ? { excluded: true as const } : {}),
     ...(evidence
       ? {
