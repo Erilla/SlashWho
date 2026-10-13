@@ -170,8 +170,13 @@ export async function announceNewApplicantIntents(
   logger?: DiscoveryLogger,
   dossierBaseUrl?: string
 ): Promise<void> {
-  if (poll.baseline || poll.created === 0) return;
-  if (!poll.newApplicants?.length) {
+  if (poll.baseline) return;
+  // A new response alerts once, when first seen, whatever it created: its
+  // links may all be deferred. A deferred occurrence admitted later creates an
+  // intent but is not a new response, so it alerts nowhere. Only a caller that
+  // reports no per-response detail at all gets the count-only fallback.
+  if (poll.newApplicants === undefined) {
+    if (poll.created === 0) return;
     try {
       await notifier?.notify({
         event: "applicant_new_intents",

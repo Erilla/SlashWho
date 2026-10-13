@@ -127,6 +127,44 @@ it("announces applicant details with both the character and dossier links", asyn
   });
 });
 
+it("sends a new response's detailed alert even when all of its links were deferred", async () => {
+  // Break caught: a response whose links were all deferred created nothing,
+  // and the early return on created === 0 dropped its only detailed alert.
+  const notify = vi.fn(async () => undefined);
+  await announceNewApplicantIntents(
+    {
+      baseline: false,
+      created: 0,
+      newApplicants: [
+        {
+          battletag: "Aria#123",
+          characterUrl: "https://raider.io/characters/eu/example/aria"
+        }
+      ]
+    },
+    { notify }
+  );
+  expect(notify).toHaveBeenCalledExactlyOnceWith({
+    event: "applicant_new_intents",
+    details: { count: 1 },
+    applicant: {
+      battletag: "Aria#123",
+      characterUrl: "https://raider.io/characters/eu/example/aria"
+    }
+  });
+});
+
+it("sends no count-only ping when a deferred occurrence is admitted later", async () => {
+  // Break caught: admitting an already-announced occurrence created an
+  // intent with no new response, and fell into a detail-less count ping.
+  const notify = vi.fn(async () => undefined);
+  await announceNewApplicantIntents(
+    { baseline: false, created: 1, newApplicants: [] },
+    { notify }
+  );
+  expect(notify).not.toHaveBeenCalled();
+});
+
 it("does not let an applicant alert failure interrupt intake", async () => {
   const notify = vi.fn(async () => {
     throw new Error("webhook unavailable");
@@ -1156,6 +1194,38 @@ describe("worker runtime", () => {
     expect(posted[0]).toContain(
       "Linking: they'll be linked if they pass the checks"
     );
+  });
+
+  it("renders the wording for an application whose linking is switched off", async () => {
+    const fetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) => {
+        void _url;
+        void _init;
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+    await notifier.notify({
+      event: "applicant_new_intents",
+      details: { count: 1, otherCharacters: 1 },
+      applicant: {
+        characterUrl: "https://raider.io/characters/eu/hyjal/tropipe",
+        linking: "disabled"
+      }
+    });
+    const content = (
+      JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as {
+        content: string;
+      }
+    ).content;
+    expect(content).toContain("Linking: automatic linking is off");
   });
 
   it("swallows and logs a non-successful maintainer webhook response", async () => {
