@@ -315,6 +315,7 @@ function DossierPageState({
   );
   useEffect(() => {
     if (dossier === patchedDossier.current && dossier !== null) return;
+    patchedDossier.current = null;
     if (dossier !== lastRead.current.dossier)
       lastRead.current = { dossier, at: Date.now() };
     // Any other read that shows a dossier is a full read too: the first one,
@@ -358,6 +359,7 @@ function DossierPageState({
         keepError?: boolean;
       }> = {}
     ) => {
+      patchedDossier.current = null;
       if (sequence !== undefined) appliedSequence.current = sequence;
       hasExpandedDossier.current = expanded;
       setDossier(value);
@@ -394,6 +396,7 @@ function DossierPageState({
       } else if (result.kind === "unexpected") {
         setInitialError(unexpectedDossierMessage);
       } else {
+        patchedDossier.current = null;
         setDossier(result.data);
       }
     }
@@ -725,13 +728,15 @@ function DossierPageState({
           fullDossierAtStart !== lastRead.current.dossier ||
           watched !== runWatch.watching()
         )
-          return { kind: "retry" };
+          return { kind: "retry", retryAfterMs: 0 };
         if (progress.kind === "ok") {
           const runs = progress.data.runs;
           const returned = new Set(runs.map((run) => run.id));
           setDossier((current) => {
             if (
               !current ||
+              (current !== fullDossierAtStart &&
+                current !== patchedDossier.current) ||
               signal.aborted ||
               sequenceAtStart !== appliedSequence.current ||
               fullDossierAtStart !== lastRead.current.dossier ||

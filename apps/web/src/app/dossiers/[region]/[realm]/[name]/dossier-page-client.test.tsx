@@ -2103,13 +2103,125 @@ describe("DossierPageClient staged research", () => {
     expect(screen.getByText(expanded.research.message)).toBeVisible();
   });
 
+  it("registers an unsequenced full read when old progress resolves before the render", async () => {
+    vi.useFakeTimers();
+    const oldRun = "10000000-0000-4000-8000-000000000013";
+    const newRun = "10000000-0000-4000-8000-000000000014";
+    let resolveOldProgress!: (response: Response) => void;
+    let resolveFull!: (response: Response) => void;
+    const requests: string[] = [];
+    const fresh: ApplicantDossier = {
+      ...withEvidenceState(expanded, "scanning"),
+      evidenceRunIds: [newRun],
+      characters: expanded.characters.map((row) => ({
+        ...row,
+        evidenceState: "scanning",
+        researchState: "gathering",
+        collectionProgress: [{ id: "publication", state: "pending" }]
+      }))
+    };
+    vi.stubGlobal("fetch", (input: string) => {
+      requests.push(input);
+      if (input === `/api/dossiers/evidence-runs?ids=${oldRun}`)
+        return new Promise<Response>((resolve) => {
+          resolveOldProgress = resolve;
+        });
+      if (input === dossierPath)
+        return new Promise<Response>((resolve) => {
+          resolveFull = resolve;
+        });
+      if (input === `/api/dossiers/evidence-runs?ids=${newRun}`)
+        return Promise.resolve(
+          Response.json({
+            runs: [
+              {
+                id: newRun,
+                key: identity,
+                state: "running",
+                evidenceState: "scanning",
+                version: "fresh",
+                collectionProgress: []
+              }
+            ]
+          })
+        );
+      return Promise.reject(new Error(`Unexpected request: ${input}`));
+    });
+    const page = render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={{
+          ...withEvidenceState(expanded, "scanning"),
+          evidenceRunIds: [oldRun]
+        }}
+        jobId={null}
+      />
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    page.rerender(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+    await flushAsyncWork();
+    await act(async () => {
+      resolveFull(Response.json(fresh));
+      for (let turn = 0; turn < 12; turn++) await Promise.resolve();
+      resolveOldProgress(
+        Response.json({
+          runs: [
+            {
+              id: oldRun,
+              key: identity,
+              state: "running",
+              evidenceState: "scanning",
+              version: "old",
+              collectionProgress: [
+                { id: "warcraft_logs_history", state: "active" }
+              ]
+            }
+          ]
+        })
+      );
+      for (let turn = 0; turn < 12; turn++) await Promise.resolve();
+    });
+    expect(screen.queryAllByText("Scanning report history")).toEqual([]);
+    expect(screen.getByText("Waiting to start")).toBeVisible();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(requests).toContain(`/api/dossiers/evidence-runs?ids=${newRun}`);
+  });
+
   it("ignores a progress response overtaken by a manual full read", async () => {
     vi.useFakeTimers();
     const runId = "10000000-0000-4000-8000-000000000013";
+    const newRun = "10000000-0000-4000-8000-000000000014";
+    const progressRequests: string[] = [];
     let progressReads = 0;
     let resolveProgress!: (response: Response) => void;
     vi.stubGlobal("fetch", (input: string) => {
       if (input.startsWith("/api/dossiers/evidence-runs")) {
+        progressRequests.push(input);
+        if (input.endsWith(newRun))
+          return Promise.resolve(
+            Response.json({
+              runs: [
+                {
+                  id: newRun,
+                  key: identity,
+                  state: "running",
+                  evidenceState: "scanning",
+                  collectionProgress: [],
+                  version: "new"
+                }
+              ]
+            })
+          );
         if (++progressReads === 1)
           return Promise.resolve(
             Response.json(
@@ -2126,7 +2238,12 @@ describe("DossierPageClient staged research", () => {
           Response.json({ mode: "full", lastCollectedAt: null })
         );
       if (input === dossierPath)
-        return Promise.resolve(Response.json(expanded));
+        return Promise.resolve(
+          Response.json({
+            ...withEvidenceState(expanded, "scanning"),
+            evidenceRunIds: [newRun]
+          })
+        );
       return Promise.reject(new Error(`Unexpected request: ${input}`));
     });
     render(
@@ -2169,6 +2286,12 @@ describe("DossierPageClient staged research", () => {
     });
     expect(screen.queryAllByText("Scanning report history")).toEqual([]);
     expect(screen.getByText(expanded.research.message)).toBeVisible();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(progressRequests).toContain(
+      `/api/dossiers/evidence-runs?ids=${newRun}`
+    );
   });
 
   it("asks after a gathering dossier's runs, and re-reads it only once one publishes", async () => {
