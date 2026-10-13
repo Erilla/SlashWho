@@ -51,6 +51,7 @@ import { createApplicantSheetClient } from "./applicant-sheet";
 import { decodeApplicantIdentity } from "./applicant-identity";
 import {
   drainApplicantIntents,
+  isApplicantPollDue,
   pollApplicantSheet,
   wasSuppressedAt
 } from "./applicant-watcher";
@@ -938,6 +939,9 @@ function createApplicantSheetTick(
 
   async function pollSheet(): Promise<void> {
     const pollStartedAt = clock();
+    // last_polled_at is this poll's start, so the next due check measures a
+    // whole cadence from when this tick began, however long the read took.
+    const pollStartedAtDate = new Date();
     try {
       let numericChecks = 0;
       let numericAllowance: boolean | undefined;
@@ -945,6 +949,7 @@ function createApplicantSheetTick(
       const poll = await pollApplicantSheet({
         pool: pool as Pool,
         readRows: () => applicantSheet.readRows(),
+        now: () => pollStartedAtDate,
         resolveDossierPath: (identity) => resolvedDossiers.get(identity),
         isSuppressed: async (identity, observedAt) => {
           const decoded = decodeApplicantIdentity(identity);
@@ -1052,12 +1057,14 @@ function createApplicantSheetTick(
         "SELECT last_polled_at FROM applicant_source_state WHERE source = $1",
         ["applicant_sheet"]
       );
-      const last = due.rows[0]?.last_polled_at;
       if (
-        (Date.now() >= applicantNextPollAttempt && !last) ||
-        (Date.now() >= applicantNextPollAttempt &&
-          Date.now() - new Date(last as string).getTime() >=
-            config.applicantWatcher.cadenceMs)
+        isApplicantPollDue({
+          now: Date.now(),
+          lastPolledAt: due.rows[0]?.last_polled_at as
+            Date | string | null | undefined,
+          nextAttemptAt: applicantNextPollAttempt,
+          cadenceMs: config.applicantWatcher.cadenceMs
+        })
       ) {
         await pollSheet();
       }
@@ -1228,10 +1235,11 @@ export async function createWorkerRuntime(
     await initializedQueue.workFingerprintAdmissions(
       fingerprintAdmissionWork(context, dispatchAdmittedFingerprintRun)
     );
-    await initializedQueue.scheduleEvidenceResume(async () => {
-      await evidenceResumeSweep(context);
-      await applicantSheetTick?.();
-    });
+    await initializedQueue.scheduleEvidenceResume(() =>
+      evidenceResumeSweep(context)
+    );
+    if (applicantSheetTick)
+      await initializedQueue.scheduleApplicantSheetTick(applicantSheetTick);
     await initializedQueue.scheduleMaintenanceCleanup(() =>
       maintenanceCleanup(context)
     );

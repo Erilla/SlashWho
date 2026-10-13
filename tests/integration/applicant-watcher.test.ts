@@ -651,3 +651,18 @@ it("records a count a new parser version no longer reads without announcing it",
   });
   await poll([dropped, dropped]);
 });
+
+it("stamps last_polled_at with the time the poll was given, not the database's now()", async () => {
+  // Break caught: a late stamp made a one-minute cadence poll every two minutes.
+  const startedAt = new Date("2026-10-13T12:00:00.000Z");
+  await pollApplicantSheet({
+    pool,
+    readColumn: async () => [a],
+    backlogLimit: 20,
+    now: () => startedAt
+  });
+  const state = await pool.query<{ last_polled_at: Date }>(
+    "SELECT last_polled_at FROM applicant_source_state WHERE source = 'applicant_sheet'"
+  );
+  expect(state.rows[0]?.last_polled_at).toEqual(startedAt);
+});

@@ -16,6 +16,28 @@ import type { WorkerConfig } from "./config";
 
 const source = "applicant_sheet";
 
+/**
+ * A poll is due a little early: cron ticks start with jitter, and a tick that
+ * starts even slightly before a full cadence has passed would otherwise skip a
+ * whole period.
+ */
+export const applicantPollToleranceMs = 15_000;
+
+/** Whether this tick should read the Sheet. `lastPolledAt` is a poll's start. */
+export function isApplicantPollDue(input: {
+  now: number;
+  lastPolledAt: Date | string | null | undefined;
+  nextAttemptAt: number;
+  cadenceMs: number;
+}): boolean {
+  if (input.now < input.nextAttemptAt) return false;
+  if (!input.lastPolledAt) return true;
+  return (
+    input.now - new Date(input.lastPolledAt).getTime() >=
+    input.cadenceMs - applicantPollToleranceMs
+  );
+}
+
 export type NewApplicant = {
   battletag?: string | undefined;
   discordId?: string | undefined;

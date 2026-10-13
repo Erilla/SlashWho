@@ -2300,7 +2300,7 @@ describe("worker runtime", () => {
   it("times the applicant sheet poll and drain", async () => {
     // Break caught (#507): the poll and drain logged counts but no duration,
     // so a slow Sheet read that held up the resume tick could not be seen.
-    // The stepping clock is read at the sweep, the tick, the poll and the
+    // The stepping clock is read at the tick, the poll and the
     // drain, each start and record 25ms apart.
     vi.mocked(pollApplicantSheet).mockResolvedValueOnce({
       baseline: false,
@@ -2328,7 +2328,7 @@ describe("worker runtime", () => {
       logger
     );
 
-    await fakes.evidenceResumeHandler?.();
+    await fakes.applicantSheetTickHandler?.();
 
     expect(applicantRecords(logger)).toEqual([
       {
@@ -2374,7 +2374,7 @@ describe("worker runtime", () => {
       logger
     );
 
-    await fakes.evidenceResumeHandler?.();
+    await fakes.applicantSheetTickHandler?.();
 
     expect(applicantRecords(logger)).toEqual([
       {
@@ -2395,6 +2395,96 @@ describe("worker runtime", () => {
       "private-value"
     );
     await runtime.stop();
+  });
+
+  it("runs the applicant watcher on its own schedule, not the evidence resume sweep", async () => {
+    // Break caught: inside the five-minute resume cron, no cadence setting
+    // could poll more often than every five minutes.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    try {
+      vi.mocked(drainApplicantIntents).mockResolvedValue({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0
+      });
+      vi.mocked(pollApplicantSheet).mockResolvedValue({
+        baseline: false,
+        rebaselined: false,
+        created: 0,
+        backlog: 0,
+        invalid: 0,
+        truncated: 0,
+        newApplicants: []
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+
+      await fakes.evidenceResumeHandler?.();
+      expect(pollApplicantSheet).not.toHaveBeenCalled();
+
+      await fakes.applicantSheetTickHandler?.();
+      expect(pollApplicantSheet).toHaveBeenCalledTimes(1);
+      await runtime.stop();
+    } finally {
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
+  });
+
+  it("registers no applicant tick while the watcher is disabled", async () => {
+    const fakes = runtimeFakes();
+    const runtime = await createWorkerRuntime(config, fakes.dependencies);
+
+    expect(fakes.applicantSheetTickHandler).toBeUndefined();
+    await runtime.stop();
+  });
+
+  it("stamps a poll with the time it started, not the time its read finished", async () => {
+    // Break caught: stamping after the read made every next tick look early.
+    vi.mocked(pollApplicantSheet).mockReset();
+    vi.mocked(drainApplicantIntents).mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const startedAt = new Date("2026-10-13T12:00:00.000Z");
+      vi.setSystemTime(startedAt);
+      let stamped: Date | undefined;
+      vi.mocked(pollApplicantSheet).mockImplementationOnce(async (input) => {
+        vi.setSystemTime(new Date(startedAt.getTime() + 5_000));
+        stamped = input.now?.();
+        return {
+          baseline: false,
+          rebaselined: false,
+          created: 0,
+          backlog: 0,
+          invalid: 0,
+          truncated: 0,
+          newApplicants: []
+        };
+      });
+      vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
+        admitted: 0,
+        suppressed: 0,
+        deferred: 0
+      });
+      const fakes = runtimeFakes();
+      const runtime = await createWorkerRuntime(applicantConfig, {
+        ...fakes.dependencies,
+        createEvidenceGateway: applicantGateway
+      });
+
+      await fakes.applicantSheetTickHandler?.();
+
+      expect(stamped).toEqual(startedAt);
+      await runtime.stop();
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(pollApplicantSheet).mockReset();
+      vi.mocked(drainApplicantIntents).mockReset();
+    }
   });
 
   it("completes an abandoned run from its staged scan, and says so in counts alone", async () => {
