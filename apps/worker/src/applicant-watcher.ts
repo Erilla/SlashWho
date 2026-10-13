@@ -126,7 +126,7 @@ export async function reconcileApplicantCounts(
   startMark: number | null;
   /** Identities whose occurrence count rose in this poll (recorded or deferred). */
   risen: ReadonlySet<string>;
-  /** New occurrences from deferred entries written before marks existed. */
+  /** New occurrences from deferred entries written before marks existed, or while the mark was NULL. */
   unmarkedOccurrences: { identity: string; index: number }[];
   applications: { recorded: number; ambiguous: number; overCap: number };
 }> {
@@ -277,7 +277,10 @@ export async function reconcileApplicantCounts(
               AND member.member_intent_sequence IS NULL`,
           [identity, sequence]
         );
-        if (occurrence.mark === "unmarked")
+        // A mark of null was deferred on the first poll after deploy: like a
+        // pre-mark entry, it belongs to no new response and keeps its own
+        // per-occurrence alert. Neither records an application.
+        if (occurrence.mark === "unmarked" || occurrence.mark === null)
           unmarkedOccurrences.push({ identity, index: occurrence.index });
         if (
           intake &&

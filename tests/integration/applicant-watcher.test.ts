@@ -1046,6 +1046,48 @@ it("alerts once per new response, even when all its links are deferred", async (
   expect(later.newApplicants).toEqual([]);
 });
 
+it("alerts a link deferred on the first poll after deploy once it is admitted, without an application", async () => {
+  // Break caught: a link deferred while the mark was NULL carried mark null,
+  // so once admitted it was neither a new response nor an unmarked
+  // occurrence, and alerted nowhere.
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  await pool.query(
+    "UPDATE applicant_source_state SET submitted_serial_mark = NULL"
+  );
+  await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    isSuppressed: async (identity) => (identity === tpId ? "defer" : false)
+  });
+  const later = await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(later.newApplicants).toEqual([
+    expect.objectContaining({ characterUrl: tp })
+  ]);
+  expect(await applications()).toEqual([]);
+});
+
 it("sends no alert for an edited response whose counts did not rise", async () => {
   await resetApplicantSource();
   await pollRows([[5, `${tp} ${tc}`]]);
