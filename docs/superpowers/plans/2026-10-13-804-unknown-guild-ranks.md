@@ -1,6 +1,6 @@
 # Unknown-guild historic rank handling (#804)
 
-Status: proposed; implementation awaits Manager review on the draft PR.
+Status: approved at `3a06e2cc` in review 5506082765; implementation in progress.
 
 Issue: <https://github.com/Erilla/SlashWho/issues/804>
 
@@ -120,7 +120,7 @@ change. Dossier responses stay `Cache-Control: no-store`.
 
 ## Test-first implementation sequence
 
-- [ ] Client fixtures: test each recorded response with the other guild endpoint
+- [x] Client fixtures: test each recorded response with the other guild endpoint
       returning success and the pair together; all classify as marked guild
       not found. Use controlled deferred responses for literal-then-503 and
       503-then-literal, plus literal/429 with `Retry-After` in both completion
@@ -131,13 +131,13 @@ change. Dossier responses stay `Cache-Control: no-store`.
       400/422, malformed JSON, exact-message mismatch, literal with Retry-After,
       timeout and caller abort while the other half is pending. Keep the existing
       unknown-character test unchanged. Commit the minimal client change.
-- [ ] Web fallback: test checked null write-through, absence of a limitation,
+- [x] Web fallback: test checked null write-through, absence of a limitation,
       second read from persisted evidence with no gateway call, failed writes,
       and a mixed no-match/outage dossier. Assert no numeric zero is introduced.
       For bare-404 unavailable/http_4xx and generic unmarked not_found, assert
       no recordLookup call, a limitation, and lookup on the next read.
       Implement and commit the fallback change.
-- [ ] Gateway/logging: test negative-cache replay and TTL expiry, independent
+- [x] Gateway/logging: test negative-cache replay and TTL expiry, independent
       concurrent read scopes, mixed failures and visitor overrides. Exercise
       timeouts through the actual gateway timeout signal passed to a client
       fake: rejection becomes one timeout counter on the requesting scope.
@@ -149,7 +149,7 @@ change. Dossier responses stay `Cache-Control: no-store`.
       Extend the web logger allowlist and its exact-field coverage; test serialised
       `http_request` contains closed numeric fields and no URL, guild name or
       upstream body. Retain the response no-store regression test. Commit.
-- [ ] Worker: test new no-match stamps null and completes, a recent null check
+- [x] Worker: test new no-match stamps null and completes, a recent null check
       makes no request, the exact seven-day boundary re-checks and can resolve
       a rank, missing/invalid/future timestamps re-check, and outages remain
       limited. Recent checks must come from storedEvidence.parseOnlyKills by
@@ -178,7 +178,7 @@ runs in this chat and this worktree. Never merge or enable auto-merge.
   settlement, explicit answered-guild marker versus bare 404, and gateway
   catch-all timeout/network counters with uncounted caller abort. Seven days
   and per-class counters were agreed in that review; implementation still
-  awaits acceptance of these amendments.
+  received approval in review 5506082765.
 
 ## Deployment acceptance hand-off
 
