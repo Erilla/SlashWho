@@ -1,4 +1,4 @@
-import { errorName } from "./error-name";
+import { errorFields } from "@slashwho/application";
 
 type ErrorLogger = { info(value: Record<string, unknown>): void };
 
@@ -21,13 +21,13 @@ export function installProcessErrorHandlers(
   target.on("uncaughtException", (error) => {
     logger.info({
       event: "web_uncaught_exception",
-      errorName: errorName(error)
+      ...errorFields(error)
     });
   });
   target.on("unhandledRejection", (reason) => {
     logger.info({
       event: "web_unhandled_rejection",
-      errorName: errorName(reason)
+      ...errorFields(reason)
     });
   });
 }

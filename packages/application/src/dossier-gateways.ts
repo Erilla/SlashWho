@@ -65,6 +65,7 @@ export type WclCredentials = Readonly<{
 }>;
 
 class RankingLookupFailure extends Error {
+  override readonly name = "RankingLookupFailure";
   constructor(
     readonly result: Extract<MythicBossRankingsResult, { kind: "limitation" }>
   ) {

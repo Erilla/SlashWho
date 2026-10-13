@@ -47,3 +47,40 @@ describe("web process error handlers", () => {
     }
   );
 });
+
+it.each(["uncaughtException", "unhandledRejection"])(
+  "records safe code and explicit name for %s",
+  async (event) => {
+    class Stable extends Error {
+      override readonly name = "StableFailure";
+    }
+    Object.defineProperty(Stable, "name", { value: "te" });
+    const target = new EventEmitter();
+    const { logger, lines } = capturedLogger();
+    installProcessErrorHandlers(target, logger);
+    target.emit(event, new Stable("rankings_unavailable"));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      errorName: "StableFailure",
+      errorCode: "rankings_unavailable"
+    });
+  }
+);
+
+it("omits arbitrary snake_case text and non-error rejection payloads", async () => {
+  const target = new EventEmitter();
+  const { logger, lines } = capturedLogger();
+  installProcessErrorHandlers(target, logger);
+  target.emit("unhandledRejection", new Error("private_character_realm"));
+  target.emit("unhandledRejection", "https://private.example/payload");
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(JSON.parse(lines[0]!)).toMatchObject({
+    errorName: "Error",
+    errorCode: null
+  });
+  expect(JSON.parse(lines[1]!)).toMatchObject({
+    errorName: "string",
+    errorCode: null
+  });
+  expect(lines.join()).not.toContain("private");
+});
