@@ -1265,22 +1265,22 @@ const CHARACTER_GROUPS_RECOMPUTE_BUDGET_MS = 30_000;
 async function maintenanceCleanup(context: WorkerContext): Promise<void> {
   try {
     await cacheCleanup(context);
-    if (context.config.applicantWatcher.enabled) {
-      // Its own try/catch: a failure here must never skip the recompute.
-      try {
-        const cleaned = await closeStaleApplicantApplications(
-          context.pool as Pool
-        );
-        context.logger?.info({
-          event: "applicant_applications_cleanup",
-          ...cleaned
-        });
-      } catch (error) {
-        context.logger?.info({
-          event: "applicant_applications_cleanup_failed",
-          errorName: errorName(error)
-        });
-      }
+    // Whatever the watcher flag says: applications recorded before it was
+    // switched off must still expire and be deleted on time. Its own
+    // try/catch: a failure here must never skip the recompute.
+    try {
+      const cleaned = await closeStaleApplicantApplications(
+        context.pool as Pool
+      );
+      context.logger?.info({
+        event: "applicant_applications_cleanup",
+        ...cleaned
+      });
+    } catch (error) {
+      context.logger?.info({
+        event: "applicant_applications_cleanup_failed",
+        errorName: errorName(error)
+      });
     }
   } finally {
     await characterGroupsRecompute(context);

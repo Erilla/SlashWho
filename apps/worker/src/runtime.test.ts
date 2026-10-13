@@ -2790,12 +2790,14 @@ describe("worker runtime", () => {
     await runtime.stop();
   });
 
-  it("does not close stale applications when the watcher is off", async () => {
+  it("closes stale applications even when the watcher is off", async () => {
+    // Break caught: switching the watcher off stopped retention, so open
+    // applications kept their member rows past the 7- and 30-day limits.
     vi.mocked(closeStaleApplicantApplications).mockClear();
     const fakes = runtimeFakes();
     const runtime = await createWorkerRuntime(config, fakes.dependencies);
     await fakes.maintenanceHandler?.();
-    expect(closeStaleApplicantApplications).not.toHaveBeenCalled();
+    expect(closeStaleApplicantApplications).toHaveBeenCalledTimes(1);
     await runtime.stop();
   });
 
