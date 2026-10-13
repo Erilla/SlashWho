@@ -1,4 +1,5 @@
 import { hkdfSync } from "node:crypto";
+import { enqueueFingerprintAdmissionEvidence } from "./fingerprint-admission-evidence";
 import {
   createApplicantEvidenceJobHandler,
   cleanupExpired,
@@ -565,50 +566,14 @@ function buildHandlers(
     },
     enqueueFullEvidence: async (key, root) => {
       const at = new Date();
-      // A fingerprint admission is a genuinely new dossier connection, so
-      // use `at` as the cutoff and collect its complete public log history.
-      // `reserve` coalesces an already active collection instead of queuing
-      // duplicate work.
-      const reservation = await repositories.evidence.reserve({
+      await enqueueFingerprintAdmissionEvidence({
         key,
-        origin: "fingerprint_admission",
         root,
-        freshnessCutoff: at,
         at,
-        phasePlan: fullEvidencePhasePlan()
+        freshnessMs: config.evidenceFreshnessHours * 60 * 60_000,
+        evidence: repositories.evidence,
+        queue
       });
-      if (reservation.kind !== "reserved") {
-        const active =
-          reservation.kind === "fresh" ? reservation.active : reservation.run;
-        if (active?.queueJobId)
-          await queue.promoteCharacterEvidence(
-            active.queueJobId,
-            evidenceRunPriority("fingerprint_admission")
-          );
-        else if (active?.status === "queued" && active.queueJobId === null) {
-          const jobId = await queue.enqueueCharacterEvidence(active.id, {
-            priority: Math.max(
-              evidenceRunPriority(active.origin ?? "fingerprint_admission"),
-              evidenceRunPriority("fingerprint_admission")
-            ),
-            enqueuedAt: at.toISOString(),
-            mode: active.lightRefresh ? "light" : "full"
-          });
-          await repositories.evidence.markEnqueued(active.id, jobId);
-        }
-        return;
-      }
-      const queueJobId = await queue.enqueueCharacterEvidence(
-        reservation.run.id,
-        {
-          enqueuedAt: at.toISOString(),
-          mode: "full",
-          priority: evidenceRunPriority(
-            reservation.run.origin ?? "fingerprint_admission"
-          )
-        }
-      );
-      await repositories.evidence.markEnqueued(reservation.run.id, queueJobId);
     },
     requestCap: config.discoveryRequestCap,
     negativeCacheTtlMs: config.negativeCacheTtlMs,

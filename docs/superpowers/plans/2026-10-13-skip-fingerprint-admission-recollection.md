@@ -4,7 +4,7 @@
 
 **Goal:** Avoid queuing fingerprint-admission evidence work when a complete, full-scope publication is already fresh, while still recollecting fresh light or partial/capped evidence.
 
-**Architecture:** Keep the ordinary evidence freshness policy in the shared reservation repository. Fingerprint admission first reserves at the configured freshness cutoff; if that result is fresh but its selected full publication is partial, light, or not full mode, repeat the reservation with a cutoff of `at` to force full collection. A fresh complete full-mode publication needs no new reservation. Existing active-run promotion and missing-job repair remain unchanged.
+**Architecture:** Keep the ordinary evidence freshness policy in the shared reservation repository. Fingerprint admission first reserves at the configured freshness cutoff; if that result is fresh but its selected full publication is partial, light, or not full mode, repeat the reservation with a cutoff of `at` to force full collection. A fresh complete full-mode publication needs no new reservation. Extract the dispatch decision into a small worker helper so Docker tests can exercise it with the real PostgreSQL repository and pg-boss queue. Existing active-run promotion and missing-job repair remain unchanged.
 
 **Tech Stack:** TypeScript, worker runtime, Vitest, PostgreSQL-backed integration suite.
 
@@ -25,42 +25,38 @@
 - A fresh partial/capped run still causes a full run.
 - A complete full-mode publication older than the configured window still causes a full run.
 - Existing queued/running work is joined and promoted/repaired without creating duplicate work.
+- Every evidence `request_cap` and `parse_request_cap` path publishes `partial`, so a capped run cannot pass the reuse predicate as `complete`.
 
 ---
 
-### Task 1: Reuse complete fresh fingerprint evidence
+### Implementation: Pin cap and reservation behavior, then reuse complete evidence
 
 **Files:**
-- Modify: `apps/worker/src/runtime.ts` (`enqueueFullEvidence`)
+
+- Create: `apps/worker/src/fingerprint-admission-evidence.ts` (freshness decision and enqueue/repair helper)
+- Modify: `apps/worker/src/runtime.ts` (`enqueueFullEvidence` delegates to the helper)
 - Test: `apps/worker/src/runtime.test.ts`
+- Test: `packages/application/src/applicant-evidence-job-handler.test.ts`
+- Test: `tests/integration/fingerprint-admission-freshness.test.ts`
 
 **Interfaces:**
-- Consume `EvidenceReservationResult.completed.run` and its existing `mode`, `status`, and `lightRefresh` fields; no database API or schema changes.
-- Continue to dispatch only through `queue.enqueueCharacterEvidence` and persist `markEnqueued` as today.
 
-- [ ] **Step 1: Add failing runtime tests**
+- Read `EvidenceReservationResult.completed.run` fields `mode`, `status`, and `lightRefresh`; no database API or schema change.
+- Exercise the same helper from runtime and PostgreSQL tests, using `createPostgresRepositories(...).evidence` and `createDiscoveryQueue`.
+- Keep dispatch through `enqueueCharacterEvidence`, promotion through `promoteCharacterEvidence`, and persistence through `markEnqueued`.
 
-Cover a fresh `complete`, `full`, non-light result (no forced reservation or evidence enqueue); fresh `light` and fresh `partial` results (force a second reservation at `at`, then dispatch its full run); and a complete full-mode result outside the configured window (ordinary stale reservation creates and dispatches a full run). Keep the existing active-run promotion and undispatched-job repair tests.
+- [x] Add/retain handler-level assertions that `request_cap` and `parse_request_cap` publish `partial`.
+- [x] Add runtime tests for complete fresh reuse, light/partial forced full reservation, stale full collection, and active work promotion/repair.
+- [x] Add Docker-backed cases for complete reuse, light and partial recollection, and active priority-20 promotion without duplicates.
+- [x] Implement the freshness policy in the worker helper and delegate from the runtime.
+- [x] Run focused runtime and cap handler tests, then the dedicated PostgreSQL/pg-boss integration test.
 
-- [ ] **Step 2: Run the focused worker test**
-
-Run: `corepack pnpm exec vitest run apps/worker/src/runtime.test.ts -t "fingerprint admission"`
-
-Expected: the new reuse and forced-full tests fail before the runtime change; existing join/repair cases continue to run when selected.
-
-- [ ] **Step 3: Implement the minimum policy in `enqueueFullEvidence`**
-
-Use `at - config.evidenceFreshnessHours * 60 * 60_000` for the first reservation. Reuse a fresh publication only when its run is `mode === "full"`, `status === "complete"`, and `lightRefresh !== true`. For a fresh result that fails those checks, make a second reservation with `freshnessCutoff: at`; pass that result through the existing dispatch, active-run promotion and repair logic. Do not create an additional run when the second reservation joins active work.
-
-- [ ] **Step 4: Verify focused tests**
-
-Run: `corepack pnpm exec vitest run apps/worker/src/runtime.test.ts -t "fingerprint admission"`
-
-Expected: all selected cases pass and no other source file or public interface changes.
-
-- [ ] **Step 5: Commit the implementation**
+Focused verification completed:
 
 ```powershell
-git add apps/worker/src/runtime.ts apps/worker/src/runtime.test.ts
-git commit -m "fix(worker): reuse fresh fingerprint evidence"
+corepack pnpm exec vitest run apps/worker/src/runtime.test.ts -t "fingerprint admission|fingerprint reader joins"
+corepack pnpm exec vitest run packages/application/src/applicant-evidence-job-handler.test.ts -t "publishes a parse-capped search as partial|publishes a capped ranked walk as a partial"
+corepack pnpm test:integration tests/integration/fingerprint-admission-freshness.test.ts --maxWorkers=2
 ```
+
+Railway measurement after deployment remains an acceptance requirement; local tests do not replace it.
