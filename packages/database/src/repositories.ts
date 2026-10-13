@@ -402,13 +402,14 @@ export type LatestTierSearch = Readonly<{
  */
 export type EvidenceRunProgress = Readonly<{
   id: string;
+  key: CharacterKey;
   status: EvidenceRunStatus;
   /**
    * Whether the run carries a limitation while still active: a points-budget
    * deferral, which can hold a `running` run for up to an hour.
    */
   deferred: boolean;
-  phaseStates: readonly string[];
+  phases: readonly Pick<EvidenceRunPhase, "id" | "state" | "limitationCode">[];
 }>;
 
 export type TierSearchReservationResult =

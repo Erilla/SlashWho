@@ -26,9 +26,11 @@ import {
   evidenceRunsApiPath,
   fetchDossierApi,
   parseDossierResponse,
-  type DossierApiResult
+  type DossierApiResult,
+  type DossierRequestInit
 } from "../../../../../lib/dossier-api";
 import { createEvidenceRunWatch } from "../../../../../lib/evidence-run-watch";
+import { patchEvidenceProgress } from "../../../../../lib/evidence-progress-patch";
 import { raiderIoCharacterUrl } from "../../../../../lib/dossier-path";
 import { fetchFirstDossierRead } from "../../../../../lib/early-dossier-read";
 import { evidenceFilter } from "../../../../../lib/character-visibility";
@@ -290,19 +292,40 @@ function DossierPageState({
   const requestSequence = useRef(0);
   const appliedSequence = useRef(0);
   // The runs the shown dossier is waiting on (#690). The poll asks after these
-  // and re-reads the dossier only once one of them has moved.
+  // and re-reads the dossier only for published evidence.
   const [runWatch] = useState(createEvidenceRunWatch);
   // The dossier the poll's own read produced, which it has already counted.
   const polledDossier = useRef<ApplicantDossier | null>(null);
+  // Courtesy row updates are not full reads and cannot reset watch/retry times.
+  const patchedDossier = useRef<ApplicantDossier | null>(null);
   // The dossier on show and when it was read, for its retry times.
   const lastRead = useRef({ dossier: initialDossier, at: Date.now() });
+  const fullReadDurations = useRef(new WeakMap<ApplicantDossier, number>());
+  const readFullDossier = useCallback(
+    async (path: string, init: DossierRequestInit = {}) => {
+      const startedAt = performance.now();
+      const result = await fetchDossierApi(path, applicantDossierSchema, init);
+      if (result.kind === "ok")
+        fullReadDurations.current.set(
+          result.data,
+          performance.now() - startedAt
+        );
+      return result;
+    },
+    []
+  );
   useEffect(() => {
+    if (dossier === patchedDossier.current && dossier !== null) return;
+    patchedDossier.current = null;
     if (dossier !== lastRead.current.dossier)
       lastRead.current = { dossier, at: Date.now() };
     // Any other read that shows a dossier is a full read too: the first one,
     // research, a refresh, a tier search.
     if (dossier !== polledDossier.current)
-      runWatch.shown(dossier?.evidenceRunIds ?? []);
+      runWatch.shown(
+        dossier?.evidenceRunIds ?? [],
+        dossier ? fullReadDurations.current.get(dossier) : undefined
+      );
   }, [dossier, runWatch]);
 
   useEffect(() => {
@@ -337,6 +360,7 @@ function DossierPageState({
         keepError?: boolean;
       }> = {}
     ) => {
+      patchedDossier.current = null;
       if (sequence !== undefined) appliedSequence.current = sequence;
       hasExpandedDossier.current = expanded;
       setDossier(value);
@@ -350,30 +374,30 @@ function DossierPageState({
   // back rather than reloading the page and discarding the polls in flight.
   const refreshDossier = useCallback(async () => {
     const sequence = ++requestSequence.current;
-    const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
+    const result = await readFullDossier(dossierApi, {
       cache: "no-store"
     });
     if (result.kind !== "ok" || sequence < appliedSequence.current) return;
     showDossier(result.data, { sequence });
     setPollUnavailable(false);
     setPollStopped(false);
-  }, [dossierApi, showDossier]);
+  }, [dossierApi, showDossier, readFullDossier]);
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function readInitialDossier() {
-      const result = await fetchDossierApi(
-        `${dossierApi}?scope=initial`,
-        applicantDossierSchema,
-        { cache: "no-store", signal: controller.signal }
-      );
+      const result = await readFullDossier(`${dossierApi}?scope=initial`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
       if (controller.signal.aborted || hasExpandedDossier.current) return;
       if (result.kind === "refused") {
         setInitialError(apiError(result.response, result.body));
       } else if (result.kind === "unexpected") {
         setInitialError(unexpectedDossierMessage);
       } else {
+        patchedDossier.current = null;
         setDossier(result.data);
       }
     }
@@ -411,7 +435,7 @@ function DossierPageState({
     }
 
     return () => controller.abort();
-  }, [activeJobId, dossierApi, initialDossier, showDossier]);
+  }, [activeJobId, dossierApi, initialDossier, showDossier, readFullDossier]);
 
   useEffect(() => {
     if (activeJobId || initialDossier) return;
@@ -420,7 +444,7 @@ function DossierPageState({
 
     async function readCompletedDossier() {
       const sequence = ++requestSequence.current;
-      const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
+      const result = await readFullDossier(dossierApi, {
         cache: "no-store",
         signal: controller.signal
       });
@@ -546,7 +570,14 @@ function DossierPageState({
     void readCurrentOrStartResearch();
 
     return () => controller.abort();
-  }, [activeJobId, dossierApi, identity, initialDossier, showDossier]);
+  }, [
+    activeJobId,
+    dossierApi,
+    identity,
+    initialDossier,
+    showDossier,
+    readFullDossier
+  ]);
 
   useEffect(() => {
     if (!activeJobId) return;
@@ -587,7 +618,7 @@ function DossierPageState({
 
     async function readExpandedDossier() {
       const sequence = ++requestSequence.current;
-      const result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
+      const result = await readFullDossier(dossierApi, {
         cache: "no-store",
         signal: controller.signal
       });
@@ -681,7 +712,7 @@ function DossierPageState({
       controller.abort();
       if (timeout) clearTimeout(timeout);
     };
-  }, [activeJobId, dossierApi, showDossier]);
+  }, [activeJobId, dossierApi, showDossier, readFullDossier]);
 
   const readDossierPoll = useCallback(
     async (
@@ -696,6 +727,8 @@ function DossierPageState({
         Date.now()
       );
       if (watched.length > 0 && !resumeDue) {
+        const sequenceAtStart = appliedSequence.current;
+        const fullDossierAtStart = lastRead.current.dossier;
         let progress: DossierApiResult<EvidenceRunProgressResponse>;
         try {
           // No credentials: the route reads no provider, so the visitor's
@@ -712,7 +745,34 @@ function DossierPageState({
           throw caught;
         }
         if (signal.aborted) return { kind: "retry" };
+        if (
+          sequenceAtStart !== appliedSequence.current ||
+          fullDossierAtStart !== lastRead.current.dossier ||
+          watched !== runWatch.watching()
+        )
+          return { kind: "retry", retryAfterMs: 0 };
         if (progress.kind === "ok") {
+          const runs = progress.data.runs;
+          const returned = new Set(runs.map((run) => run.id));
+          setDossier((current) => {
+            if (
+              !current ||
+              (current !== fullDossierAtStart &&
+                current !== patchedDossier.current) ||
+              signal.aborted ||
+              sequenceAtStart !== appliedSequence.current ||
+              fullDossierAtStart !== lastRead.current.dossier ||
+              watched !== runWatch.watching()
+            )
+              return current;
+            const patched = patchEvidenceProgress(
+              current,
+              runs,
+              watched.some((id) => !returned.has(id))
+            );
+            if (patched !== current) patchedDossier.current = patched;
+            return patched;
+          });
           const decision = runWatch.observe(progress.data.runs);
           if (decision.kind === "unchanged") {
             setPollUnavailable(false);
@@ -732,9 +792,10 @@ function DossierPageState({
         // failures the way it always has.
       }
       const sequence = ++requestSequence.current;
+      const fullReadStartedAt = performance.now();
       let result: DossierApiResult<ApplicantDossier>;
       try {
-        result = await fetchDossierApi(dossierApi, applicantDossierSchema, {
+        result = await readFullDossier(dossierApi, {
           cache: "no-store",
           signal
         });
@@ -748,7 +809,10 @@ function DossierPageState({
       if (result.kind === "ok") {
         // Watched now, not after the render: the next ask can start first.
         const runIds = result.data.evidenceRunIds ?? [];
-        const delayMs = runWatch.fullRead(runIds);
+        const delayMs = runWatch.fullRead(
+          runIds,
+          performance.now() - fullReadStartedAt
+        );
         polledDossier.current = result.data;
         lastRead.current = { dossier: result.data, at: Date.now() };
         return {
@@ -774,7 +838,7 @@ function DossierPageState({
       appliedSequence.current = sequence;
       return { kind: "terminal", response: result.response };
     },
-    [dossierApi, runWatch]
+    [dossierApi, runWatch, readFullDossier]
   );
 
   const applyFreshDossier = useCallback(

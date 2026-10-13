@@ -550,9 +550,23 @@ describe("PostgreSQL repositories: character evidence", () => {
           id: reservation.run.id,
           status: "queued",
           deferred: false,
-          phaseStates: ["pending", "pending"]
+          key: rootKey,
+          phases: [
+            {
+              id: "warcraft_logs_history",
+              state: "pending",
+              limitationCode: null
+            },
+            { id: "publication", state: "pending", limitationCode: null }
+          ]
         },
-        { id: bare.run.id, status: "queued", deferred: false, phaseStates: [] }
+        {
+          id: bare.run.id,
+          status: "queued",
+          deferred: false,
+          key: altKey,
+          phases: []
+        }
       ])
     );
 
@@ -573,7 +587,15 @@ describe("PostgreSQL repositories: character evidence", () => {
         id: reservation.run.id,
         status: "running",
         deferred: false,
-        phaseStates: ["active", "pending"]
+        key: rootKey,
+        phases: [
+          {
+            id: "warcraft_logs_history",
+            state: "active",
+            limitationCode: null
+          },
+          { id: "publication", state: "pending", limitationCode: null }
+        ]
       }
     ]);
 
@@ -589,7 +611,15 @@ describe("PostgreSQL repositories: character evidence", () => {
         id: reservation.run.id,
         status: "running",
         deferred: true,
-        phaseStates: ["active", "pending"]
+        key: rootKey,
+        phases: [
+          {
+            id: "warcraft_logs_history",
+            state: "active",
+            limitationCode: null
+          },
+          { id: "publication", state: "pending", limitationCode: null }
+        ]
       }
     ]);
     await expect(
