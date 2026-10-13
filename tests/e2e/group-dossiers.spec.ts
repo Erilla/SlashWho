@@ -5,6 +5,8 @@ import {
   type Page
 } from "playwright/test";
 import { Pool } from "pg";
+import { applicantDossierSchema } from "@slashwho/contracts";
+type FixtureStats = { characterRequests: Record<string, number> };
 import { createPostgresRepositories } from "../../packages/database/src/postgres-repositories";
 import {
   seedCharacterEvidence,
@@ -58,7 +60,7 @@ async function followLiveEvidence(
   const path = `/api/dossiers/${key.region}/${key.realm}/${key.name}`;
   const response = await request.get(path);
   expect(response.ok()).toBeTruthy();
-  const stored = await response.json();
+  const stored = applicantDossierSchema.parse(await response.json());
   const runId = "10000000-0000-4000-8000-000000000013";
   let cycles = 0;
   await page.route(`**${path}`, (route) =>
@@ -353,7 +355,7 @@ test("a provider 404 for the opened sibling retains its stored group", async ({
   await expect
     .poll(async () => {
       const stats = await fetch(`${fixtureBaseUrl}/__control/stats`).then(
-        (response) => response.json()
+        (response) => response.json() as Promise<FixtureStats>
       );
       return (
         stats.characterRequests[
@@ -366,7 +368,7 @@ test("a provider 404 for the opened sibling retains its stored group", async ({
     `/api/dossiers/eu/silvermoon/${sibling.name}`
   );
   expect(response.ok()).toBeTruthy();
-  const body = await response.json();
+  const body = applicantDossierSchema.parse(await response.json());
   expect(
     body.characters.map(
       (character: { displayName: string }) => character.displayName
@@ -426,7 +428,9 @@ test("recent failed member research suppresses a page start but landing search r
     const read = await page.request.get(
       `/api/dossiers/eu/silvermoon/${sibling.name}`
     );
-    expect((await read.json()).groupStale).not.toBe(true);
+    expect(applicantDossierSchema.parse(await read.json()).groupStale).not.toBe(
+      true
+    );
     expect(requests).toEqual([]);
     expect(
       (
@@ -493,11 +497,11 @@ test("an opened WCL identity remains included when its shared alias is excluded"
     const read = await page.request.get(
       `/api/dossiers/eu/silvermoon/${root.name}`
     );
-    const body = await read.json();
+    const body = applicantDossierSchema.parse(await read.json());
     expect(body.characters).toHaveLength(1);
     expect(body.characters[0]).toMatchObject({ key: root });
-    expect(body.characters[0].excluded).not.toBe(true);
-    expect(body.characters[0].warcraftLogsAliases).toContainEqual(sibling);
+    expect(body.characters[0]?.excluded).not.toBe(true);
+    expect(body.characters[0]?.warcraftLogsAliases).toContainEqual(sibling);
     await page.getByRole("button", { name: "Actions for Group root" }).click();
     await expect(
       page.getByRole("menuitem", { name: "Include", exact: true })
@@ -563,11 +567,11 @@ for (const failures of [0, 5]) {
       );
       const runCount = async () =>
         (
-          await pool.query(
+          await pool.query<{ count: number }>(
             "SELECT count(*)::int AS count FROM discovery_runs WHERE root_normalized_name = ANY($1::text[])",
             [[root.name, sibling.name]]
           )
-        ).rows[0].count as number;
+        ).rows[0]!.count;
       const baseline = await runCount();
       await page.goto(`/dossiers/eu/silvermoon/${sibling.name}`);
       await expect(
@@ -633,17 +637,17 @@ test("concurrent sibling page visits reserve one group sweep and one charge", as
     );
     const runCount = async () =>
       (
-        await pool.query(
+        await pool.query<{ count: number }>(
           "SELECT count(*)::int AS count FROM discovery_runs WHERE root_normalized_name = ANY($1::text[])",
           [[root.name, sibling.name]]
         )
-      ).rows[0].count as number;
+      ).rows[0]!.count;
     const chargeCount = async () =>
       (
-        await pool.query(
+        await pool.query<{ count: number }>(
           "SELECT count(*)::int AS count FROM rate_limit_events WHERE caller_bucket_hash = 'fingerprint-sweep-visit'"
         )
-      ).rows[0].count as number;
+      ).rows[0]!.count;
     const baselineRuns = await runCount();
     const baselineCharges = await chargeCount();
     expect((await fetch(`${fixtureBaseUrl}/__control/hold`)).ok).toBeTruthy();
@@ -659,7 +663,7 @@ test("concurrent sibling page visits reserve one group sweep and one charge", as
     await expect
       .poll(async () => {
         const stats = await fetch(`${fixtureBaseUrl}/__control/stats`).then(
-          (response) => response.json()
+          (response) => response.json() as Promise<FixtureStats>
         );
         return (
           stats.characterRequests["/api/characters/eu/silvermoon/frostalt"] ?? 0
@@ -677,6 +681,109 @@ test("concurrent sibling page visits reserve one group sweep and one charge", as
   } finally {
     await fetch(`${fixtureBaseUrl}/__control/release`);
     await siblingPage.close();
+    await pool.end();
+  }
+});
+
+test("a stale sibling page joins a running member after its initial read without another run or charge", async ({
+  page
+}) => {
+  // Unique known provider names keep this race independent of other browser
+  // searches. The first real read predates the member's run; the real POST
+  // must then join that run rather than reserve one for the opened sibling.
+  const { root, sibling } = await seedGroup("profilecoldjoinmember", true);
+  const path = `/api/dossiers/eu/silvermoon/${sibling.name}`;
+  const pool = new Pool({ connectionString: process.env.E2E_DATABASE_URL });
+  try {
+    const chargeCount = async () =>
+      (
+        await pool.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM rate_limit_events event JOIN discovery_runs run ON run.id = event.discovery_run_id WHERE run.root_normalized_name = ANY($1::text[])",
+          [[root.name, sibling.name]]
+        )
+      ).rows[0]!.count;
+    const baselineCharges = await chargeCount();
+    let joinedRunId = "";
+    let capturedFirstRead = false;
+    let jobPolls = 0;
+    await page.route(`**${path}`, async (route) => {
+      if (capturedFirstRead) {
+        await route.continue();
+        return;
+      }
+      capturedFirstRead = true;
+      const response = await route.fetch();
+      expect(response.ok()).toBeTruthy();
+      const beforeStart = applicantDossierSchema.parse(await response.json());
+      expect(beforeStart.groupStale).toBe(true);
+      const run = await createPostgresRepositories(pool).runs.createOrReuse(
+        root,
+        "anonymous"
+      );
+      joinedRunId = run.id;
+      await pool.query(
+        "UPDATE discovery_runs SET status = 'running', started_at = now() WHERE id = $1",
+        [run.id]
+      );
+      await route.fulfill({ response, json: beforeStart });
+    });
+    await page.route("**/api/dossiers/jobs/*", async (route) => {
+      jobPolls += 1;
+      await route.continue();
+    });
+    const requests = starts(page);
+    const started = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        new URL(response.url()).pathname === "/api/dossiers"
+    );
+    await page.goto(`/dossiers/eu/silvermoon/${sibling.name}`);
+    const answer = await started;
+    expect(answer.status()).toBe(202);
+    expect(await answer.json()).toMatchObject({
+      kind: "job",
+      jobId: joinedRunId,
+      status: "running"
+    });
+    await expect
+      .poll(() => jobPolls, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(3);
+    await expect(page).toHaveURL(`/dossiers/eu/silvermoon/${sibling.name}`);
+    await expect(
+      page.getByRole("heading", { name: "Group sibling", exact: true })
+    ).toBeVisible();
+    await expect(
+      page
+        .getByRole("region", { name: "Connected characters" })
+        .getByText("Group root", { exact: true })
+    ).toBeVisible();
+    await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ startedFrom: "page" });
+    const runs = await pool.query(
+      "SELECT id FROM discovery_runs WHERE root_normalized_name = ANY($1::text[])",
+      [[root.name, sibling.name]]
+    );
+    expect(runs.rows).toHaveLength(2); // the old publication and the joined run
+    expect(runs.rows).toContainEqual({ id: joinedRunId });
+    expect(
+      (
+        await pool.query(
+          "SELECT 1 FROM discovery_runs WHERE root_normalized_name = $1",
+          [sibling.name]
+        )
+      ).rows
+    ).toEqual([]);
+    expect(await chargeCount()).toBe(baselineCharges);
+    expect(
+      (
+        await pool.query(
+          "SELECT 1 FROM dossier_searches WHERE normalized_name = $1",
+          [sibling.name]
+        )
+      ).rows
+    ).toEqual([]);
+  } finally {
     await pool.end();
   }
 });
