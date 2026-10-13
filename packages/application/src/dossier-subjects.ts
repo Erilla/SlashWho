@@ -81,7 +81,12 @@ export async function resolveSubjects(
   const guildOf = (subject: RankedSubject): RankedSubject => ({
     ...subject,
     guild:
-      group.snapshots
+      [
+        ...(group.ownSnapshot ? [group.ownSnapshot] : []),
+        ...[...group.snapshots].sort(
+          (a, b) => b.refreshedAt.getTime() - a.refreshedAt.getTime()
+        )
+      ]
         .flatMap((s) => s.characters)
         .find(
           (c) =>

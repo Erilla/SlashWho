@@ -266,6 +266,75 @@ describe("consistent group dossier projection", () => {
     ).toBe(0);
   });
 
+  it("re-adding an existing manual row heals a pending group recompute", async () => {
+    await publish(rootKey, [observation(rootKey, "Ryii")]);
+    await publish(altKey, [observation(altKey, "Other")]);
+    const ids = (
+      await pool.query<{ id: string }>("SELECT id FROM characters")
+    ).rows.map((row) => row.id);
+    await repositories.characterConnections!.recomputeGroupsOf(ids);
+    await repositories.manualConnections.add(rootKey, altKey);
+    expect(
+      await repositories.manualConnections.addGroupConnection!(rootKey, altKey)
+    ).toBe("duplicate");
+    const root = await repositories.groupReads!.read(rootKey, new Date());
+    const alt = await repositories.groupReads!.read(altKey, new Date());
+    expect(root!.groupId).toBe(alt!.groupId);
+  });
+
+  it("keeps the opened snapshot's guild rather than an arbitrary containing snapshot", async () => {
+    const guild = {
+      name: "Opened guild",
+      region: "eu",
+      realm: "silvermoon"
+    } as const;
+    const otherGuild = { ...guild, name: "Other guild" };
+    const runId = await publish(rootKey, [
+      { ...observation(rootKey, "Ryii"), guild },
+      observation(altKey, "Other", "claimed")
+    ]);
+    await publish(altKey, [
+      observation(altKey, "Other"),
+      { ...observation(rootKey, "Ryii", "claimed"), guild: otherGuild }
+    ]);
+    await repositories.characterConnections!.writeObservations({
+      runId,
+      observerKey: rootKey,
+      families: [
+        {
+          family: "raiderio",
+          decision: "replaced",
+          reason: "raiderio_complete",
+          sweepReservationId: null,
+          observed: [{ key: altKey, source: "claimed" }]
+        }
+      ]
+    });
+    const ids = (
+      await pool.query<{ id: string }>("SELECT id FROM characters")
+    ).rows.map((row) => row.id);
+    await repositories.characterConnections!.recomputeGroupsOf(ids);
+    const group = (await repositories.groupReads!.read(rootKey, new Date()))!;
+    const resolved = await resolveSubjects(
+      rootKey,
+      {
+        ...repositories,
+        groupReads: {
+          read: async () => ({
+            ...group,
+            snapshots: [...group.snapshots].sort(
+              (a, b) =>
+                Number(a.rootKey.name === rootKey.name) -
+                Number(b.rootKey.name === rootKey.name)
+            )
+          })
+        }
+      },
+      { DOSSIER_CHARACTER_CEILING: 50 }
+    );
+    expect(resolved!.selected[0]!.guild).toEqual(guild);
+  });
+
   it("does not traverse a suppressed bridge to a fresh sibling", async () => {
     const runId = await publish();
     const otherRun = await publish(third, [observation(third, "Third")]);

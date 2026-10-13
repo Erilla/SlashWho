@@ -77,10 +77,17 @@ export function createGroupEdits(
             target.name
           ]
         );
-        const id = inserted.rows[0]?.root_character_id;
+        const id =
+          inserted.rows[0]?.root_character_id ??
+          (
+            await client.query<{ id: string }>(
+              "SELECT id FROM characters WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3",
+              [root.region, root.realm, root.name]
+            )
+          ).rows[0]?.id;
         if (!id) return "duplicate";
         await recomputeComponent(client, id);
-        return "added";
+        return inserted.rowCount ? "added" : "duplicate";
       }),
     removeGroupConnection: (root, target) =>
       withEdit(pool, async (client) => {
