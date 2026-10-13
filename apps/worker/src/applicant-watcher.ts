@@ -200,8 +200,6 @@ export async function reconcileApplicantCounts(
     const unmarkedOccurrences: { identity: string; index: number }[] = [];
     const applicationCounts = { recorded: 0, ambiguous: 0, overCap: 0 };
     const risen = new Set<string>();
-    // Identity to the latest intent sequence inserted in this transaction.
-    const insertedThisPoll = new Map<string, string>();
     for (const identity of new Set([...previous.keys(), ...counts.keys()])) {
       const current = counts.get(identity) ?? 0;
       const deferred = deferredAt.get(identity) ?? [];
@@ -265,7 +263,6 @@ export async function reconcileApplicantCounts(
           ]
         );
         const sequence = inserted.rows[0]!.sequence;
-        insertedThisPoll.set(identity, sequence);
         // A member waiting for this identity's intent is tied to this one.
         await client.query(
           `UPDATE applicant_source_application_members member
@@ -295,7 +292,6 @@ export async function reconcileApplicantCounts(
             rootSuppressed: suppressed,
             rootObservedAt: occurrence.at,
             carriedMark: occurrence.mark,
-            insertedThisPoll,
             counts: applicationCounts
           });
         newOccurrences.push({ identity, index: occurrence.index });
@@ -353,7 +349,6 @@ async function recordApplication(
     rootSuppressed: boolean;
     rootObservedAt: Date;
     carriedMark: number;
-    insertedThisPoll: ReadonlyMap<string, string>;
     counts: { recorded: number; ambiguous: number; overCap: number };
   }
 ): Promise<void> {
@@ -393,18 +388,19 @@ async function recordApplication(
   }
   input.counts.recorded++;
   for (const [offset, identity] of row.identities.slice(1).entries()) {
-    // The member's own intent: one inserted in this transaction, or -- when
-    // the root was deferred and recorded in a later poll -- the one inserted
-    // when this response was first seen: the earliest observed at or after the
-    // root's first sighting, since an identity's occurrences are inserted
-    // oldest first and a later one belongs to a later response. None yet
-    // means the member is still deferred; its insert fills this in.
-    const existing = input.insertedThisPoll.has(identity)
-      ? undefined
-      : await client.query<{ sequence: string | null }>(
-          "SELECT min(sequence)::text AS sequence FROM applicant_source_intents WHERE source = $1 AND identity = $2 AND observed_at >= $3",
-          [source, identity, input.rootObservedAt]
-        );
+    // The member's own intent is the one inserted when this response was
+    // first seen: the earliest observed at or after the root's first sighting,
+    // since an identity's occurrences are inserted oldest first and a later
+    // one belongs to a later response. That holds within this poll too: an
+    // intent the member took this poll for another response is later than the
+    // one a deferred root's response gave it, so it never wins here. For a
+    // fresh root the first sighting is this poll, so only this poll's intents
+    // qualify. None yet means the member is still deferred; its insert fills
+    // this in.
+    const existing = await client.query<{ sequence: string | null }>(
+      "SELECT min(sequence)::text AS sequence FROM applicant_source_intents WHERE source = $1 AND identity = $2 AND observed_at >= $3",
+      [source, identity, input.rootObservedAt]
+    );
     await client.query(
       `INSERT INTO applicant_source_application_members
          (application_id, ordinal, identity, member_intent_sequence)
@@ -413,9 +409,7 @@ async function recordApplication(
         created.rows[0]!.id,
         offset + 1,
         identity,
-        input.insertedThisPoll.get(identity) ??
-          existing?.rows[0]?.sequence ??
-          null
+        existing.rows[0]?.sequence ?? null
       ]
     );
   }

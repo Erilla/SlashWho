@@ -926,6 +926,108 @@ it("ties a deferred root's member to its first intent, not a later resubmission'
   ]);
 });
 
+it.each([
+  ["before", [tcId, tpId]],
+  ["after", [tpId, tcId]]
+] as const)(
+  "ties a deferred root's member to its first intent when the member's new intent is inserted %s the root in the same poll",
+  async (_order, identityOrder) => {
+    // Break caught: an intent the member took this poll, for a different
+    // response, overrode the min(sequence) rule whenever the poll reached the
+    // member before the deferred root.
+    await resetApplicantSource();
+    const tq = "https://raider.io/characters/eu/hyjal/tropiqua";
+    const tqId = 'character:["eu","hyjal","tropiqua"]';
+    const sheetRow = (row: number, serial: number, linkCell: string) => ({
+      row,
+      battletag: "t",
+      discordId: "1",
+      characterName: "N",
+      linkCell,
+      submittedSerial: serial
+    });
+    const first = [sheetRow(2, 5, tx), sheetRow(3, 20, `${tp} ${tc}`)];
+    const later = [...first, sheetRow(4, 30, `${tq} ${tc}`)];
+    const pollAt = (
+      rows: ReturnType<typeof sheetRow>[],
+      at: string,
+      deferred: string[]
+    ) =>
+      pollApplicantSheet({
+        pool,
+        readRows: async () => rows,
+        backlogLimit: 100,
+        now: () => new Date(at),
+        isSuppressed: async (identity) =>
+          deferred.includes(identity) ? "defer" : false
+      });
+    await pollAt([sheetRow(2, 5, tx)], "2026-10-13T10:00:00.000Z", []);
+    // t1: R (tropipe) is held back; M (tropicos) takes its first intent.
+    await pollAt(first, "2026-10-13T10:01:00.000Z", [tpId]);
+    // The poll walks the stored counts in heap order: rewrite the table so the
+    // order is the one under test.
+    const stored = await pool.query<{
+      source: string;
+      identity: string;
+      occurrence_count: number;
+      deferred_observed_ats: unknown;
+    }>("SELECT * FROM applicant_source_counts");
+    await pool.query("TRUNCATE applicant_source_counts");
+    const rank = (identity: string) => {
+      const at = (identityOrder as readonly string[]).indexOf(identity);
+      return at === -1 ? identityOrder.length : at;
+    };
+    for (const row of [...stored.rows].sort(
+      (left, right) => rank(left.identity) - rank(right.identity)
+    ))
+      await pool.query(
+        "INSERT INTO applicant_source_counts (source, identity, occurrence_count, deferred_observed_ats) VALUES ($1, $2, $3, $4::jsonb)",
+        [
+          row.source,
+          row.identity,
+          row.occurrence_count,
+          JSON.stringify(row.deferred_observed_ats)
+        ]
+      );
+    const heap = await pool.query<{ identity: string }>(
+      "SELECT identity FROM applicant_source_counts WHERE source = 'applicant_sheet'"
+    );
+    expect(
+      heap.rows
+        .map((row) => row.identity)
+        .filter((identity) => identity === tpId || identity === tcId)
+    ).toEqual(identityOrder);
+    // t2: R is admitted, and S30 [Q, M] gives M a second intent in the same
+    // poll.
+    await pollAt(later, "2026-10-13T10:02:00.000Z", []);
+    const memberIntents = await pool.query<{ sequence: string }>(
+      "SELECT sequence FROM applicant_source_intents WHERE identity = $1 ORDER BY sequence",
+      [tcId]
+    );
+    expect(memberIntents.rows).toHaveLength(2);
+    const members = await pool.query<{
+      root_identity: string;
+      member_intent_sequence: string;
+    }>(
+      `SELECT a.root_identity, m.member_intent_sequence
+         FROM applicant_source_application_members m
+         JOIN applicant_source_applications a ON a.id = m.application_id
+        ORDER BY a.root_identity`
+    );
+    // tropipe sorts before tropiqua.
+    expect(members.rows).toEqual([
+      {
+        root_identity: tpId,
+        member_intent_sequence: memberIntents.rows[0]?.sequence
+      },
+      {
+        root_identity: tqId,
+        member_intent_sequence: memberIntents.rows[1]?.sequence
+      }
+    ]);
+  }
+);
+
 it("ties each member to its own intent, filling a deferred member in later", async () => {
   await resetApplicantSource();
   await pollRows([[5, tx]]);
