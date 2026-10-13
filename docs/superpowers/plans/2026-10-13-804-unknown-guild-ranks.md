@@ -1,6 +1,7 @@
 # Unknown-guild historic rank handling (#804)
 
-Status: approved at `3a06e2cc` in review 5506082765; implementation in progress.
+Status: approved at `3a06e2cc` in review 5506082765; implementation verified at
+`794854c0`. Manager implementation review and deployment acceptance remain pending.
 
 Issue: <https://github.com/Erilla/SlashWho/issues/804>
 
@@ -158,7 +159,7 @@ change. Dossier responses stay `Cache-Control: no-store`.
       again on a later eligible run. Verify a skipped checked null emits no new
       stamp and publication preserves the original via database merge coverage.
       Commit.
-- [ ] Run the full gate with Docker running: `corepack pnpm format:check`,
+- [x] Run the full gate with Docker running: `corepack pnpm format:check`,
       `lint`, `typecheck`, `test:unit`, `test:integration`, `build`, `test:e2e`.
       Self-review against `origin/main`; fetch and merge current `origin/main`
       and run the full gate again before making the PR ready for review.
@@ -166,6 +167,14 @@ change. Dossier responses stay `Cache-Control: no-store`.
 Each task starts with a failing regression test, then the minimal code change,
 then a passing focused suite. All commands use `corepack pnpm`. Implementation
 runs in this chat and this worktree. Never merge or enable auto-merge.
+
+Final verification after fetching and merging current `origin/main` at
+`7c21c89f`: format, lint, typecheck, 3,115 unit tests, 481 Docker integration
+tests, production build and 60 browser tests passed. Fresh branch review found
+two guild error edges (403/404 Retry-After and error-body timeout); regressions
+were observed failing, the fixes passed and the reviewer verified both with no
+further findings. Pre-deployment baseline is recorded in
+<https://github.com/Erilla/SlashWho/issues/804#issuecomment-6149924550>.
 
 ## Review decisions
 
