@@ -270,7 +270,11 @@ export async function loadGroupRead(
     latestSnapshot: new Map(
       snapshots.map((s) => [
         byKey.get(canonicalCharacterId(s.rootKey))!,
-        { state: s.state, limitationCode: s.limitationCode }
+        {
+          state: s.state,
+          limitationCode: s.limitationCode,
+          refreshedAt: s.refreshedAt
+        }
       ])
     ),
     snapshotMembers: new Map(

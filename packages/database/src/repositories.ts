@@ -216,11 +216,13 @@ export interface ManualConnectionRepository {
   ): Promise<boolean>;
   addGroupConnection?(
     root: CharacterKey,
-    target: CharacterKey
+    target: CharacterKey,
+    onMerged?: (merges: readonly CharacterGroupMerge[]) => void | Promise<void>
   ): Promise<"added" | "duplicate" | "rejected">;
   removeGroupConnection?(
     root: CharacterKey,
-    target: CharacterKey
+    target: CharacterKey,
+    onMerged?: (merges: readonly CharacterGroupMerge[]) => void | Promise<void>
   ): Promise<"removed" | "missing">;
   setGroupExcluded?(
     root: CharacterKey,

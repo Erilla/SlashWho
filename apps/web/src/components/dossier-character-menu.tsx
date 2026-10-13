@@ -271,8 +271,9 @@ export function DossierCharacterMenu({
               Remove historic alias {alias.name}-{alias.realm}
             </button>
           ))}
-          {(character.hasManualConnection ??
-          character.source === "manually_added") ? (
+          {canonicalCharacterId(character.key) !== canonicalCharacterId(root) &&
+          (character.hasManualConnection ??
+            character.source === "manually_added") ? (
             <button
               className="dossier-character-menu-item dossier-character-menu-item--destructive"
               disabled={pending}

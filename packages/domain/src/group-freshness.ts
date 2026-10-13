@@ -2,6 +2,8 @@ import { canonicalCharacterId } from "./deduplicate";
 import type { CharacterKey } from "./character-key";
 import { groupPageMembers, type GroupGraph } from "./character-connections";
 
+export const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
+
 export function groupMemberFacts<T extends { rootKey: CharacterKey }>(
   read: {
     graph: GroupGraph;

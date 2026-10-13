@@ -13,8 +13,7 @@ export async function notifyGroupMerges(
     merge.groupSizes.forEach((size, index) => {
       details[`group${index + 1}Size`] = size;
     });
-    for (const source of merge.sources)
-      details[source] = (details[source] ?? 0) + 1;
+    for (const source of merge.sources) details[`${source}Present`] = 1;
     try {
       await notifier.notify({ event: "character_groups_merged", details });
     } catch {

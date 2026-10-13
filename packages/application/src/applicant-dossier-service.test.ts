@@ -1,5 +1,7 @@
 import type { SearchService } from "./search-service";
 import type {
+  GroupRead,
+  DiscoveryRun,
   DiscoveryQueue,
   EvidenceRunPhase,
   EvidenceRunProgress,
@@ -70,6 +72,59 @@ function storedSnapshot(
   };
 }
 
+function withGroupRead(repositories: Repositories): GroupRead {
+  const snapshot = storedSnapshot();
+  const ids = new Map(
+    snapshot.characters.map((c) => [JSON.stringify(c.key), c.characterId])
+  );
+  const graph: GroupRead["graph"] = {
+    characters: new Map(snapshot.characters.map((c) => [c.characterId, c])),
+    idOf: (key) => ids.get(JSON.stringify(key)),
+    groupOf: new Map(snapshot.characters.map((c) => [c.characterId, "group"])),
+    links: [
+      {
+        a: snapshot.characters[0]!.characterId,
+        b: snapshot.characters[1]!.characterId,
+        strength: "fingerprint"
+      }
+    ],
+    manual: [],
+    undiscoveredManualTargets: [],
+    discoveredExclusions: [],
+    suppressed: new Set(),
+    warcraftLogsIds: new Map(),
+    sharedIdentity: (id) => new Set([id]),
+    latestSnapshot: new Map([[snapshot.characters[0]!.characterId, snapshot]]),
+    snapshotMembers: new Map([
+      [
+        snapshot.characters[0]!.characterId,
+        snapshot.characters.map((c) => c.characterId)
+      ]
+    ]),
+    snapshotSources: new Map([
+      [
+        snapshot.characters[0]!.characterId,
+        new Map(snapshot.characters.map((c) => [c.characterId, c.source]))
+      ]
+    ])
+  };
+  const group: GroupRead = {
+    groupId: "group",
+    storedMemberIds: [...graph.characters.keys()],
+    graph,
+    ownSnapshot: snapshot,
+    snapshots: [snapshot],
+    runs: [],
+    sweepStates: [],
+    negativeUntil: null,
+    activeEvidenceKeys: []
+  };
+  Object.assign(repositories, {
+    groupReads: { read: vi.fn().mockResolvedValue(group) }
+  });
+  return group;
+}
+
 function fixture(
   options: {
     snapshot?: StoredSnapshot | null;
@@ -120,6 +175,7 @@ function fixture(
     /** The phase ledger `listPhases` returns for the active run. */
     activePhases?: readonly EvidenceRunPhase[];
     onCacheEvent?: (source: string, event: string) => void;
+    logger?: { info(value: Record<string, unknown>): void };
     tierSearches?: readonly {
       key: CharacterKey;
       raidId: string;
@@ -439,7 +495,8 @@ function fixture(
     raiderio,
     config,
     evidenceJobCredentialEncryptionKey: encryptionKey,
-    onCacheEvent: options.onCacheEvent
+    onCacheEvent: options.onCacheEvent,
+    ...(options.logger ? { logger: options.logger } : {})
   });
   return {
     dossiers,
@@ -4726,4 +4783,212 @@ describe("applicant dossier tier search across characters", () => {
       characters: [{ state: "completed" }, { state: "failed" }]
     });
   });
+});
+
+describe("group dossier admission and root access", () => {
+  function run(
+    status: DiscoveryRun["status"],
+    completedAt: Date | null = null,
+    rootKey: CharacterKey = root
+  ): DiscoveryRun {
+    return {
+      id: "run",
+      status,
+      rootKey,
+      completedAt,
+      createdAt: completedAt ?? new Date()
+    } as DiscoveryRun;
+  }
+  it.each(["fresh", "negative", "active", "backoff", "stale"] as const)(
+    "groupStale observes %s facts",
+    async (condition) => {
+      const { dossiers, repositories } = fixture();
+      const group = withGroupRead(repositories);
+      const now = new Date();
+      Object.assign(
+        group,
+        condition === "negative"
+          ? { negativeUntil: new Date(now.getTime() + 60_000) }
+          : {
+              runs:
+                condition === "fresh"
+                  ? [run("complete", now)]
+                  : condition === "active"
+                    ? [run("queued")]
+                    : condition === "backoff"
+                      ? [run("failed", now)]
+                      : []
+            }
+      );
+      const result = await dossiers.read(root);
+      expect(result.kind).toBe("ready");
+      if (result.kind === "ready")
+        expect(!!result.dossier.groupStale).toBe(condition === "stale");
+    }
+  );
+  it("does not borrow freshness through a suppressed folded-in member", async () => {
+    const { dossiers, repositories } = fixture();
+    const group = withGroupRead(repositories);
+    const id = group.graph.idOf(alt)!;
+    (group.graph.suppressed as Set<string>).add(id);
+    Object.assign(group, { runs: [run("complete", new Date(), alt)] });
+    const result = await dossiers.read(root);
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: { groupStale: true }
+    });
+    if (result.kind === "ready") {
+      expect(result.dossier.characters.map((c) => c.key)).not.toContainEqual(
+        alt
+      );
+      expect(result.dossier.research.message).not.toContain("Ryalts");
+    }
+  });
+  it("serialises explicit false for a group row without a manual target", async () => {
+    const { dossiers, repositories } = fixture();
+    withGroupRead(repositories);
+    const result = await dossiers.read(root);
+    expect(result).toMatchObject({
+      kind: "ready",
+      dossier: {
+        characters: [
+          { hasManualConnection: false },
+          { hasManualConnection: false }
+        ]
+      }
+    });
+  });
+  it.each(["job", "group_ready"] as const)(
+    "keeps a %s page start out of recent searches",
+    async (kind) => {
+      const { dossiers, repositories, search } = fixture();
+      vi.mocked(search.create).mockResolvedValue(
+        kind === "job"
+          ? {
+              kind,
+              jobId: "job",
+              status: "queued",
+              statusUrl: "/api/dossiers/jobs/job",
+              characterUrl: raiderUrl,
+              joinedExistingRun: true,
+              staleCharacter: null
+            }
+          : { kind, key: root }
+      );
+      await dossiers.start({
+        characterUrl: raiderUrl,
+        headers,
+        startedFrom: "page"
+      });
+      expect(repositories.recentSearches!.record).not.toHaveBeenCalled();
+    }
+  );
+  it("records a group_ready landing search", async () => {
+    const { dossiers, repositories, search } = fixture();
+    vi.mocked(search.create).mockResolvedValue({
+      kind: "group_ready",
+      key: root
+    });
+    await dossiers.start({ characterUrl: raiderUrl, headers });
+    expect(repositories.recentSearches!.record).toHaveBeenCalledWith(root);
+  });
+  it.each([false, true])(
+    "permits root-only historic aliases only when suppression=%s is false",
+    async (suppressed) => {
+      const { dossiers, repositories } = fixture({ snapshot: null });
+      Object.assign(repositories, {
+        groupReads: { read: vi.fn().mockResolvedValue(null) },
+        suppressions: { isActive: vi.fn().mockResolvedValue(suppressed) }
+      });
+      const alias = { ...root, realm: "neptulon", name: "oldroot" };
+      expect(await dossiers.addHistoricAlias(root, root, alias)).toBe(
+        suppressed ? "missing" : "added"
+      );
+      expect(await dossiers.removeHistoricAlias(root, root, alias)).toBe(
+        suppressed ? "missing" : "removed"
+      );
+    }
+  );
+});
+
+it("logs committed group merges from web edits using counts only", async () => {
+  const logger = { info: vi.fn() };
+  const { dossiers, repositories } = fixture({ logger });
+  const merges = [{ groupSizes: [2, 3], sources: [], throughObserved: false }];
+  Object.assign(repositories.manualConnections, {
+    addGroupConnection: vi.fn(
+      async (
+        _root: CharacterKey,
+        _target: CharacterKey,
+        onMerged: (
+          merges: readonly {
+            groupSizes: readonly number[];
+            sources: readonly never[];
+            throughObserved: boolean;
+          }[]
+        ) => void | Promise<void>
+      ) => {
+        await onMerged(merges);
+        return "added";
+      }
+    ),
+    removeGroupConnection: vi.fn(
+      async (
+        _root: CharacterKey,
+        _target: CharacterKey,
+        onMerged: (
+          merges: readonly {
+            groupSizes: readonly number[];
+            sources: readonly never[];
+            throughObserved: boolean;
+          }[]
+        ) => void | Promise<void>
+      ) => {
+        await onMerged(merges);
+        return "removed";
+      }
+    )
+  });
+  await dossiers.addConnectedCharacter(root, {
+    characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+    headers
+  });
+  await dossiers.removeConnectedCharacter(root, {
+    characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts"
+  });
+  expect(logger.info).toHaveBeenCalledTimes(2);
+  expect(logger.info).toHaveBeenCalledWith({
+    event: "character_groups_merged",
+    stage: "web",
+    mergedGroups: 1,
+    groupSizes: [2, 3]
+  });
+});
+
+it("rejects a group manual add before searching or charging", async () => {
+  const { dossiers, repositories, search } = fixture();
+  Object.assign(repositories.manualConnections, {
+    canAddGroupConnection: vi.fn().mockResolvedValue(false),
+    addGroupConnection: vi.fn()
+  });
+  expect(
+    await dossiers.addConnectedCharacter(root, {
+      characterUrl: "https://raider.io/characters/eu/silvermoon/ryalts",
+      headers
+    })
+  ).toEqual({ kind: "rejected", code: "connection_rejected" });
+  expect(search.create).not.toHaveBeenCalled();
+  expect(
+    repositories.manualConnections.addGroupConnection
+  ).not.toHaveBeenCalled();
+});
+
+it("passes the completed group read to the sweep admission check", async () => {
+  const { dossiers, repositories, search } = fixture();
+  const group = withGroupRead(repositories);
+  const schedule = vi.fn().mockResolvedValue(undefined);
+  Object.assign(search, { scheduleConnectedCharacterSweep: schedule });
+  await dossiers.read(root);
+  expect(repositories.groupReads!.read).toHaveBeenCalledTimes(1);
+  expect(schedule).toHaveBeenCalledWith(root, undefined, group);
 });

@@ -7,6 +7,7 @@ import type { GroupRead } from "@slashwho/database";
 import { resolveGroupSubjects } from "./group-subjects";
 import {
   canonicalCharacterId,
+  groupPageMembers,
   type CharacterGuild,
   type CharacterKey
 } from "@slashwho/domain";
@@ -75,7 +76,14 @@ export async function resolveSubjects(
   if (!repositories.groupReads)
     return legacyResolveSubjects(key, repositories, config);
   const group = await repositories.groupReads.read(key, new Date());
-  if (!group || group.snapshots.length === 0) return null;
+  if (!group) return null;
+  const originId = group.graph.idOf(key);
+  if (!originId) return null;
+  const pageMemberIds = groupPageMembers(originId, group.graph);
+  const pageSnapshots = group.snapshots.filter((snapshot) =>
+    pageMemberIds.has(group.graph.idOf(snapshot.rootKey) ?? "")
+  );
+  if (pageSnapshots.length === 0) return null;
   const subjects = resolveGroupSubjects(key, group.graph, config, logger);
   if (!subjects) return null;
   const guildOf = (subject: RankedSubject): RankedSubject => ({
@@ -83,7 +91,7 @@ export async function resolveSubjects(
     guild:
       [
         ...(group.ownSnapshot ? [group.ownSnapshot] : []),
-        ...[...group.snapshots].sort(
+        ...[...pageSnapshots].sort(
           (a, b) => b.refreshedAt.getTime() - a.refreshedAt.getTime()
         )
       ]
@@ -101,7 +109,7 @@ export async function resolveSubjects(
       ]
     )
   );
-  const privateRoots = group.snapshots
+  const privateRoots = pageSnapshots
     .filter(
       (s) =>
         s.limitationCode === "privacy_hidden" &&

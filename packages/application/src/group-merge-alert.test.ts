@@ -16,7 +16,12 @@ it("alerts on observed bridges but keeps manual-only merges in the log", async (
   expect(events).toEqual([
     {
       event: "character_groups_merged",
-      details: { groups: 2, group1Size: 2, group2Size: 3, fingerprint: 1 }
+      details: {
+        groups: 2,
+        group1Size: 2,
+        group2Size: 3,
+        fingerprintPresent: 1
+      }
     }
   ]);
 });

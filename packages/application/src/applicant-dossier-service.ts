@@ -5,6 +5,7 @@ import {
   type EvidenceRunProgressResponse
 } from "@slashwho/contracts";
 import type {
+  CharacterGroupMerge,
   DiscoveryQueue,
   EvidenceRunPhase,
   EvidenceRunProgress,
@@ -814,7 +815,9 @@ function serializeDossierSubject(
           : character.source === "fingerprint"
             ? ("fingerprint_derived" as const)
             : ("raiderio_declared" as const),
-    ...(character.hasManualConnection ? { hasManualConnection: true } : {}),
+    ...(character.hasManualConnection !== undefined
+      ? { hasManualConnection: character.hasManualConnection }
+      : {}),
     ...(character.origin ? { origin: character.origin } : {}),
     ...(excluded ? { excluded: true as const } : {}),
     ...(evidence
@@ -1121,7 +1124,8 @@ export function createApplicantDossierService(options: {
     | "recentSearches"
     | "runs"
     | "groupReads"
-  >;
+  > &
+    Partial<Pick<Repositories, "suppressions">>;
   queue: Pick<DiscoveryQueue, "enqueueCharacterEvidence">;
   search: Pick<SearchService, "create" | "scheduleConnectedCharacterSweep">;
   blizzard: Pick<BlizzardGateway, "getCompletedAchievements">;
@@ -1143,6 +1147,22 @@ export function createApplicantDossierService(options: {
     if (!scope) return options.repositories;
     return measuredRepositories(options.repositories, scope);
   }
+  function logWebMerges(merges: readonly CharacterGroupMerge[]) {
+    if (merges.length === 0) return;
+    try {
+      options.logger?.info({
+        event: "character_groups_merged",
+        stage: "web",
+        mergedGroups: merges.reduce(
+          (count, merge) => count + merge.groupSizes.length - 1,
+          0
+        ),
+        groupSizes: merges.flatMap((merge) => merge.groupSizes)
+      });
+    } catch {
+      /* Logging cannot fail a committed edit. */
+    }
+  }
   async function isConnectedToDossier(
     repositories: typeof options.repositories,
     root: CharacterKey,
@@ -1150,6 +1170,8 @@ export function createApplicantDossierService(options: {
   ): Promise<boolean> {
     const wanted = canonicalCharacterId(target);
     if (repositories.groupReads) {
+      if (wanted === canonicalCharacterId(root))
+        return !(await repositories.suppressions?.isActive(root, new Date()));
       const group = await repositories.groupReads.read(root, new Date());
       const origin = group?.graph.idOf(root);
       return (
@@ -1454,10 +1476,10 @@ export function createApplicantDossierService(options: {
         result.kind !== "group_ready"
       )
         return result;
-      const connection = await (
-        options.repositories.manualConnections.addGroupConnection ??
-        options.repositories.manualConnections.add
-      )(root, target);
+      const connections = options.repositories.manualConnections;
+      const connection = connections.addGroupConnection
+        ? await connections.addGroupConnection(root, target, logWebMerges)
+        : await connections.add(root, target);
       if (connection === "rejected")
         return { kind: "rejected", code: "connection_rejected" };
       if (result.kind === "job") return result;
@@ -1516,9 +1538,9 @@ export function createApplicantDossierService(options: {
       const target = parseTarget(input.characterUrl);
       if (!target) return { kind: "invalid", code: "invalid_character_url" };
       const connections = scopedRepositories(scope).manualConnections;
-      const result = await (
-        connections.removeGroupConnection ?? connections.remove
-      )(root, target);
+      const result = connections.removeGroupConnection
+        ? await connections.removeGroupConnection(root, target, logWebMerges)
+        : await connections.remove(root, target);
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
     },
 
@@ -1645,7 +1667,15 @@ export function createApplicantDossierService(options: {
       // dispatch must not turn a usable cached dossier into an HTTP failure.
       // Do not retain the request's measurement scope after the response ends.
       void Promise.resolve()
-        .then(() => options.search.scheduleConnectedCharacterSweep?.(key))
+        .then(() =>
+          resolved.group
+            ? options.search.scheduleConnectedCharacterSweep?.(
+                key,
+                undefined,
+                resolved.group
+              )
+            : options.search.scheduleConnectedCharacterSweep?.(key)
+        )
         .catch(() => {
           options.logger?.info({ event: "fingerprint_sweep_schedule_failed" });
         });

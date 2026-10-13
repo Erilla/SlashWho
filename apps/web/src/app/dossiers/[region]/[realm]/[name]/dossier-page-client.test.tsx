@@ -262,8 +262,61 @@ describe("DossierPageClient live evidence", () => {
     );
     await waitFor(() => expect(requests).toHaveLength(1));
     expect(JSON.parse(requests[0]!)).toMatchObject({ startedFrom: "page" });
-    expect(screen.queryByText("Too many requests")).not.toBeInTheDocument();
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+  it.each(["failed", "refused"])(
+    "keeps a stale group silent after a joined job is %s",
+    async (outcome) => {
+      // A page visit may join existing research; its failure must not replace
+      // the usable group evidence with the root-only research error banner.
+      const stale = { ...expanded, groupStale: true };
+      let finishJob!: (response: Response) => void;
+      vi.stubGlobal("fetch", async (input: string) => {
+        if (input === "/api/dossiers")
+          return Response.json({ kind: "job", jobId, status: "running" });
+        if (input === `/api/dossiers/jobs/${jobId}`)
+          return new Promise<Response>((resolve) => {
+            finishJob = resolve;
+          });
+        return Response.json(stale);
+      });
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={null}
+          jobId={null}
+        />
+      );
+      await waitFor(() => expect(finishJob).toBeDefined());
+      await act(async () => {
+        finishJob(
+          outcome === "failed"
+            ? Response.json({
+                status: "failed",
+                error: {
+                  code: "upstream_unavailable",
+                  message: "Joined research failed."
+                }
+              })
+            : Response.json(
+                {
+                  error: {
+                    code: "unauthorized",
+                    message: "Joined research is unavailable."
+                  }
+                },
+                { status: 403 }
+              )
+        );
+      });
+      expect(screen.getByText("Expanded evidence")).toBeVisible();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/research failed; this evidence/)
+      ).not.toBeInTheDocument();
+    }
+  );
   it("hides the Refresh control for a read-only dossier", () => {
     // Break caught: the frozen demo can expose a refresh action even though it
     // has no writable data source or character-management controls.

@@ -77,6 +77,7 @@ export function createDiscoveryRunRepositories(
             return { kind: "not_due" };
         }
         return withTransaction(pool, async (client) => {
+          await client.query("SET LOCAL lock_timeout = '5s'");
           await lockRebuildShared(client);
           const rootLock = `root:${input.key.region}:${input.key.realm}:${input.key.name}`;
           await client.query(
@@ -120,11 +121,17 @@ export function createDiscoveryRunRepositories(
               if (!["queued", "running", "retrying"].includes(run.status))
                 continue;
               const active = await client.query<RunRow>(
-                `SELECT * FROM discovery_runs WHERE id = $1 AND status IN ${activeRunSql} FOR UPDATE`,
+                `SELECT * FROM discovery_runs WHERE id = $1 FOR UPDATE`,
                 [run.id]
               );
-              if (active.rows[0])
-                return { kind: "active", run: mapRun(active.rows[0]) };
+              if (active.rows[0]) {
+                const lockedRun = mapRun(active.rows[0]);
+                if (fresh([lockedRun])) return { kind: "fresh" };
+                if (
+                  ["queued", "running", "retrying"].includes(lockedRun.status)
+                )
+                  return { kind: "active", run: lockedRun };
+              }
             }
           }
 

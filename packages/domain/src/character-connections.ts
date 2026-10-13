@@ -269,8 +269,12 @@ export type GroupGraph = Readonly<{
   sharedIdentity: (id: string) => ReadonlySet<string>; // ids sharing a WCL id, self included
   latestSnapshot: ReadonlyMap<
     string,
-    Readonly<{ state: "complete" | "partial"; limitationCode: string | null }>
-  >; // by root id, suppression-filtered
+    Readonly<{
+      state: "complete" | "partial";
+      limitationCode: string | null;
+      refreshedAt?: Date;
+    }>
+  >; // by root id; consumers restrict facts to page members
   snapshotMembers?: ReadonlyMap<string, readonly string[]>;
   snapshotSources?: ReadonlyMap<string, ReadonlyMap<string, DiscoverySource>>;
 }>;

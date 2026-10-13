@@ -539,19 +539,27 @@ describe("character groups replay", () => {
     // fingerprint observation was never recorded. The write must record both
     // families, and presence must pass on either, since the snapshot keeps
     // only one source.
-    await publishFirstCycle("oscar", [member("alpha", "claimed")], {
-      kind: "matched",
-      characters: [member("alpha", "fingerprint")],
-      skippedHistoricalGuilds: 0
-    });
+    const sourcesBeforeDeduplication = DISCOVERY_SOURCES.filter(
+      (source): source is ObservationSource => source !== "input"
+    );
+    await publishFirstCycle(
+      "oscar",
+      sourcesBeforeDeduplication
+        .filter((source) => familyOf(source) === "raiderio")
+        .map((source) => member("alpha", source)),
+      {
+        kind: "matched",
+        characters: [member("alpha", "fingerprint")],
+        skippedHistoricalGuilds: 0
+      }
+    );
 
     const sources = await pool.query<{ source: string }>(
       `SELECT source FROM character_connections WHERE kind = 'observed' ORDER BY source`
     );
-    expect(sources.rows.map((row) => row.source)).toEqual([
-      "claimed",
-      "fingerprint"
-    ]);
+    expect(sources.rows.map((row) => row.source)).toEqual(
+      [...sourcesBeforeDeduplication].sort()
+    );
     const stored = await repositories.snapshots.getCurrent(key("oscar"));
     expect(
       stored!.characters.find((character) => character.key.name === "alpha")

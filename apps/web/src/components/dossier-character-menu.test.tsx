@@ -307,3 +307,29 @@ it("closes the menu on Escape and returns focus to its trigger", async () => {
   expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   expect(trigger).toHaveFocus();
 });
+
+it("hides Remove on the opened character even with a manual connection", async () => {
+  render(
+    <DossierCharacterMenu
+      character={{ ...character, hasManualConnection: true }}
+      root={character.key}
+    />
+  );
+  await openMenu();
+  expect(
+    screen.queryByRole("menuitem", { name: "Remove…" })
+  ).not.toBeInTheDocument();
+});
+
+it("does not infer a manual connection from source when the group explicitly denies one", async () => {
+  render(
+    <DossierCharacterMenu
+      character={{ ...character, hasManualConnection: false }}
+      root={root}
+    />
+  );
+  await openMenu();
+  expect(
+    screen.queryByRole("menuitem", { name: "Remove…" })
+  ).not.toBeInTheDocument();
+});

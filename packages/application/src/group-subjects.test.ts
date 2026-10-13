@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import type { CharacterKey } from "@slashwho/domain";
+import { describe, expect, it, vi } from "vitest";
+import type { CharacterKey, DiscoverySource } from "@slashwho/domain";
+import { groupMemberFacts } from "@slashwho/domain";
 import {
   pageMembers,
   resolveGroupSubjects,
@@ -187,6 +188,142 @@ describe("page members", () => {
 });
 
 describe("resolveGroupSubjects", () => {
+  it("never folds a suppressed snapshot member into rows, research or freshness facts", () => {
+    const g = graph({
+      names: ["o", "c"],
+      links: [],
+      suppressed: new Set(["c"]),
+      snapshotMembers: new Map([["o", ["o", "c"]]]),
+      snapshotSources: new Map([["o", new Map([["c", "claimed"]])]]),
+      latestSnapshot: new Map([
+        ["o", { state: "complete", limitationCode: null }],
+        ["c", { state: "partial", limitationCode: "privacy_hidden" }]
+      ])
+    });
+    const subjects = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!;
+    expect(subjects.selected.map((row) => row.key.name)).toEqual(["o"]);
+    expect(subjects.research).toEqual({
+      state: "complete",
+      limitationCodes: []
+    });
+    expect(
+      groupMemberFacts(
+        { graph: g, runs: [{ rootKey: key("c") }], sweepStates: [] },
+        key("o")
+      ).runs
+    ).toEqual([]);
+  });
+
+  it("reports explicit removal facts for roots, reverse manual paths and pending targets", () => {
+    const g = graph({
+      names: ["o", "a"],
+      links: [{ a: "o", b: "a", strength: "manual" }],
+      manual: [{ makerId: "a", targetId: "o", excluded: false }],
+      undiscoveredManualTargets: [
+        { makerId: "o", targetKey: key("pending"), excluded: false }
+      ]
+    });
+    const rows = resolveGroupSubjects(key("o"), g, {
+      DOSSIER_CHARACTER_CEILING: 50
+    })!.selected;
+    expect(rows.map((row) => [row.key.name, row.hasManualConnection])).toEqual([
+      ["o", true],
+      ["a", false],
+      ["pending", true]
+    ]);
+    expect(
+      resolveGroupSubjects(key("o"), graph({ names: ["o"], links: [] }), {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!.selected[0]!.hasManualConnection
+    ).toBe(false);
+  });
+
+  it("uses the newest page member snapshot for a fallback label, ignoring suppressed roots", () => {
+    const g = graph({
+      names: ["o", "a", "b", "s", "x"],
+      links: [
+        { a: "o", b: "a", strength: "manual" },
+        { a: "o", b: "b", strength: "manual" }
+      ],
+      suppressed: new Set(["s"]),
+      snapshotMembers: new Map([["o", ["o", "x"]]]),
+      snapshotSources: new Map<string, ReadonlyMap<string, DiscoverySource>>([
+        ["s", new Map([["x", "declared_main"]])],
+        ["a", new Map([["x", "claimed"]])],
+        ["b", new Map([["x", "profile_guess"]])]
+      ]),
+      latestSnapshot: new Map([
+        [
+          "a",
+          {
+            state: "complete",
+            limitationCode: null,
+            refreshedAt: new Date("2026-01-01")
+          }
+        ],
+        [
+          "b",
+          {
+            state: "complete",
+            limitationCode: null,
+            refreshedAt: new Date("2026-02-01")
+          }
+        ],
+        [
+          "s",
+          {
+            state: "complete",
+            limitationCode: null,
+            refreshedAt: new Date("2026-03-01")
+          }
+        ]
+      ])
+    });
+    expect(
+      resolveGroupSubjects(key("o"), g, {
+        DOSSIER_CHARACTER_CEILING: 50
+      })!.selected.find((row) => row.key.name === "x")!.source
+    ).toBe("profile_guess");
+  });
+
+  it("logs only unreachable members outside O's snapshot and weakened live paths", () => {
+    const logger = { info: vi.fn() };
+    const g = graph({
+      names: ["o", "a"],
+      links: [],
+      snapshotMembers: new Map([["o", ["o", "a"]]]),
+      snapshotSources: new Map([["o", new Map([["a", "claimed"]])]])
+    });
+    resolveGroupSubjects(
+      key("o"),
+      g,
+      { DOSSIER_CHARACTER_CEILING: 50 },
+      logger
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+    resolveGroupSubjects(
+      key("o"),
+      { ...g, snapshotSources: new Map() },
+      { DOSSIER_CHARACTER_CEILING: 50 },
+      logger
+    );
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith({
+      event: "group_member_unreachable"
+    });
+    logger.info.mockClear();
+    resolveGroupSubjects(
+      key("o"),
+      { ...g, links: [{ a: "o", b: "a", strength: "manual" }] },
+      { DOSSIER_CHARACTER_CEILING: 50 },
+      logger
+    );
+    expect(logger.info).toHaveBeenCalledExactlyOnceWith({
+      event: "group_label_weakened"
+    });
+  });
+
   it("labels the opened character as today's root and others by path", () => {
     const g = graph({
       names: ["o", "f", "c"],

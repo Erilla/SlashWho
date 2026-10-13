@@ -108,7 +108,7 @@ export type CharacterGroupsAudit = Readonly<{
 /** Each root's latest snapshot, as `getCurrent` chooses it, before suppression. */
 const LATEST_SNAPSHOTS = `
   SELECT DISTINCT ON (snapshot.root_character_id)
-    snapshot.id, snapshot.root_character_id, snapshot.state, snapshot.limitation_code
+    snapshot.id, snapshot.root_character_id, snapshot.state, snapshot.limitation_code, snapshot.refreshed_at
   FROM snapshots snapshot
   JOIN discovery_runs run ON run.id = snapshot.discovery_run_id AND run.status = 'complete'
   ORDER BY snapshot.root_character_id, snapshot.refreshed_at DESC, snapshot.id DESC`;
@@ -307,13 +307,18 @@ async function load(
     root_character_id: string;
     state: "complete" | "partial";
     limitation_code: string | null;
+    refreshed_at: Date;
   }>(LATEST_SNAPSHOTS);
   const latestSnapshot = new Map(
     latestRows.rows
       .filter((row) => !suppressed.has(row.root_character_id))
       .map((row) => [
         row.root_character_id,
-        { state: row.state, limitationCode: row.limitation_code }
+        {
+          state: row.state,
+          limitationCode: row.limitation_code,
+          refreshedAt: row.refreshed_at
+        }
       ])
   );
   const rawMembershipRows = await client.query<{

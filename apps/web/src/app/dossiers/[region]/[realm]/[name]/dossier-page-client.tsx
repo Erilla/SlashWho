@@ -671,6 +671,10 @@ function DossierPageState({
           return;
         }
         if (result.kind !== "ok") {
+          if (silentGroupStart.current) {
+            setStatus(null);
+            return;
+          }
           setError(
             result.kind === "refused"
               ? apiError(result.response, result.body)

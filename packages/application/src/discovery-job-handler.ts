@@ -13,6 +13,7 @@ import type {
 } from "@slashwho/blizzard";
 import {
   canonicalCharacterId,
+  MAX_CONTINUATION_NON_PROGRESS_CYCLES,
   characterGroupsErrorCode,
   deduplicateCharacters,
   discoverCharacter,
@@ -321,7 +322,6 @@ function isFingerprintReleaseRetryableError(
  * Giving up leaves the cursor set, so the next natural sweep of this root
  * resumes from where the chain stopped instead of restarting at candidate one.
  */
-const MAX_CONTINUATION_NON_PROGRESS_CYCLES = 5;
 
 /**
  * How long a continuation cycle that failed waits before the next one may be

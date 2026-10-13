@@ -33,7 +33,7 @@ The reviewer-surface report about an opened character and its page members, carr
 _Avoid_: Intel report, applicant snapshot, saved dossier
 
 **Connection**:
-An observation of a link between two characters, with its observer, source and time. Manual connections are read live. Rejections are recorded separately; phase 3 owns their reviewer actions and expiry.
+An observation of a link between two characters, with its observer, source and time. Manual connections are read live. Rejections are recorded separately from connection observations.
 
 **Group**:
 The stored connected component of counting links. Groups share discovery and reviewer exclusions. Membership recomputes best effort after publication; it does not participate in the publication transaction.

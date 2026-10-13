@@ -1,7 +1,8 @@
 import { COUNTING_LINKS } from "./counting-links";
 /**
- * The rebuild's SQL, copied verbatim from the migration's backfill
- * (`drizzle/0069_character_groups.sql`), so the two never drift (#738).
+ * The rebuild retains the migration's pinned backfill structure
+ * (`drizzle/0069_character_groups.sql`), with counting links shared with live
+ * recompute and audit so their predicates stay in step (#738).
  *
  * The rebuild runs while the live worker may still be publishing, so it must
  * see the same pinned snapshot the migration's backfill sees: `pinLatest`

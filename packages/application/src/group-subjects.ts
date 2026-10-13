@@ -54,6 +54,13 @@ export function resolveGroupSubjects(
     originId,
     graph.links.filter((link) => members.has(link.a) && members.has(link.b))
   );
+  const pageSnapshotSources = [...(graph.snapshotSources ?? [])]
+    .filter(([rootId]) => members.has(rootId))
+    .sort(
+      ([a], [b]) =>
+        (graph.latestSnapshot.get(b)?.refreshedAt?.getTime() ?? 0) -
+        (graph.latestSnapshot.get(a)?.refreshedAt?.getTime() ?? 0)
+    );
   const manualFacts = (targetKey: CharacterKey) => {
     const targetId = graph.idOf(targetKey);
     const origins = [
@@ -81,8 +88,8 @@ export function resolveGroupSubjects(
     const ownSource = graph.snapshotSources?.get(originId)?.get(id);
     const fallbackSource =
       ownSource ??
-      [...(graph.snapshotSources?.values() ?? [])]
-        .map((sources) => sources.get(id))
+      pageSnapshotSources
+        .map(([, sources]) => sources.get(id))
         .find((source) => source !== undefined);
     const strength = strengths.get(id);
     if (id !== originId && strength === undefined && ownSource === undefined)
@@ -115,7 +122,7 @@ export function resolveGroupSubjects(
       raiderIoUrl: character.raiderIoUrl,
       level: character.level,
       source,
-      ...(manual.present ? { hasManualConnection: true } : {}),
+      hasManualConnection: manual.present,
       ...(source === "manually_added" && manual.applicant
         ? { origin: "application" as const }
         : {})
@@ -215,7 +222,7 @@ export function resolveGroupSubjects(
         ? primary
         : {
             ...primaryWithoutOrigin,
-            ...(manual.length ? { hasManualConnection: true } : {}),
+            hasManualConnection: manual.length > 0,
             ...(primary.source === "manually_added" &&
             manual.length &&
             manual.every((fact) => fact.applicant)

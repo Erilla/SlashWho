@@ -8,6 +8,7 @@ import {
 } from "@slashwho/contracts";
 import { z } from "zod";
 import type {
+  GroupRead,
   DiscoveryQueue,
   Repositories,
   SearchReservationResult
@@ -15,6 +16,7 @@ import type {
 import { groupMemberFacts } from "@slashwho/domain";
 import {
   canonicalCharacterId,
+  MAX_CONTINUATION_NON_PROGRESS_CYCLES,
   isFresh,
   isSweepDue,
   parseRaiderIoCharacterUrl,
@@ -123,7 +125,8 @@ export interface SearchService {
   /** Queues a bounded connected-character refresh without blocking the dossier. */
   scheduleConnectedCharacterSweep?(
     key: CharacterKey,
-    scope?: MeasurementScope
+    scope?: MeasurementScope,
+    groupRead?: GroupRead
   ): Promise<void>;
   cleanupExpired(now?: Date): Promise<CleanupCounts>;
 }
@@ -571,7 +574,7 @@ export function createSearchService(options: {
         : null;
     },
 
-    async scheduleConnectedCharacterSweep(key, scope) {
+    async scheduleConnectedCharacterSweep(key, scope, groupRead) {
       const repositories = scope
         ? measuredRepositories(options.repositories, scope)
         : options.repositories;
@@ -582,10 +585,18 @@ export function createSearchService(options: {
           options.config.FINGERPRINT_SWEEP_CADENCE_HOURS * 3_600_000
       );
       if (repositories.groupReads) {
-        const group = await repositories.groupReads.read(key, at);
+        const group =
+          groupRead ?? (await repositories.groupReads.read(key, at));
         if (!group) return;
         const facts = groupMemberFacts(group, key);
-        if (!isSweepDue(facts.sweepStates, facts.runs, cadenceCutoff, 5))
+        if (
+          !isSweepDue(
+            facts.sweepStates,
+            facts.runs,
+            cadenceCutoff,
+            MAX_CONTINUATION_NON_PROGRESS_CYCLES
+          )
+        )
           return;
         const reservation = await repositories.searchReservations.reserve({
           key,
@@ -596,7 +607,10 @@ export function createSearchService(options: {
           at,
           freshnessCutoff: at,
           ignoreFreshness: true,
-          sweepDue: { cadenceCutoff, maxFailures: 5 }
+          sweepDue: {
+            cadenceCutoff,
+            maxFailures: MAX_CONTINUATION_NON_PROGRESS_CYCLES
+          }
         });
         if (reservation.kind !== "reserved") return;
         const queueJobId = await options.queue.enqueue({

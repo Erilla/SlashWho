@@ -193,6 +193,14 @@ beforeEach(() => {
 });
 
 describe("POST /api/dossiers", () => {
+  it("maps a fresh group search to the ready response", async () => {
+    started = { kind: "group_ready", key: dossier.root };
+    const response = await POST(dossierRequest({ characterUrl }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ kind: "ready" });
+    expect(readCalls).toBe(0);
+  });
   it("starts or reuses discovery for a valid applicant identity", async () => {
     // Break caught: a Warcraft Logs identity could fail to receive a pollable
     // discovery response from the dossier endpoint.
