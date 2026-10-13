@@ -2027,28 +2027,82 @@ describe("applicant dossier service", () => {
           id: running,
           status: "running",
           deferred: false,
-          phaseStates: ["completed", "active"]
+          key: root,
+          phases: [
+            {
+              id: "warcraft_logs_history",
+              state: "completed",
+              limitationCode: null
+            },
+            { id: "publication", state: "active", limitationCode: null }
+          ]
         },
         {
           id: settled,
           status: "partial",
           deferred: false,
-          phaseStates: ["completed"]
+          key: root,
+          phases: [
+            { id: "publication", state: "completed", limitationCode: null }
+          ]
         },
-        { id: retrying, status: "retrying", deferred: false, phaseStates: [] },
+        {
+          id: retrying,
+          status: "retrying",
+          deferred: false,
+          key: root,
+          phases: []
+        },
         // Deferred for the points allowance: still `running`, but waiting,
         // possibly for an hour, so the page must not ask twice a second.
-        { id: deferred, status: "running", deferred: true, phaseStates: [] }
+        {
+          id: deferred,
+          status: "running",
+          deferred: true,
+          key: root,
+          phases: []
+        }
       ]
     });
 
     await expect(
       dossiers.readEvidenceRunProgress([running, settled, retrying, deferred])
     ).resolves.toEqual([
-      { id: running, state: "running", version: "running:completed:active" },
-      { id: settled, state: "settled", version: "partial:completed" },
-      { id: retrying, state: "queued", version: "retrying" },
-      { id: deferred, state: "queued", version: "running-deferred" }
+      {
+        id: running,
+        key: root,
+        state: "running",
+        evidenceState: "scanning",
+        collectionProgress: [
+          { id: "warcraft_logs_history", state: "completed" },
+          { id: "publication", state: "active" }
+        ],
+        version: "running:warcraft_logs_history:completed::publication:active:"
+      },
+      {
+        id: settled,
+        key: root,
+        state: "settled",
+        evidenceState: "partial",
+        collectionProgress: [{ id: "publication", state: "completed" }],
+        version: "partial:publication:completed:"
+      },
+      {
+        id: retrying,
+        key: root,
+        state: "queued",
+        evidenceState: "waiting",
+        collectionProgress: [],
+        version: "retrying"
+      },
+      {
+        id: deferred,
+        key: root,
+        state: "queued",
+        evidenceState: "scanning",
+        collectionProgress: [],
+        version: "running-deferred"
+      }
     ]);
     expect(repositories.evidence.reserve).not.toHaveBeenCalled();
     expect(repositories.snapshots.getCurrent).not.toHaveBeenCalled();
