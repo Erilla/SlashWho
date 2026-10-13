@@ -1002,3 +1002,88 @@ it("settles an application at intake when its root is inserted suppressed", asyn
   );
   expect(settled.rows[0].settled_at).not.toBeNull();
 });
+
+it("alerts once per new response, even when all its links are deferred", async () => {
+  // Break caught: a four-link response sent four alerts; and a response whose
+  // links were all deferred never alerted at all once the mark passed it.
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  const result = await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: `${tp} ${tc}`,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    linkingEnabled: true,
+    isSuppressed: async () => "defer"
+  });
+  expect(result.newApplicants).toEqual([
+    expect.objectContaining({
+      characterUrl: tp,
+      otherCharacters: 1,
+      linking: "pending"
+    })
+  ]);
+  const later = await pollRows([
+    [5, tx],
+    [20, `${tp} ${tc}`]
+  ]);
+  expect(later.newApplicants).toEqual([]);
+});
+
+it("sends no alert for an edited response whose counts did not rise", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, `${tp} ${tc}`]]);
+  const result = await pollRows([[30, `${tc} ${tp}`]]);
+  expect(result.newApplicants).toEqual([]);
+});
+
+it("says an over-cap response will not be linked", async () => {
+  await resetApplicantSource();
+  await pollRows([[5, tx]]);
+  const six = ["a", "b", "c", "d", "e", "f"]
+    .map((name) => `https://raider.io/characters/eu/hyjal/capped${name}`)
+    .join(" ");
+  const result = await pollApplicantSheet({
+    pool,
+    readRows: async () => [
+      {
+        row: 2,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: tx,
+        submittedSerial: 5
+      },
+      {
+        row: 3,
+        battletag: "t",
+        discordId: "1",
+        characterName: "N",
+        linkCell: six,
+        submittedSerial: 20
+      }
+    ],
+    backlogLimit: 100,
+    linkingEnabled: true,
+    isSuppressed: async () => false
+  });
+  expect(result.newApplicants).toEqual([
+    expect.objectContaining({ otherCharacters: 5, linking: "over_cap" })
+  ]);
+});

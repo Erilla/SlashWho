@@ -128,7 +128,18 @@ export function createFingerprintAlertNotifier(
             `Discord ID: ${escapeDiscord(applicant.discordId)}`,
             `Character: ${escapeDiscord(applicant.characterName)}`,
             `Character link: ${applicant.characterUrl}`,
-            `Dossier: ${applicant.dossierUrl ?? "pending character resolution"}`
+            `Dossier: ${applicant.dossierUrl ?? "pending character resolution"}`,
+            ...(applicant.linking
+              ? [
+                  `Linking: ${
+                    applicant.linking === "pending"
+                      ? "they'll be linked if they pass the checks"
+                      : applicant.linking === "over_cap"
+                        ? "too many to link automatically"
+                        : "automatic linking is off"
+                  }`
+                ]
+              : [])
           ].join("\n")
         : `${alert.event === "applicant_new_intents" ? "📨" : "⚠️"} ${alert.event} — ${details}`;
       const body = discordWebhook
@@ -173,12 +184,13 @@ export async function announceNewApplicantIntents(
   }
   for (const applicant of poll.newApplicants) {
     try {
-      const { dossierPath, ...details } = applicant;
+      const { dossierPath, otherCharacters, linking, ...details } = applicant;
       await notifier?.notify({
         event: "applicant_new_intents",
-        details: { count: 1 },
+        details: { count: 1, ...(otherCharacters ? { otherCharacters } : {}) },
         applicant: {
           ...details,
+          ...(linking ? { linking } : {}),
           ...(dossierPath && dossierBaseUrl
             ? { dossierUrl: new URL(dossierPath, dossierBaseUrl).toString() }
             : {})

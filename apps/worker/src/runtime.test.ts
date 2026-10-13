@@ -1095,6 +1095,44 @@ describe("worker runtime", () => {
     expect(body.allowed_mentions).toEqual({ parse: [] });
   });
 
+  it("renders how many other characters an application listed and whether they will be linked", async () => {
+    const fetch = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) => {
+        void _url;
+        void _init;
+        return new Response(null, { status: 204 });
+      }
+    );
+    const notifier = createFingerprintAlertNotifier(
+      {
+        ...config,
+        maintainerAlertWebhookUrl:
+          "https://discord.com/api/webhooks/000000000000000000/token"
+      },
+      { fetch }
+    );
+    await notifier.notify({
+      event: "applicant_new_intents",
+      details: { count: 1, otherCharacters: 2 },
+      applicant: {
+        characterUrl: "https://raider.io/characters/eu/hyjal/tropipe",
+        dossierUrl: "https://slashwho.com/dossiers/eu/hyjal/tropipe",
+        linking: "pending"
+      }
+    });
+    const posted = [
+      (
+        JSON.parse((fetch.mock.calls[0]![1] as RequestInit).body as string) as {
+          content: string;
+        }
+      ).content
+    ];
+    expect(posted[0]).toContain("otherCharacters: 2");
+    expect(posted[0]).toContain(
+      "Linking: they'll be linked if they pass the checks"
+    );
+  });
+
   it("swallows and logs a non-successful maintainer webhook response", async () => {
     // Break caught: a provider outage could reject discovery work and cause the
     // durable job to retry after its sweep had already changed state.
@@ -2310,7 +2348,8 @@ describe("worker runtime", () => {
       backlog: 0,
       invalid: 0,
       truncated: 0,
-      newApplicants: []
+      newApplicants: [],
+      applications: { recorded: 3, ambiguous: 1, overCap: 2 }
     });
     vi.mocked(drainApplicantIntents).mockResolvedValueOnce({
       admitted: 1,
@@ -2341,6 +2380,7 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
+        applications: { recorded: 3, ambiguous: 1, overCap: 2 },
         durationMs: 25
       },
       {
@@ -2352,6 +2392,9 @@ describe("worker runtime", () => {
         durationMs: 25
       }
     ]);
+    const pollRecord = applicantRecords(logger)[0]!;
+    expect(pollRecord).not.toHaveProperty("risen");
+    expect(pollRecord).not.toHaveProperty("unmarkedOccurrences");
     await runtime.stop();
   });
 
@@ -2419,7 +2462,8 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
-        newApplicants: []
+        newApplicants: [],
+        applications: { recorded: 0, ambiguous: 0, overCap: 0 }
       });
       const fakes = runtimeFakes();
       const runtime = await createWorkerRuntime(applicantConfig, {
@@ -2455,7 +2499,8 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
-        newApplicants: []
+        newApplicants: [],
+        applications: { recorded: 0, ambiguous: 0, overCap: 0 }
       });
       vi.mocked(drainApplicantIntents).mockResolvedValue({
         admitted: 0,
@@ -2576,7 +2621,8 @@ describe("worker runtime", () => {
         backlog: 0,
         invalid: 0,
         truncated: 0,
-        newApplicants: []
+        newApplicants: [],
+        applications: { recorded: 0, ambiguous: 0, overCap: 0 }
       };
       vi.mocked(pollApplicantSheet)
         .mockRejectedValueOnce(new Error("sheet_down"))
@@ -2649,7 +2695,8 @@ describe("worker runtime", () => {
           backlog: 0,
           invalid: 0,
           truncated: 0,
-          newApplicants: []
+          newApplicants: [],
+          applications: { recorded: 0, ambiguous: 0, overCap: 0 }
         };
       });
       vi.mocked(drainApplicantIntents).mockResolvedValue({
@@ -2726,7 +2773,8 @@ describe("worker runtime", () => {
           backlog: 0,
           invalid: 0,
           truncated: 0,
-          newApplicants: []
+          newApplicants: [],
+          applications: { recorded: 0, ambiguous: 0, overCap: 0 }
         };
       });
       vi.mocked(drainApplicantIntents).mockResolvedValueOnce({

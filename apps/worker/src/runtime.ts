@@ -991,7 +991,8 @@ function createApplicantSheetTick(
           }
           return wasSuppressedAt(pool as Pool, decoded.key, observedAt);
         },
-        backlogLimit: config.applicantWatcher.backlog
+        backlogLimit: config.applicantWatcher.backlog,
+        linkingEnabled: config.applicantWatcher.linkingEnabled
       });
       applicantPollFailures = 0;
       applicantFailingSince = null;
@@ -1004,6 +1005,7 @@ function createApplicantSheetTick(
         backlog: poll.backlog,
         invalid: poll.invalid,
         truncated: poll.truncated,
+        applications: poll.applications,
         durationMs: elapsedMs(clock, pollStartedAt)
       });
       await announceNewApplicantIntents(

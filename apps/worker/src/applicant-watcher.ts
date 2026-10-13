@@ -49,6 +49,9 @@ export type NewApplicant = {
   characterName?: string | undefined;
   characterUrl: string;
   dossierPath?: string;
+  /** Other characters on the same response; set only for a multi-link response. */
+  otherCharacters?: number;
+  linking?: "pending" | "over_cap" | "disabled";
 };
 
 function displayField(value: unknown): string | undefined {
@@ -427,6 +430,7 @@ export async function pollApplicantSheet(input: {
     observedAt: Date
   ) => Promise<boolean | "defer">;
   parserVersion?: number;
+  linkingEnabled?: boolean;
 }): Promise<{
   baseline: boolean;
   rebaselined: boolean;
@@ -435,6 +439,7 @@ export async function pollApplicantSheet(input: {
   invalid: number;
   truncated: number;
   newApplicants: NewApplicant[];
+  applications: { recorded: number; ambiguous: number; overCap: number };
 }> {
   // A failed read never enters the transaction or advances durable state.
   const rows = input.readRows
@@ -446,6 +451,8 @@ export async function pollApplicantSheet(input: {
   if (rows.length > 5_000) throw new Error("applicant_sheet_bounds_exceeded");
   const counts = new Map<string, number>();
   const occurrences = new Map<string, NewApplicant[]>();
+  // Keyed by sheet row; in memory only, never stored.
+  const rowDetails = new Map<number, NewApplicant>();
   let invalid = 0;
   let truncated = 0;
   const intakeRows: IntakeRow[] = [];
@@ -479,6 +486,7 @@ export async function pollApplicantSheet(input: {
       const list = occurrences.get(candidate.identity) ?? [];
       list.push(applicant);
       occurrences.set(candidate.identity, list);
+      if (!rowDetails.has(row.row)) rowDetails.set(row.row, applicant);
     }
   }
   const reconciliation = await reconcileApplicantCounts(
@@ -490,12 +498,16 @@ export async function pollApplicantSheet(input: {
     input.parserVersion,
     { rows: intakeRows }
   );
-  const { newOccurrences, ...state } = reconciliation;
-  return {
-    ...state,
-    invalid,
-    truncated,
-    newApplicants: newOccurrences.flatMap(({ identity, index }) => {
+  const {
+    newOccurrences,
+    startMark,
+    risen,
+    unmarkedOccurrences,
+    applications,
+    ...state
+  } = reconciliation;
+  const perOccurrence = (list: { identity: string; index: number }[]) =>
+    list.flatMap(({ identity, index }) => {
       const applicant = occurrences.get(identity)?.[index];
       if (!applicant) return [];
       const resolvedPath = input.resolveDossierPath?.(identity);
@@ -505,7 +517,53 @@ export async function pollApplicantSheet(input: {
           ...(resolvedPath ? { dossierPath: resolvedPath } : {})
         }
       ];
-    })
+    });
+  let newApplicants: NewApplicant[];
+  if (state.baseline) newApplicants = [];
+  // A re-baseline records no applications; only submissions deferred before
+  // the change are admitted, and each keeps its own per-occurrence alert.
+  else if (state.rebaselined || startMark === null)
+    newApplicants = perOccurrence(newOccurrences);
+  else {
+    // One alert per response first seen in this poll, whether its links were
+    // recorded or deferred; a deferred link later inserted never alerts again.
+    newApplicants = intakeRows
+      .filter(
+        (row) =>
+          row.submittedSerial !== undefined &&
+          row.submittedSerial > startMark &&
+          row.identities.some((identity) => risen.has(identity))
+      )
+      .flatMap((row) => {
+        const applicant = rowDetails.get(row.row);
+        if (!applicant) return [];
+        const others = row.identities.length - 1;
+        const resolvedPath = input.resolveDossierPath?.(row.identities[0]!);
+        return [
+          {
+            ...applicant,
+            ...(resolvedPath ? { dossierPath: resolvedPath } : {}),
+            ...(others > 0
+              ? {
+                  otherCharacters: others,
+                  linking: !input.linkingEnabled
+                    ? ("disabled" as const)
+                    : row.identities.length > applicationLinkCap
+                      ? ("over_cap" as const)
+                      : ("pending" as const)
+                }
+              : {})
+          }
+        ];
+      })
+      .concat(perOccurrence(unmarkedOccurrences));
+  }
+  return {
+    ...state,
+    invalid,
+    truncated,
+    newApplicants,
+    applications
   };
 }
 
