@@ -113,6 +113,25 @@ describe("durable discovery queue", () => {
     ]);
   });
 
+  it("promotes an exclusive-send repair without explicit promotion or duplication", async () => {
+    const queue = createDiscoveryQueue({ connectionString });
+    cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
+    await queue.start();
+    const id = await queue.enqueueCharacterEvidence("repair-priority", {
+      priority: 0
+    });
+    for (const priority of [20, 10]) {
+      expect(
+        await queue.enqueueCharacterEvidence("repair-priority", { priority })
+      ).toBe(id);
+      const { rows } = await applicationPool.query(
+        "SELECT id, priority FROM pgboss.job WHERE name = $1 AND singleton_key = $2",
+        [characterEvidenceQueueName, "repair-priority"]
+      );
+      expect(rows).toEqual([{ id, priority: 20 }]);
+    }
+  });
+
   it("runs a reader-joined background job ahead of the backlog without duplication", async () => {
     const queue = createDiscoveryQueue({ connectionString });
     cleanup.push(() => queue.stop({ graceful: false, timeoutMs: 1_000 }));
