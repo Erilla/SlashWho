@@ -7,6 +7,6 @@ allowBuilds:
   protobufjs: false
   ssh2: false
 overrides:
-  # sharp arrives only as next's optional dependency. 0.35.4 fixes its
-  # high-severity advisory; 0.35.5 is newer than minimumReleaseAge allows.
-  sharp: 0.35.4
+  # sharp arrives only as next's optional dependency, whose ^0.35.4 range
+  # still admits vulnerable 0.35.4. 0.35.5 fixes its high-severity advisory.
+  sharp: 0.35.5
