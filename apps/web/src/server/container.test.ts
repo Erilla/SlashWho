@@ -46,6 +46,7 @@ it("migrates and initializes the durable queue before serving searches", async (
     async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async scheduleEvidenceResume() {},
+    async scheduleApplicantSheetTick() {},
     async settledEvidenceJobIds() {
       return [];
     },
@@ -157,6 +158,7 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async scheduleEvidenceResume() {},
+    async scheduleApplicantSheetTick() {},
     async settledEvidenceJobIds() {
       return [];
     },
@@ -331,6 +333,7 @@ it("wires a working onThrottle from both provider gateways to the web logger", a
     async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async scheduleEvidenceResume() {},
+    async scheduleApplicantSheetTick() {},
     async settledEvidenceJobIds() {
       return [];
     },
@@ -446,6 +449,7 @@ it.each([
       async workCharacterEvidence() {},
       async scheduleMaintenanceCleanup() {},
       async scheduleEvidenceResume() {},
+      async scheduleApplicantSheetTick() {},
       async settledEvidenceJobIds() {
         return [];
       },
@@ -543,6 +547,7 @@ it.each([
       async workCharacterEvidence() {},
       async scheduleMaintenanceCleanup() {},
       async scheduleEvidenceResume() {},
+      async scheduleApplicantSheetTick() {},
       async settledEvidenceJobIds() {
         return [];
       },
@@ -641,6 +646,7 @@ it("rate limits the web's shared Blizzard client, not each dossier read", async 
     async workCharacterEvidence() {},
     async scheduleMaintenanceCleanup() {},
     async scheduleEvidenceResume() {},
+    async scheduleApplicantSheetTick() {},
     async settledEvidenceJobIds() {
       return [];
     },

@@ -16,6 +16,28 @@ import type { WorkerConfig } from "./config";
 
 const source = "applicant_sheet";
 
+/**
+ * A poll is due a little early: cron ticks start with jitter, and a tick that
+ * starts even slightly before a full cadence has passed would otherwise skip a
+ * whole period.
+ */
+export const applicantPollToleranceMs = 15_000;
+
+/** Whether this tick should read the Sheet. `lastPolledAt` is a poll's start. */
+export function isApplicantPollDue(input: {
+  now: number;
+  lastPolledAt: Date | string | null | undefined;
+  nextAttemptAt: number;
+  cadenceMs: number;
+}): boolean {
+  if (input.now < input.nextAttemptAt - applicantPollToleranceMs) return false;
+  if (!input.lastPolledAt) return true;
+  return (
+    input.now - new Date(input.lastPolledAt).getTime() >=
+    input.cadenceMs - applicantPollToleranceMs
+  );
+}
+
 export type NewApplicant = {
   battletag?: string | undefined;
   discordId?: string | undefined;
@@ -395,11 +417,17 @@ export async function drainApplicantIntents(input: {
     WarcraftLogsGateway,
     "resolveCharacterById" | "getRateLimit"
   >;
-}): Promise<{ admitted: number; suppressed: number; deferred: number }> {
+}): Promise<{
+  admitted: number;
+  suppressed: number;
+  deferred: number;
+  pointsBlocked: boolean;
+}> {
   const policy = input.config.applicantWatcher;
   let admitted = 0,
     suppressed = 0,
     deferred = 0;
+  let pointsBlocked = false;
   for (let i = 0; i < policy.perTick; i++) {
     const waiting = await input.pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM applicant_source_intents WHERE source = $1 AND (state = 'pending' OR (state = 'claimed' AND claimed_until < now())) AND (retry_after IS NULL OR retry_after <= now())",
@@ -427,8 +455,10 @@ export async function drainApplicantIntents(input: {
       allowance.kind !== "rate_limit" ||
       allowance.limitPerHour - allowance.pointsSpentThisHour - reservedPoints <
         neededPoints
-    )
+    ) {
+      pointsBlocked = true;
       break;
+    }
     const intent = await claimNext(input.pool);
     if (!intent) break;
     try {
@@ -480,5 +510,5 @@ export async function drainApplicantIntents(input: {
       );
     }
   }
-  return { admitted, suppressed, deferred };
+  return { admitted, suppressed, deferred, pointsBlocked };
 }
