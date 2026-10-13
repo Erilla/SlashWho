@@ -2501,7 +2501,9 @@ describe("worker runtime", () => {
         deferred: 0,
         pointsBlocked: false
       });
-      const notify = vi.fn(async (_alert: { event: string }) => undefined);
+      const notify = vi.fn<(alert: { event: string }) => Promise<undefined>>(
+        async () => undefined
+      );
       const fakes = runtimeFakes();
       const runtime = await createWorkerRuntime(
         {
@@ -2523,8 +2525,7 @@ describe("worker runtime", () => {
       };
       const pollAlerts = () =>
         notify.mock.calls.filter(
-          ([alert]) =>
-            (alert as { event: string }).event === "applicant_poll_failed"
+          ([alert]) => alert.event === "applicant_poll_failed"
         );
 
       // Back-off from a one-minute base: next attempts at +2, +4, +8 minutes.
@@ -2577,7 +2578,9 @@ describe("worker runtime", () => {
         deferred: 0,
         pointsBlocked: false
       });
-      const notify = vi.fn(async (_alert: { event: string }) => undefined);
+      const notify = vi.fn<(alert: { event: string }) => Promise<undefined>>(
+        async () => undefined
+      );
       const fakes = runtimeFakes();
       const runtime = await createWorkerRuntime(
         {
@@ -2604,8 +2607,7 @@ describe("worker runtime", () => {
       await tickAt(20); // 10 minutes into the new streak
       expect(
         notify.mock.calls.filter(
-          ([alert]) =>
-            (alert as { event: string }).event === "applicant_poll_failed"
+          ([alert]) => alert.event === "applicant_poll_failed"
         )
       ).toEqual([]);
       await runtime.stop();
