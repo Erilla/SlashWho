@@ -1,10 +1,11 @@
-import { canonicalCharacterId } from "./deduplicate";
+import { canonicalCharacterId as computeCanonicalCharacterId } from "./deduplicate";
 import type { CharacterGuild, CharacterKey } from "./character-key";
 import { formatCharacterDisplayName } from "./display-name";
 import {
   lookupJournalEncounter,
   lookupRaidBossByName,
   lookupRaidByName,
+  lookupRaiderIoBoss,
   lookupRaidEncounterByRaiderIoSlugs,
   lookupRaidEncounterForEvidence,
   currentContentEligibilityByRaidId,
@@ -13,8 +14,25 @@ import {
 } from "./raid-catalogue";
 import { lookupCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 import { isNonRaidZone } from "./dungeon-catalogue";
-import { matchesRaiderIoKill } from "./kill-matching";
+import { STORED_KILL_MATCH_MS } from "./kill-matching";
 import { isRosterShown } from "./logged-encounter";
+
+// CharacterKey values are immutable. Weak keys reuse canonical IDs across the
+// assembly's helpers without retaining a dossier's identities in the process.
+const characterIds = new WeakMap<CharacterKey, string>();
+function canonicalCharacterId(key: CharacterKey): string {
+  const cached = characterIds.get(key);
+  if (cached !== undefined) return cached;
+  const id = computeCanonicalCharacterId(key);
+  characterIds.set(key, id);
+  return id;
+}
+
+function appendToBucket<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const bucket = map.get(key);
+  if (bucket) bucket.push(value);
+  else map.set(key, [value]);
+}
 
 export type DossierCharacter = Readonly<{
   key: CharacterKey;
@@ -438,21 +456,9 @@ const ROLE_ORDER: Readonly<Record<DossierRosterRole, number>> = {
   dps: 2
 };
 
-function isDossierCharacter(
-  member: DossierRosterMember,
-  characters: readonly DossierCharacter[]
-): boolean {
-  return characters.some(
-    ({ key }) =>
-      key.region === member.region.toLocaleLowerCase("en-US") &&
-      key.realm === member.realm.toLocaleLowerCase("en-US") &&
-      key.name === member.name.toLocaleLowerCase("en-US")
-  );
-}
-
 function killRoster(
   shared: readonly CatalogueMatchedKill[],
-  characters: readonly DossierCharacter[]
+  dossierCharacterIds: ReadonlySet<string>
 ): ApplicantDossierKillRoster | undefined {
   const firsts = shared.flatMap((kill) =>
     kill.raiderIoFirstKill ? [kill.raiderIoFirstKill] : []
@@ -479,7 +485,13 @@ function killRoster(
       )
       .map((member) => ({
         ...member,
-        isDossierCharacter: isDossierCharacter(member, characters)
+        isDossierCharacter: dossierCharacterIds.has(
+          JSON.stringify([
+            member.region.toLocaleLowerCase("en-US"),
+            member.realm.toLocaleLowerCase("en-US"),
+            member.name.toLocaleLowerCase("en-US")
+          ])
+        )
       }));
     // Raider.IO's counts: a raider left off the list still raided.
     const { tank, healer, dps } = encounter.roster.roleCounts;
@@ -720,6 +732,13 @@ export function buildApplicantDossier(
   input: BuildApplicantDossierInput
 ): ApplicantDossier {
   const limitations = [...input.limitations];
+  // Preserve the legacy membership rule: dossier keys themselves were compared
+  // verbatim to the lowercased roster member, even for noncanonical input keys.
+  const dossierCharacterIds = new Set(
+    input.characters.map(({ key }) =>
+      JSON.stringify([key.region, key.realm, key.name])
+    )
+  );
   const characters = input.characters.map((character) => ({
     ...character,
     displayName: formatCharacterDisplayName(character.displayName)
@@ -801,12 +820,31 @@ export function buildApplicantDossier(
   // A Raider.IO first kill with a parsed combat log is evidence of its own
   // (#732). One that matches a Warcraft Logs kill of the same character and
   // boss lends that kill its roster and changes nothing else about it.
-  const sameKill = (
-    first: DossierRaiderIoFirstKill,
-    kill: CatalogueMatchedKill
-  ) =>
-    canonicalCharacterId(kill.character) ===
-      canonicalCharacterId(first.character) && matchesRaiderIoKill(first, kill);
+  const matchKey = (
+    character: CharacterKey,
+    raidSlug: string,
+    bossSlug: string
+  ) => JSON.stringify([canonicalCharacterId(character), raidSlug, bossSlug]);
+  const indexKills = (kills: readonly CatalogueMatchedKill[]) => {
+    const index = new Map<string, { index: number; at: number }[]>();
+    // Reads without first kills need no matching catalogue work.
+    if (!input.raiderIoFirstKills?.length) return index;
+    kills.forEach((kill, position) => {
+      const boss = lookupRaiderIoBoss(kill.raidName, kill.bossName);
+      if (!boss) return;
+      appendToBucket(
+        index,
+        matchKey(kill.character, boss.raidSlug, boss.bossSlug),
+        {
+          index: position,
+          at: Date.parse(kill.killedAt)
+        }
+      );
+    });
+    return index;
+  };
+  const eligibleIndex = indexKills(allKills);
+  const withheldIndex = indexKills(withheldWarcraftLogsKills);
   for (const first of input.raiderIoFirstKills ?? []) {
     const metadata = lookupRaidEncounterByRaiderIoSlugs(
       first.raidSlug,
@@ -814,19 +852,29 @@ export function buildApplicantDossier(
     );
     if (metadata === null) continue;
     const at = Date.parse(first.killedAt);
-    const matched = allKills
-      .map((kill, index) => ({
-        kill,
-        index,
-        distance: Math.abs(Date.parse(kill.killedAt) - at)
-      }))
-      .filter(
-        ({ kill }) =>
-          kill.raiderIoFirstKill === undefined && sameKill(first, kill)
+    const key = matchKey(first.character, first.raidSlug, first.bossSlug);
+    let matched:
+      | { kill: CatalogueMatchedKill; index: number; distance: number }
+      | undefined;
+    for (const candidate of eligibleIndex.get(key) ?? []) {
+      const kill = allKills[candidate.index]!;
+      const distance = Math.abs(candidate.at - at);
+      // Read the current entry: earlier first kills have replaced matched
+      // entries. Invalid timestamps, like the shared rule, never match.
+      if (
+        kill.raiderIoFirstKill !== undefined ||
+        !(distance <= STORED_KILL_MATCH_MS)
       )
-      .sort(
-        (a, b) => a.distance - b.distance || compareEvidence(a.kill, b.kill)
-      )[0];
+        continue;
+      if (
+        !matched ||
+        distance < matched.distance ||
+        (distance === matched.distance &&
+          compareEvidence(kill, matched.kill) < 0)
+      ) {
+        matched = { kill, index: candidate.index, distance };
+      }
+    }
     if (matched) {
       allKills[matched.index] = { ...matched.kill, raiderIoFirstKill: first };
       continue;
@@ -851,7 +899,11 @@ export function buildApplicantDossier(
     if (eligible !== true) {
       // Its Warcraft Logs copy was withheld and tallied already: one kill,
       // counted once.
-      if (withheldWarcraftLogsKills.some((kill) => sameKill(first, kill)))
+      if (
+        (withheldIndex.get(key) ?? []).some(
+          (candidate) => Math.abs(candidate.at - at) <= STORED_KILL_MATCH_MS
+        )
+      )
         continue;
       withhold(
         eligible === false
@@ -879,12 +931,12 @@ export function buildApplicantDossier(
     const metadata = catalogueEncounter({ ...tierBest, journalBossId: null });
     if (metadata === null) continue;
     const key = [metadata.raidId, metadata.bossId].join("\0");
-    tierBestsByBoss.set(key, [...(tierBestsByBoss.get(key) ?? []), tierBest]);
+    appendToBucket(tierBestsByBoss, key, tierBest);
   }
   const byBoss = new Map<string, CatalogueMatchedKill[]>();
   for (const kill of allKills) {
     const key = [kill.raidId, kill.bossId].join("\0");
-    byBoss.set(key, [...(byBoss.get(key) ?? []), kill]);
+    appendToBucket(byBoss, key, kill);
   }
   const raids = new Map<
     string,
@@ -904,14 +956,14 @@ export function buildApplicantDossier(
     if (!metadata) continue;
     const wipe = { ...suppliedWipe, ...metadata };
     const key = `${metadata.raidId}\0${metadata.bossId}`;
-    wipesByBoss.set(key, [...(wipesByBoss.get(key) ?? []), wipe]);
+    appendToBucket(wipesByBoss, key, wipe);
   }
 
   for (const kills of byBoss.values()) {
     const groupedEvidence = new Map<string, CatalogueMatchedKill[]>();
     for (const kill of [...kills].sort(compareEvidence)) {
       const key = killEventKey(kill);
-      groupedEvidence.set(key, [...(groupedEvidence.get(key) ?? []), kill]);
+      appendToBucket(groupedEvidence, key, kill);
     }
     const firstKills = [...groupedEvidence.values()]
       .map((shared) => {
@@ -936,7 +988,7 @@ export function buildApplicantDossier(
           shared.map((kill) => canonicalCharacterId(kill.character))
         );
         const logged = shared.filter(hasPublicLog);
-        const roster = killRoster(shared, input.characters);
+        const roster = killRoster(shared, dossierCharacterIds);
         return {
           selected,
           shared,
