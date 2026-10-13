@@ -32,6 +32,7 @@ const SOURCE_FOR: Record<LinkStrength, RankedSubject["source"]> = {
 };
 
 const SOURCE_STRENGTH: Record<RankedSubject["source"], number> = {
+  submitted: 3,
   input: 3,
   claimed: 2,
   declared_main: 2,
