@@ -202,7 +202,10 @@ const dossiers = createApplicantDossierService({
     "snapshots" | "evidence" | "manualConnections" | "runs"
   >,
   search,
-  queue: { enqueueCharacterEvidence: vi.fn() },
+  queue: {
+    enqueueCharacterEvidence: vi.fn(),
+    promoteCharacterEvidence: vi.fn()
+  },
   blizzard: { getCompletedAchievements: vi.fn() },
   raiderio: { getMythicBossRankings: vi.fn(), getCharacter: vi.fn() },
   config,

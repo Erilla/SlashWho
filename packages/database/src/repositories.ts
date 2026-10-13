@@ -691,11 +691,57 @@ export interface CompletedCharacterEvidence {
  * run coexist; a reader that infers one from the other reports a refresh it
  * started as no work at all.
  */
-export type EvidenceReservationResult =
+/** The two immutable publications selected before payload hydration. */
+export type CompletedEvidenceSelection = Pick<
+  CompletedCharacterEvidence,
+  "run" | "wipeCapable"
+> & { snapshotRunId: string; evidenceVersion: number };
+
+export type EvidenceSettlementKill = Pick<
+  StoredCharacterMythicKill,
+  "raidId" | "killedAt" | "fightUrl"
+>;
+
+/** Reads needed to choose light/full policy without loading display evidence. */
+export type EvidenceSchedulingReads = Pick<
+  EvidenceRepository,
+  | "terminalTiers"
+  | "lastRaiderIoRecoveryAt"
+  | "hydratedFightUrls"
+  | "collectedTierZones"
+> & {
+  storedEvidenceTiers(key: CharacterKey): Promise<{
+    kills: readonly { raidId: string }[];
+    wipes: readonly { raidId: string }[];
+    lastCleanKillScanAt?: string;
+    historyScanResumePage?: number;
+    historicAliasProgress?: readonly Pick<
+      HistoricAliasScanProgress,
+      "historyScanResumePage"
+    >[];
+  }>;
+  completedSettlementKills(
+    selection: CompletedEvidenceSelection
+  ): Promise<readonly EvidenceSettlementKill[]>;
+};
+
+/**
+ * Runs only for a new full reservation, under its character lock. Use only
+ * the supplied transaction-bound reads: no provider/queue calls, pool reads
+ * or side effects. Do not retain the read view beyond this callback. Return
+ * light/full policy; it is persisted before visibility.
+ */
+export type EvidenceRunPreparation = (input: {
+  completed: CompletedEvidenceSelection | null;
+  completedVersionCurrent: boolean;
+  reads: EvidenceSchedulingReads;
+}) => Promise<boolean>;
+
+export type EvidenceReservationResult<Completed = CompletedCharacterEvidence> =
   | {
       kind: "fresh";
       run: CharacterEvidenceRun;
-      completed: CompletedCharacterEvidence;
+      completed: Completed;
       /** An in-flight run collecting over this already-fresh evidence. */
       active: CharacterEvidenceRun | null;
       /**
@@ -708,14 +754,14 @@ export type EvidenceReservationResult =
   | {
       kind: "active";
       run: CharacterEvidenceRun;
-      completed: CompletedCharacterEvidence | null;
+      completed: Completed | null;
       /** Always the joined run -- the same value as `run`. */
       active: CharacterEvidenceRun;
     }
   | {
       kind: "reserved";
       run: CharacterEvidenceRun;
-      completed: CompletedCharacterEvidence | null;
+      completed: Completed | null;
       /** Always the run this call created -- the same value as `run`. */
       active: CharacterEvidenceRun;
       /**
@@ -1028,6 +1074,17 @@ export type EvidenceRunCost = Readonly<{
 }>;
 
 export interface EvidenceRepository {
+  /** Optional for stores whose reservation already returns hydrated evidence. */
+  reserveForScheduling?(
+    input: Parameters<EvidenceRepository["reserve"]>[0],
+    prepareNewRun?: EvidenceRunPreparation
+  ): Promise<EvidenceReservationResult<CompletedEvidenceSelection>>;
+  hydrateCompletedEvidence?(
+    selection: CompletedEvidenceSelection
+  ): Promise<CompletedCharacterEvidence>;
+  completedSettlementKills?(
+    selection: CompletedEvidenceSelection
+  ): Promise<readonly EvidenceSettlementKill[]>;
   rosterProfileResolutions?: RosterProfileResolutionRepository;
   /** Reviewer-declared former identities of this connected character. */
   historicAliases?(key: CharacterKey): Promise<readonly CharacterKey[]>;

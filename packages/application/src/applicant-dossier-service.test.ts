@@ -137,6 +137,7 @@ function fixture(
   const evidenceCompletedAt = options.evidenceCompletedAt ?? new Date();
   const runsCreate = vi.fn();
   const enqueueCharacterEvidence = vi.fn().mockResolvedValue("evidence-job");
+  const promoteCharacterEvidence = vi.fn().mockResolvedValue(undefined);
   const markEnqueued = vi.fn().mockResolvedValue(undefined);
   const cachedKills: readonly StoredCharacterMythicKill[] = [
     {
@@ -434,7 +435,7 @@ function fixture(
   const dossiers = createApplicantDossierService({
     repositories,
     search,
-    queue: { enqueueCharacterEvidence },
+    queue: { enqueueCharacterEvidence, promoteCharacterEvidence },
     blizzard,
     raiderio,
     config,
@@ -446,6 +447,7 @@ function fixture(
     repositories,
     runsCreate,
     enqueueCharacterEvidence,
+    promoteCharacterEvidence,
     markEnqueued,
     search,
     warcraftLogs,
@@ -551,17 +553,71 @@ describe("a stale dossier read (#540)", () => {
       .mode;
   }
 
-  it("queues only the newest page for a character with nothing left to collect", async () => {
-    // Break caught: every stale read queued a full run, even for a character
-    // whose every tier was terminal and whose parses were all read.
-    const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
-    staleReservation(repositories);
-    settle(repositories);
+  it.each([false, true])(
+    "queues only the newest page for settled evidence (metadata: %s)",
+    async (metadataOnly) => {
+      // Break caught: every stale read queued a full run, even for a character
+      // whose every tier was terminal and whose parses were all read.
+      const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+      staleReservation(repositories);
+      settle(repositories);
+      if (metadataOnly) {
+        const completed = new Map<
+          string,
+          NonNullable<
+            Awaited<ReturnType<typeof repositories.evidence.getCompleted>>
+          >
+        >();
+        repositories.evidence.reserveForScheduling = async (input, prepare) => {
+          const reserved = await repositories.evidence.reserve(input);
+          if (!reserved.completed)
+            throw new Error("fixture_missing_completed_evidence");
+          completed.set(input.key.name, reserved.completed);
+          const selection = {
+            run: reserved.completed.run,
+            snapshotRunId: input.key.name,
+            evidenceVersion: reserved.completed.evidenceVersion ?? 1,
+            wipeCapable: true
+          };
+          const light =
+            reserved.kind === "reserved" && prepare
+              ? await prepare({
+                  completed: selection,
+                  completedVersionCurrent:
+                    reserved.completedVersionCurrent ?? false,
+                  reads: {
+                    ...repositories.evidence,
+                    completedSettlementKills: async (chosen) =>
+                      completed.get(chosen.snapshotRunId)!.kills
+                  }
+                })
+              : false;
+          const run = light
+            ? { ...reserved.run, lightRefresh: true }
+            : reserved.run;
+          if (reserved.kind === "reserved")
+            return { ...reserved, run, active: run, completed: selection };
+          return { ...reserved, completed: selection };
+        };
+        repositories.evidence.completedSettlementKills = vi.fn(
+          async (selection) =>
+            completed
+              .get(selection.snapshotRunId)!
+              .kills.map(({ raidId, killedAt, fightUrl }) => ({
+                raidId,
+                killedAt,
+                fightUrl
+              }))
+        );
+        repositories.evidence.hydrateCompletedEvidence = async (selection) =>
+          completed.get(selection.snapshotRunId)!;
+      }
 
-    await dossiers.read(root);
+      await dossiers.read(root);
 
-    expect(queuedMode(enqueueCharacterEvidence)).toBe("light");
-  });
+      expect(queuedMode(enqueueCharacterEvidence)).toBe("light");
+    }
+  );
 
   it("still queues a full run when a raid window opened after the last clean scan", async () => {
     // Break caught: a new tier has no terminal mark for anyone, so a
@@ -1748,7 +1804,10 @@ describe("applicant dossier service", () => {
         "snapshots" | "evidence" | "manualConnections" | "runs"
       >,
       search,
-      queue: { enqueueCharacterEvidence: vi.fn() },
+      queue: {
+        enqueueCharacterEvidence: vi.fn(),
+        promoteCharacterEvidence: vi.fn()
+      },
       blizzard: {
         getCompletedAchievements: vi.fn()
       },
@@ -4726,4 +4785,149 @@ describe("applicant dossier tier search across characters", () => {
       characters: [{ state: "completed" }, { state: "failed" }]
     });
   });
+});
+
+describe("reader evidence scheduling", () => {
+  it.each([false, true])(
+    "does not reserve a member or alias before the root enqueue (merged alias: %s)",
+    async (merged) => {
+      const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+      const original = repositories.evidence.reserve;
+      const scheduled: string[] = [];
+      if (merged)
+        Object.assign(repositories.evidence, {
+          warcraftLogsCharacterIds: vi.fn(async () =>
+            [root, alt].map((key) => ({ key, characterId: 1234 }))
+          )
+        });
+      repositories.evidence.reserve = vi.fn(async (input) => {
+        scheduled.push(input.key.name);
+        const result = await original(input);
+        const run = {
+          ...result.run,
+          id:
+            input.key.name === "ryii"
+              ? "10000000-0000-4000-8000-000000000051"
+              : "10000000-0000-4000-8000-000000000052",
+          status: "queued" as const,
+          origin: input.origin,
+          queueJobId: null,
+          mode: "full" as const
+        };
+        return { kind: "reserved" as const, run, active: run, completed: null };
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      enqueueCharacterEvidence.mockImplementation(async (id) => {
+        if (id === "10000000-0000-4000-8000-000000000051") await gate;
+        return "job";
+      });
+      const reading = dossiers.read(root);
+      try {
+        await vi.waitFor(() =>
+          expect(enqueueCharacterEvidence).toHaveBeenCalled()
+        );
+        expect(scheduled).toEqual(["ryii"]);
+      } finally {
+        release();
+      }
+      await reading;
+      expect(scheduled).toEqual(["ryii", "ryalts"]);
+    }
+  );
+
+  it("hydrates a fresh root concurrently with its members after metadata reservation", async () => {
+    const { dossiers, repositories } = fixture();
+    const selections = new Map<
+      string,
+      Awaited<ReturnType<typeof repositories.evidence.getCompleted>>
+    >();
+    repositories.evidence.reserveForScheduling = vi.fn(async (input) => {
+      const full = await repositories.evidence.reserve(input);
+      selections.set(input.key.name, full.completed);
+      const completed = full.completed
+        ? {
+            run: full.completed.run,
+            evidenceVersion: full.completed.evidenceVersion,
+            snapshotRunId: input.key.name,
+            wipeCapable: true
+          }
+        : null;
+      return { ...full, completed } as never;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hydrated: string[] = [];
+    repositories.evidence.hydrateCompletedEvidence = vi.fn(
+      async (selection) => {
+        hydrated.push(selection.snapshotRunId);
+        if (selection.snapshotRunId === "ryii") await gate;
+        return selections.get(selection.snapshotRunId)!;
+      }
+    );
+    const reading = dossiers.read(root);
+    try {
+      await vi.waitFor(() => expect(hydrated).toContain("ryalts"));
+      expect(hydrated).toContain("ryii");
+    } finally {
+      release();
+    }
+    await reading;
+    expect(hydrated).toEqual(["ryii", "ryalts"]);
+  });
+});
+
+describe("reader evidence promotion", () => {
+  it("promotes an active background job even when stored evidence is fresh", async () => {
+    const {
+      dossiers,
+      repositories,
+      enqueueCharacterEvidence,
+      promoteCharacterEvidence
+    } = fixture({ refreshingCharacter: root });
+    const original = repositories.evidence.reserve;
+    repositories.evidence.reserve = vi.fn(async (input) => {
+      const result = await original(input);
+      return {
+        ...result,
+        active: result.active
+          ? {
+              ...result.active,
+              origin: "refresh" as const,
+              status: "queued" as const
+            }
+          : null
+      } as never;
+    });
+    await dossiers.read(root);
+    expect(promoteCharacterEvidence).toHaveBeenCalledWith("evidence-job", 20);
+    expect(enqueueCharacterEvidence).not.toHaveBeenCalled();
+  });
+});
+
+it("dispatches a light policy already fixed by metadata reservation without a later write", async () => {
+  const { dossiers, repositories, enqueueCharacterEvidence } = fixture();
+  const original = repositories.evidence.reserve;
+  repositories.evidence.reserveForScheduling = vi.fn(async (input) => {
+    const result = await original(input);
+    if (input.key.name !== root.name) return result as never;
+    const run = {
+      ...result.run,
+      id: "10000000-0000-4000-8000-000000000051",
+      origin: input.origin,
+      status: "queued" as const,
+      lightRefresh: true
+    };
+    return { kind: "reserved" as const, run, active: run, completed: null };
+  });
+  await dossiers.read(root);
+  expect(enqueueCharacterEvidence).toHaveBeenCalledWith(
+    "10000000-0000-4000-8000-000000000051",
+    expect.objectContaining({ mode: "light" })
+  );
+  expect(repositories.evidence.markLightRefresh).not.toHaveBeenCalled();
 });

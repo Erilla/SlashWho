@@ -1,3 +1,5 @@
+import type { EvidenceRunOrigin } from "@slashwho/database";
+import { evidenceRunPriority } from "@slashwho/database/evidence-priority";
 import type { CharacterKey } from "@slashwho/domain";
 import { fullEvidencePhasePlan } from "./evidence-phase-ledger";
 
@@ -10,14 +12,17 @@ export type ResumableEvidenceStore = {
     freshnessCutoff: Date;
     at: Date;
     phasePlan?: readonly string[];
-  }): Promise<{ kind: string; run: { id: string } }>;
+  }): Promise<{
+    kind: string;
+    run: { id: string; origin?: EvidenceRunOrigin };
+  }>;
   markEnqueued(runId: string, queueJobId: string): Promise<void>;
 };
 
 export type ResumeEvidenceQueue = {
   enqueueCharacterEvidence(
     runId: string,
-    meta?: { enqueuedAt?: string }
+    meta?: { enqueuedAt?: string; priority?: number }
   ): Promise<string>;
 };
 
@@ -72,7 +77,12 @@ export async function resumeWaitingEvidence(
       if (reservation.kind !== "reserved") continue;
       const queueJobId = await queue.enqueueCharacterEvidence(
         reservation.run.id,
-        { enqueuedAt: new Date().toISOString() }
+        {
+          enqueuedAt: new Date().toISOString(),
+          priority: evidenceRunPriority(
+            reservation.run.origin ?? "resume_sweep"
+          )
+        }
       );
       await evidence.markEnqueued(reservation.run.id, queueJobId);
       resumed += 1;

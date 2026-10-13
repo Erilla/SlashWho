@@ -1,3 +1,4 @@
+import { evidenceRunPriority } from "@slashwho/database/evidence-priority";
 import type {
   Repositories,
   DiscoveryQueue,
@@ -157,6 +158,7 @@ export async function refreshCharacter(options: {
     const queueJobId = await options.queue.enqueueCharacterEvidence(
       reservation.run.id,
       {
+        priority: evidenceRunPriority(reservation.run.origin ?? options.origin),
         enqueuedAt: options.at.toISOString(),
         // The queue knows `full` and `light` only. A rebuild is an ordinary
         // full run over cleared marks -- what it adds is what it no longer
