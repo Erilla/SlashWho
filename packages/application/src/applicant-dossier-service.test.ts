@@ -3903,7 +3903,9 @@ describe("manually connected characters", () => {
     const result = await dossiers.read(root);
     if (result.kind !== "ready") throw new Error("expected_ready");
     const named = (name: string) =>
-      result.dossier.characters.find((character) => character.key.name === name);
+      result.dossier.characters.find(
+        (character) => character.key.name === name
+      );
     expect(named("fromsheet")).toMatchObject({
       source: "manually_added",
       origin: "application"
