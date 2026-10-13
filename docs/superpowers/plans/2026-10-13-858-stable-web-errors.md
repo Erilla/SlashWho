@@ -133,3 +133,22 @@ Review `5507279934` requested two fixes, read and verified against the source.
   running; e2e completed before any merge. Those results belong to the old
   tree only. Fetch/integrate the newer main and verify the merged tree before
   pushing the fixes; use the authorised integration `--maxWorkers=3` command.
+- Latest-main verification on `53ca5d3c` (including #909 at `262b044f`) passed
+  format, lint, typecheck, 3,429 unit tests in 212 files, 482 Docker integration
+  tests in 21 files at `--maxWorkers=3`, production build, and all 61 browser
+  tests. The earlier full unit run on this tree had one unchanged collection
+  monitor UI test time out at its existing five-second limit (3,428/3,429); the
+  isolated unchanged UI suite passed 24/24. The sampled 99.4% host CPU is
+  associated evidence only; the cause remains unproven. No assertion or timeout
+  changed.
+- While completing that gate, `origin/main` advanced to `9cadcd43` (#906 and
+  #818). Clean merge `192898e0` preserved the #858 implementation and guard.
+  Its source inventory detected #906's two newly authored queue codes,
+  `invalid_evidence_job_id` and `invalid_evidence_priority`. The first full
+  unit run on the combined tree therefore failed the inventory and its mutation
+  fixtures (3,419/3,442 passed); adding both explicit registry entries and
+  independent admission cases fixed the omission. The focused nine-file
+  diagnostics/name/inventory suite then passed 343/343, and current-tree format
+  and typecheck passed. #906's own merged-tree gate had already passed. No
+  further full unit or integration run was started after this merge; final
+  GitHub CI will validate the pushed combined tree.
