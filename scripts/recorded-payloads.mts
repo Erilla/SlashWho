@@ -19,6 +19,8 @@ export type Endpoint =
   | "blizzard.character-achievements"
   | "blizzard.playable-class-index"
   | "raiderio.character"
+  | "raiderio.guild-rankings"
+  | "raiderio.guild-profile"
   | "raiderio.view-characters"
   | "raiderio.raid-progress"
   | "raiderio.logged-encounter";
@@ -262,6 +264,33 @@ const blizzardError: readonly PolicyEntry[] = [
  * scores, biographies, account ids or links.
  */
 export const policies: Readonly<Record<Endpoint, EndpointPolicy>> = {
+  "raiderio.guild-rankings": {
+    provider: "raiderio",
+    success: [],
+    error: [
+      { path: "statusCode", leaf: { kind: "number" } },
+      {
+        path: "error",
+        leaf: { kind: "enum", values: ["Unprocessable Entity"] }
+      },
+      {
+        path: "message",
+        leaf: { kind: "enum", values: ["Could not find requested guild"] }
+      }
+    ]
+  },
+  "raiderio.guild-profile": {
+    provider: "raiderio",
+    success: [],
+    error: [
+      { path: "statusCode", leaf: { kind: "number" } },
+      { path: "error", leaf: { kind: "enum", values: ["Bad Request"] } },
+      {
+        path: "message",
+        leaf: { kind: "enum", values: ["Could not find requested guild"] }
+      }
+    ]
+  },
   "raiderio.character": {
     provider: "raiderio",
     success: [

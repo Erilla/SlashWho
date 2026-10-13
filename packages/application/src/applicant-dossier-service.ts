@@ -217,6 +217,16 @@ export function evidenceRunProgressView(
 ): EvidenceRunProgressResponse["runs"][number] {
   return {
     id: progress.id,
+    key: progress.key,
+    collectionProgress: collectionProgress(progress.phases),
+    evidenceState:
+      progress.status === "complete"
+        ? "complete"
+        : ACTIVE_RUN_STATUSES.has(progress.status)
+          ? progress.status === "running"
+            ? "scanning"
+            : "waiting"
+          : "partial",
     state: !ACTIVE_RUN_STATUSES.has(progress.status)
       ? "settled"
       : progress.status === "running" && !progress.deferred
@@ -224,7 +234,9 @@ export function evidenceRunProgressView(
         : "queued",
     version: [
       progress.deferred ? `${progress.status}-deferred` : progress.status,
-      ...progress.phaseStates
+      ...progress.phases.map(
+        (phase) => `${phase.id}:${phase.state}:${phase.limitationCode ?? ""}`
+      )
     ].join(":")
   };
 }
