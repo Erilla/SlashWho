@@ -346,6 +346,22 @@ describe("mergePublishedEvidence timestamps", () => {
     });
   });
 
+  it("preserves the original checked-null stamp when a worker skips the lookup", () => {
+    const merged = mergePublishedEvidence(
+      stored({
+        historicRankByFightUrl: new Map([
+          ["fight", { historicWorldRank: null, historicRankCheckedAt: earlier }]
+        ])
+      }),
+      input({ kills: [kill("fight")] }),
+      false
+    );
+    expect(merged.kills[0]).toMatchObject({
+      historicWorldRank: null,
+      historicRankCheckedAt: earlier
+    });
+  });
+
   it("keeps an unread zone's tier best and read time, and restamps a read one", () => {
     const storedTierBest = (raidId: string, percentile: number) => ({
       tierBest: tierBest(raidId),
