@@ -1,4 +1,8 @@
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
+import {
+  DatabasePoolExhaustedError,
+  isPoolAcquisitionTimeout
+} from "./pool-exhausted-error";
 
 /**
  * Runs `work` in one transaction on a dedicated client: COMMIT when it
@@ -34,7 +38,13 @@ async function transaction<T>(
   begin: string,
   work: (client: PoolClient) => Promise<T>
 ): Promise<T> {
-  const client = await pool.connect();
+  let client: PoolClient;
+  try {
+    client = await pool.connect();
+  } catch (error) {
+    if (isPoolAcquisitionTimeout(error)) throw new DatabasePoolExhaustedError();
+    throw error;
+  }
   try {
     await client.query(begin);
     const result = await work(client);

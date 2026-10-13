@@ -41,7 +41,27 @@ export function measuredRepositories<T extends object>(
           return (...args: unknown[]) =>
             scope.time(
               "db",
-              async () => await call.apply(groupTarget, args),
+              async (exclude) => {
+                if (
+                  property === "evidence" &&
+                  [
+                    "hydrateCompletedEvidence",
+                    "readDossierEvidence",
+                    "hydrateDossierEvidence"
+                  ].includes(String(method))
+                ) {
+                  args.push(
+                    <R>(
+                      step: "evidence.raiderIoRoster",
+                      work: () => Promise<R>
+                    ) =>
+                      exclude(() =>
+                        scope.time("db", async () => await work(), step)
+                      )
+                  );
+                }
+                return await call.apply(groupTarget, args);
+              },
               label
             );
         }

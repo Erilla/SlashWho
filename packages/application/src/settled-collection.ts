@@ -7,6 +7,7 @@ import type {
   TerminalTier
 } from "@slashwho/database";
 import {
+  decideLightRefresh,
   raidContentWindowOpenedBetween,
   type CharacterKey
 } from "@slashwho/domain";
@@ -165,18 +166,22 @@ export async function staleReadNeedsOnlyNewestPage(options: {
   )
     return false;
 
-  return killTiersAreSettled({
-    key: options.key,
-    completed: {
-      kills: options.loadKills
-        ? await options.loadKills()
-        : (completed as CompletedCharacterEvidence).kills
-    },
+  const kills = options.loadKills
+    ? await options.loadKills()
+    : (completed as CompletedCharacterEvidence).kills;
+  const [hydratedFightUrls, collectedTierZones] = await Promise.all([
+    options.evidence.hydratedFightUrls(options.key, options.at),
+    options.evidence.collectedTierZones(options.key)
+  ]);
+  return decideLightRefresh({
+    at: options.at,
+    completed,
+    completedVersionCurrent: options.completedVersionCurrent,
+    stored,
     terminal,
-    // Every kill is in a terminal tier by the time this is asked, and a tier
-    // goes terminal only once all its kills have settled, so no fight here is
-    // still moving.
-    settledBefore: options.at,
-    evidence: options.evidence
+    recoveredAt,
+    kills,
+    hydratedFightUrls,
+    collectedTierZones
   });
 }

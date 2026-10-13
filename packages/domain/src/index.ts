@@ -78,6 +78,7 @@ export { isKnownDungeonZone, isNonRaidZone } from "./dungeon-catalogue";
 export { canonicalCharacterId, deduplicateCharacters } from "./deduplicate";
 export { isAccountWideCuttingEdgeAchievement } from "./cutting-edge-catalogue";
 export { specIconUrl } from "./spec-icon-catalogue";
+export { decideLightRefresh } from "./light-refresh";
 export type { DiscoveredCharacter, DiscoverySource } from "./deduplicate";
 export {
   buildCuttingEdgeSequence,

@@ -702,6 +702,34 @@ export type EvidenceSettlementKill = Pick<
   "raidId" | "killedAt" | "fightUrl"
 >;
 
+/** A request-scoped timer for one named database read step. */
+export type EvidenceReadStepMeasurement = <T>(
+  label: "evidence.raiderIoRoster",
+  work: () => Promise<T>
+) => Promise<T>;
+
+export type DossierEvidenceCandidate = Readonly<{
+  key: CharacterKey;
+  completed: CompletedEvidenceSelection | null;
+  completedVersionCurrent: boolean;
+  fresh: boolean;
+  active: CharacterEvidenceRun | null;
+  tierSearchResumesAt: Date | null;
+}>;
+
+export type DossierEvidencePayload = Readonly<{
+  key: CharacterKey;
+  completed: CompletedCharacterEvidence | null;
+  historicAliases: readonly CharacterKey[];
+  phases: readonly EvidenceRunPhase[];
+}>;
+
+export type DossierEvidenceReadResult = Readonly<{
+  candidates: readonly DossierEvidenceCandidate[];
+  /** Present when the root was fresh; stale roots defer all payload reads. */
+  payloads: readonly DossierEvidencePayload[] | null;
+}>;
+
 /** Reads needed to choose light/full policy without loading display evidence. */
 export type EvidenceSchedulingReads = Pick<
   EvidenceRepository,
@@ -724,18 +752,6 @@ export type EvidenceSchedulingReads = Pick<
     selection: CompletedEvidenceSelection
   ): Promise<readonly EvidenceSettlementKill[]>;
 };
-
-/**
- * Runs only for a new full reservation, under its character lock. Use only
- * the supplied transaction-bound reads: no provider/queue calls, pool reads
- * or side effects. Do not retain the read view beyond this callback. Return
- * light/full policy; it is persisted before visibility.
- */
-export type EvidenceRunPreparation = (input: {
-  completed: CompletedEvidenceSelection | null;
-  completedVersionCurrent: boolean;
-  reads: EvidenceSchedulingReads;
-}) => Promise<boolean>;
 
 export type EvidenceReservationResult<Completed = CompletedCharacterEvidence> =
   | {
@@ -1074,13 +1090,28 @@ export type EvidenceRunCost = Readonly<{
 }>;
 
 export interface EvidenceRepository {
+  /** Metadata selection and, for a fresh root only, same-snapshot hydration. */
+  readDossierEvidence?(
+    input: Readonly<{
+      keys: readonly CharacterKey[];
+      root: CharacterKey;
+      at: Date;
+      freshnessCutoff: Date;
+    }>,
+    measureReadStep?: EvidenceReadStepMeasurement
+  ): Promise<DossierEvidenceReadResult>;
+  /** Hydrate locked selections by immutable publication IDs in one snapshot. */
+  hydrateDossierEvidence?(
+    candidates: readonly DossierEvidenceCandidate[],
+    measureReadStep?: EvidenceReadStepMeasurement
+  ): Promise<readonly DossierEvidencePayload[]>;
   /** Optional for stores whose reservation already returns hydrated evidence. */
   reserveForScheduling?(
-    input: Parameters<EvidenceRepository["reserve"]>[0],
-    prepareNewRun?: EvidenceRunPreparation
+    input: Parameters<EvidenceRepository["reserve"]>[0]
   ): Promise<EvidenceReservationResult<CompletedEvidenceSelection>>;
   hydrateCompletedEvidence?(
-    selection: CompletedEvidenceSelection
+    selection: CompletedEvidenceSelection,
+    measureReadStep?: EvidenceReadStepMeasurement
   ): Promise<CompletedCharacterEvidence>;
   completedSettlementKills?(
     selection: CompletedEvidenceSelection

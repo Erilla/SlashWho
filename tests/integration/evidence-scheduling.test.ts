@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi
-} from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import type { TestRepositories } from "./test-repositories";
 import {
@@ -31,52 +23,21 @@ describe("metadata evidence scheduling", () => {
     await stop();
   });
 
-  it("fixes light policy before a concurrent reader can repair the reservation", async () => {
-    await seedCompleteSnapshot(repositories);
+  it("serializes a new reservation before a concurrent reader can join it", async () => {
     const input = {
       key: rootKey,
       origin: "dossier_read" as const,
       at: new Date(),
       freshnessCutoff: new Date()
     };
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let preparing = false;
-    const owner = repositories.evidence.reserveForScheduling!(
-      input,
-      async () => {
-        preparing = true;
-        await held;
-        return true;
-      }
-    );
-    try {
-      await vi.waitFor(() => expect(preparing).toBe(true));
-      let joined = false;
-      const reader = repositories.evidence.reserveForScheduling!(input).then(
-        (result) => {
-          joined = true;
-          return result;
-        }
-      );
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(joined).toBe(false);
-      release();
-      const [reserved, active] = await Promise.all([owner, reader]);
-      expect(reserved).toMatchObject({
-        kind: "reserved",
-        run: { lightRefresh: true }
-      });
-      expect(active).toMatchObject({
-        kind: "active",
-        run: { id: reserved.run.id, lightRefresh: true }
-      });
-    } finally {
-      release();
-      await owner;
-    }
+    const [first, second] = await Promise.all([
+      repositories.evidence.reserveForScheduling!(input),
+      repositories.evidence.reserveForScheduling!(input)
+    ]);
+    expect(first.run.id).toBe(second.run.id);
+    expect([first.kind, second.kind].sort()).toEqual(["active", "reserved"]);
+    expect(first.run.mode).toBe("full");
+    expect(first.run.lightRefresh).toBeUndefined();
   });
 
   it("honours pending alias recollection rather than treating old evidence as fresh", async () => {
@@ -116,6 +77,74 @@ describe("metadata evidence scheduling", () => {
         )
       ).rows
     ).toEqual([{ requests: 0 }]);
+  });
+
+  it("batch reads a fresh root and hydrates its selected publication", async () => {
+    const at = new Date("2026-10-13T12:00:00Z");
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      origin: "dossier_read",
+      at,
+      freshnessCutoff: at
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: at
+    });
+    const result = await repositories.evidence.readDossierEvidence!({
+      keys: [rootKey],
+      root: rootKey,
+      at: new Date(at.getTime() + 1_000),
+      freshnessCutoff: new Date(at.getTime() - 60_000)
+    });
+    expect(result.candidates).toMatchObject([
+      {
+        key: rootKey,
+        fresh: true,
+        completed: { snapshotRunId: reserved.run.id }
+      }
+    ]);
+    expect(result.payloads).toMatchObject([
+      {
+        key: rootKey,
+        completed: {
+          run: { id: reserved.run.id },
+          kills: [{ raidId: "42" }]
+        }
+      }
+    ]);
+  });
+
+  it("defers all batch payload hydration while the root is stale", async () => {
+    const at = new Date("2026-10-13T12:00:00Z");
+    const reserved = await repositories.evidence.reserve({
+      key: rootKey,
+      origin: "dossier_read",
+      at,
+      freshnessCutoff: at
+    });
+    await repositories.evidence.publish(reserved.run.id, {
+      state: "complete",
+      limitationCode: null,
+      parseLimitationCode: null,
+      kills: [mythicKill()],
+      wipes: [],
+      tierBests: [],
+      completedAt: new Date(at.getTime() - 24 * 60 * 60_000)
+    });
+    const result = await repositories.evidence.readDossierEvidence!({
+      keys: [rootKey],
+      root: rootKey,
+      at,
+      freshnessCutoff: new Date(at.getTime() - 60_000)
+    });
+    expect(result.candidates[0]?.fresh).toBe(false);
+    expect(result.payloads).toBeNull();
   });
 
   it("keeps a capped tier walk's deadline and resumes its targeted mode", async () => {

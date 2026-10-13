@@ -17,6 +17,7 @@ const allowlist = new Set([
   // construction: any field not named here is dropped before serialization.
   "errorName",
   "errorCode",
+  "dbPoolExhausted",
   // Performance totals. Integers and booleans only -- never identity.
   "raiderIoMs",
   "raiderIoCalls",

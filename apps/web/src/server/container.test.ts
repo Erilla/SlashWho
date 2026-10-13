@@ -3,8 +3,11 @@ import { createBlizzardClient, type BlizzardGateway } from "@slashwho/blizzard";
 import type { DiscoveryQueue, Repositories } from "@slashwho/database";
 import { expect, it, vi } from "vitest";
 
-import { createWebContainer } from "./container";
-import { createContainerProvider } from "./container";
+import {
+  createWebContainer,
+  createContainerProvider,
+  WEB_DATABASE_POOL_OPTIONS
+} from "./container";
 import {
   accountAuthFixture,
   accountEmail,
@@ -17,6 +20,13 @@ import {
 // untouched since this only replaces the module inside this test file.
 vi.mock("./logger", () => ({ webLogger: { info: vi.fn() } }));
 const { webLogger } = await import("./logger");
+
+it("uses the overlap-safe web database pool budget and finite acquisition timeout", () => {
+  expect(WEB_DATABASE_POOL_OPTIONS).toEqual({
+    max: 8,
+    connectionTimeoutMillis: 5_000
+  });
+});
 
 it("migrates and initializes the durable queue before serving searches", async () => {
   // Break caught: a route could run against an old schema or an uninitialized queue.

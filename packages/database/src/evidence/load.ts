@@ -21,12 +21,13 @@ import type {
   CharacterTierBestParseInput,
   CompletedCharacterEvidence,
   CompletedEvidenceSelection,
+  EvidenceReadStepMeasurement,
   EvidenceSettlementKill,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe
 } from "../repositories";
 import type { Queryable } from "../sql";
-import { loadPublishedRaiderIoFirstKills } from "./raiderio-first-kills";
+import { loadPublishedRaiderIoFirstKillsBatch } from "./raiderio-first-kills";
 
 export async function loadCompletedEvidence(
   client: Queryable,
@@ -97,7 +98,8 @@ export async function loadCompletedSettlementKills(
 
 export async function hydrateCompletedEvidence(
   client: Queryable,
-  selection: CompletedEvidenceSelection
+  selection: CompletedEvidenceSelection,
+  measureReadStep?: EvidenceReadStepMeasurement
 ): Promise<CompletedCharacterEvidence> {
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
@@ -149,10 +151,14 @@ export async function hydrateCompletedEvidence(
     tierBests: tierBestsResult.rows.map(mapCharacterTierBestParse),
     // From the snapshot run, like the kills: the first kills are part of what
     // the newest publication shows, read with today's suppressions.
-    raiderIoFirstKills: await loadPublishedRaiderIoFirstKills(
-      client,
-      selection.snapshotRunId
-    ),
+    raiderIoFirstKills:
+      (
+        await loadPublishedRaiderIoFirstKillsBatch(
+          client,
+          [selection.snapshotRunId],
+          measureReadStep
+        )
+      ).get(selection.snapshotRunId) ?? [],
     cuttingEdges: cuttingEdgesResult.rows.map((row) => ({
       achievementId: row.achievement_id,
       completedAt: row.completed_at.toISOString()
@@ -160,6 +166,113 @@ export async function hydrateCompletedEvidence(
     cuttingEdgesCollected: blizzardPhase.rows[0]?.state === "completed",
     wipeCapable: selection.wipeCapable
   };
+}
+
+/** Hydrate immutable publications with a fixed set of statements. */
+export async function hydrateCompletedEvidenceBatch(
+  client: Queryable,
+  selections: readonly CompletedEvidenceSelection[],
+  measureReadStep?: EvidenceReadStepMeasurement
+): Promise<ReadonlyMap<string, CompletedCharacterEvidence>> {
+  if (selections.length === 0) return new Map();
+  const snapshotIds = selections.map((selection) => selection.snapshotRunId);
+  const fullIds = selections.map((selection) => selection.run.id);
+  const kills = await client.query<
+    CharacterMythicKillRow & { evidence_run_id: string }
+  >(
+    `SELECT id, evidence_run_id, raid_id, raid_name, boss_id, boss_name,
+              journal_boss_id, boss_order, killed_at, report_url, fight_url,
+              guild_name, guild_region, guild_realm, uploader, historic_world_rank,
+              historic_rank_checked_at, spec_name, spec_icon_url, damage_parse_state,
+              damage_percentile, healing_parse_state, healing_percentile,
+              boss_damage_parse_state, boss_damage_percentile, parses_read_at
+         FROM character_mythic_kills
+        WHERE evidence_run_id = ANY($1::uuid[])
+        ORDER BY evidence_run_id, killed_at, source_fight_key`,
+    [snapshotIds]
+  );
+  const wipes = await client.query<
+    CharacterMythicWipeRow & { evidence_run_id: string }
+  >(
+    `SELECT id, evidence_run_id, raid_id, raid_name, boss_id, boss_name,
+              journal_boss_id, boss_order, attempted_at, report_url, fight_url,
+              guild_name, guild_realm, uploader
+         FROM character_mythic_wipes
+        WHERE evidence_run_id = ANY($1::uuid[])
+        ORDER BY evidence_run_id, raid_id, boss_order, attempted_at DESC, fight_url`,
+    [snapshotIds]
+  );
+  const tierBests = await client.query<
+    CharacterTierBestParseRow & { evidence_run_id: string }
+  >(
+    `SELECT evidence_run_id, ${tierBestParseColumns}
+         FROM character_tier_best_parses
+        WHERE evidence_run_id = ANY($1::uuid[])
+        ORDER BY evidence_run_id, raid_id, boss_id`,
+    [snapshotIds]
+  );
+  const cuttingEdges = await client.query<{
+    evidence_run_id: string;
+    achievement_id: string;
+    completed_at: Date;
+  }>(
+    `SELECT evidence_run_id, achievement_id, completed_at
+         FROM character_evidence_cutting_edges
+        WHERE evidence_run_id = ANY($1::uuid[])
+        ORDER BY evidence_run_id, achievement_id`,
+    [fullIds]
+  );
+  const phases = await client.query<{ run_id: string; state: string }>(
+    `SELECT run_id, state FROM character_evidence_run_phases
+        WHERE run_id = ANY($1::uuid[]) AND phase_id = 'blizzard_achievements'`,
+    [fullIds]
+  );
+  const firstKills = await loadPublishedRaiderIoFirstKillsBatch(
+    client,
+    snapshotIds,
+    measureReadStep
+  );
+  const group = <T extends { evidence_run_id: string }>(rows: readonly T[]) => {
+    const result = new Map<string, T[]>();
+    for (const row of rows)
+      result.set(row.evidence_run_id, [
+        ...(result.get(row.evidence_run_id) ?? []),
+        row
+      ]);
+    return result;
+  };
+  const killsByRun = group(kills.rows);
+  const wipesByRun = group(wipes.rows);
+  const tierBestsByRun = group(tierBests.rows);
+  const edgesByRun = group(cuttingEdges.rows);
+  const phaseByRun = new Map(
+    phases.rows.map((phase) => [phase.run_id, phase.state])
+  );
+  return new Map(
+    selections.map((selection) => [
+      selection.snapshotRunId,
+      {
+        run: selection.run,
+        evidenceVersion: selection.evidenceVersion,
+        kills: (killsByRun.get(selection.snapshotRunId) ?? []).map(
+          mapCharacterMythicKill
+        ),
+        wipes: (wipesByRun.get(selection.snapshotRunId) ?? []).map(
+          mapCharacterMythicWipe
+        ),
+        tierBests: (tierBestsByRun.get(selection.snapshotRunId) ?? []).map(
+          mapCharacterTierBestParse
+        ),
+        raiderIoFirstKills: firstKills.get(selection.snapshotRunId) ?? [],
+        cuttingEdges: (edgesByRun.get(selection.run.id) ?? []).map((row) => ({
+          achievementId: row.achievement_id,
+          completedAt: row.completed_at.toISOString()
+        })),
+        cuttingEdgesCollected: phaseByRun.get(selection.run.id) === "completed",
+        wipeCapable: selection.wipeCapable
+      }
+    ])
+  );
 }
 
 /**

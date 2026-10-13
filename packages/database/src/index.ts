@@ -1,4 +1,5 @@
 export { runMigrations } from "./migrate";
+export { DatabasePoolExhaustedError } from "./pool-exhausted-error";
 export { createRosterProfileResolutionRepository } from "./roster-profile-resolutions";
 export type {
   RosterProfileLocator,
@@ -61,8 +62,11 @@ export type {
   CharacterRaiderIoFirstKillInput,
   CompletedCharacterEvidence,
   CompletedEvidenceSelection,
+  DossierEvidenceCandidate,
+  DossierEvidencePayload,
+  DossierEvidenceReadResult,
+  EvidenceReadStepMeasurement,
   EvidenceSettlementKill,
-  EvidenceRunPreparation,
   EvidenceSchedulingReads,
   CreateSnapshotInput,
   DiscoveryRun,

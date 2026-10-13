@@ -227,41 +227,12 @@ async function assertHistoricRosterRollout(
     expect(hydrated).toEqual(
       hydration === "settled" ? [baseline.fightUrl] : []
     );
-    let prepared = false;
-    const scheduled = await repositories.evidence.reserveForScheduling!(
-      {
-        origin: "dossier_read",
-        key,
-        at,
-        freshnessCutoff: new Date(at.getTime() - day)
-      },
-      async ({ completed, completedVersionCurrent, reads }) => {
-        prepared = true;
-        expect(await reads.hydratedFightUrls(key, at)).toEqual(hydrated);
-        const kills = completed
-          ? await reads.completedSettlementKills(completed)
-          : [];
-        expect(kills).toEqual(
-          fresh.completed!.kills.map(({ raidId, killedAt, fightUrl }) => ({
-            raidId,
-            killedAt,
-            fightUrl
-          }))
-        );
-        const light = await staleReadNeedsOnlyNewestPage({
-          key,
-          at,
-          completed,
-          completedVersionCurrent,
-          evidence: reads,
-          loadKills: async () =>
-            completed ? reads.completedSettlementKills(completed) : []
-        });
-        expect(light).toBe(legacyLight);
-        return light;
-      }
-    );
-    expect(prepared).toBe(true);
+    const scheduled = await repositories.evidence.reserveForScheduling!({
+      origin: "dossier_read",
+      key,
+      at,
+      freshnessCutoff: new Date(at.getTime() - day)
+    });
     expect(scheduled.kind).toBe("reserved");
     expect(scheduled.run.lightRefresh ?? false).toBe(expectedLight);
     return scheduled;

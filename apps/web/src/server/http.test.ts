@@ -4,6 +4,7 @@ import { upstreamThrottleRecord } from "@slashwho/application";
 import { describe, expect, it, vi } from "vitest";
 
 import { dossierStartResponseSchema } from "@slashwho/contracts";
+import { DatabasePoolExhaustedError } from "@slashwho/database";
 
 import {
   jsonNoStore,
@@ -531,6 +532,29 @@ describe("withHttpRequest", () => {
       records[0]?.correlationId
     );
     expect(records[0]).toMatchObject({ status: 500, errorName: "TypeError" });
+  });
+
+  it("fails a pool acquisition timeout as a whole 503 read and records its closed code", async () => {
+    const records: Record<string, unknown>[] = [];
+    const logger = {
+      info: (value: Record<string, unknown>) => records.push(value)
+    };
+    const response = await withHttpRequest(
+      "dossier",
+      async () => {
+        throw new DatabasePoolExhaustedError();
+      },
+      logger
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(errorCode(response)).resolves.toBe("database_unavailable");
+    expect(records[0]).toMatchObject({
+      status: 503,
+      errorCode: "db_pool_exhausted",
+      dbPoolExhausted: 1
+    });
   });
 });
 import { errorName } from "./error-name";

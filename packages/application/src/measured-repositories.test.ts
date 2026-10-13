@@ -135,6 +135,41 @@ describe("measuredRepositories", () => {
     expect(scope.totals()).toMatchObject({ dbMs: 9, dbCalls: 1 });
   });
 
+  it("times the roster substep against the same request without double counting its parent", async () => {
+    let now = 0;
+    const scope = createMeasurementScope(() => now);
+    const measured = measuredRepositories(
+      {
+        evidence: {
+          async readDossierEvidence(
+            _selection: unknown,
+            measureReadStep?: (
+              label: "evidence.raiderIoRoster",
+              work: () => Promise<string>
+            ) => Promise<string>
+          ) {
+            return measureReadStep
+              ? measureReadStep("evidence.raiderIoRoster", async () => {
+                  now += 7;
+                  return "roster";
+                })
+              : "unmeasured";
+          }
+        }
+      },
+      scope
+    );
+
+    await measured.evidence.readDossierEvidence({ id: "opaque" });
+
+    expect(scope.totals()).toMatchObject({
+      dbMs: 7,
+      dbCalls: 2,
+      dbMaxCallMs: 7,
+      dbMaxCallName: "evidence.raiderIoRoster"
+    });
+  });
+
   it("leaves non-function and absent properties alone", () => {
     const measured = measuredRepositories(
       { snapshots: { label: "snapshots" } },

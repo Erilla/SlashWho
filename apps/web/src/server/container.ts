@@ -45,6 +45,11 @@ type WebPool = {
   end(): Promise<void>;
 };
 
+export const WEB_DATABASE_POOL_OPTIONS = {
+  max: 8,
+  connectionTimeoutMillis: 5_000
+} as const;
+
 export type WebContainer = Readonly<{
   searches: SearchService;
   dossiers: ApplicantDossierService;
@@ -121,7 +126,8 @@ export type WebContainerDependencies = Readonly<{
 }>;
 
 const defaultDependencies: WebContainerDependencies = {
-  createPool: (connectionString) => new Pool({ connectionString }),
+  createPool: (connectionString) =>
+    new Pool({ connectionString, ...WEB_DATABASE_POOL_OPTIONS }),
   runMigrations: (pool) => runMigrations(pool as Pool),
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
   createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),

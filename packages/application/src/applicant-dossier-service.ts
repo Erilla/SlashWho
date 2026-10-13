@@ -10,6 +10,8 @@ import type {
   EvidenceReservationResult,
   CompletedCharacterEvidence,
   CompletedEvidenceSelection,
+  DossierEvidenceCandidate,
+  DossierEvidencePayload,
   EvidenceRunPhase,
   EvidenceRunProgress,
   RecentDossierSearch,
@@ -407,19 +409,7 @@ async function scheduleCharacterEvidence(
     phasePlan: fullEvidencePhasePlan()
   };
   const reservation = store.reserveForScheduling
-    ? await store.reserveForScheduling(
-        request,
-        async ({ completed, completedVersionCurrent, reads }) =>
-          staleReadNeedsOnlyNewestPage({
-            key: character.key,
-            at: new Date(),
-            completed,
-            completedVersionCurrent,
-            evidence: reads,
-            loadKills: async () =>
-              completed ? reads.completedSettlementKills(completed) : []
-          })
-      )
+    ? await store.reserveForScheduling(request)
     : await store.reserve(request);
   let lightRunId: string | null = null;
   if (reservation.kind === "reserved") {
@@ -484,14 +474,16 @@ async function scheduleCharacterEvidence(
 async function gatherCharacterEvidence(
   character: DossierSubject,
   options: GatherEvidenceOptions,
-  scheduled?: ScheduledEvidence
+  scheduled?: ScheduledEvidence,
+  hydrated?: DossierEvidencePayload
 ): Promise<IdentityEvidence> {
   const attributed = options.attributeTo ?? character.key;
   const { reservation: metadata, lightRunId } =
     scheduled ?? (await scheduleCharacterEvidence(character, options));
   const completedMetadata = metadata.completed;
-  const completedEvidence =
-    completedMetadata && "snapshotRunId" in completedMetadata
+  const completedEvidence = hydrated
+    ? hydrated.completed
+    : completedMetadata && "snapshotRunId" in completedMetadata
       ? await options.repositories.evidence.hydrateCompletedEvidence!(
           completedMetadata
         )
@@ -627,7 +619,9 @@ async function gatherCharacterEvidence(
     activeRunIds: reservation.active ? [reservation.active.id] : [],
     collectionProgress: activeRun
       ? collectionProgress(
-          (await options.repositories.evidence.listPhases?.(activeRun.id)) ?? []
+          hydrated?.phases ??
+            (await options.repositories.evidence.listPhases?.(activeRun.id)) ??
+            []
         )
       : [],
     // Either of two things adds to fresh evidence without a refresh: the last
@@ -647,6 +641,80 @@ async function gatherCharacterEvidence(
         : reservation.run.status === "running"
           ? "scanning"
           : "waiting"
+  };
+}
+
+async function scheduleBatchCandidate(
+  character: DossierSubject,
+  candidate: DossierEvidenceCandidate,
+  options: GatherEvidenceOptions
+): Promise<ScheduledEvidence> {
+  if (!candidate.fresh && !candidate.active)
+    return scheduleCharacterEvidence(character, options);
+
+  const active = candidate.active;
+  if (active) {
+    const priority = Math.max(
+      evidenceRunPriority(active.origin ?? options.origin),
+      evidenceRunPriority(options.origin)
+    );
+    if (active.queueJobId) {
+      await options.queue.promoteCharacterEvidence(active.queueJobId, priority);
+    } else if (active.status === "queued") {
+      const jobId = await options.queue.enqueueCharacterEvidence(active.id, {
+        priority,
+        enqueuedAt: new Date().toISOString(),
+        mode: active.lightRefresh ? "light" : "full"
+      });
+      await options.repositories.evidence.markEnqueued(active.id, jobId);
+    }
+  }
+  if (candidate.fresh && candidate.completed) {
+    return {
+      lightRunId: null,
+      reservation: {
+        kind: "fresh",
+        run: candidate.completed.run,
+        completed: candidate.completed,
+        active,
+        tierSearchResumesAt: candidate.tierSearchResumesAt
+      }
+    };
+  }
+  if (active) {
+    return {
+      lightRunId: null,
+      reservation: {
+        kind: "active",
+        run: active,
+        completed: candidate.completed,
+        active
+      }
+    };
+  }
+  return scheduleCharacterEvidence(character, options);
+}
+
+function reservationCandidate(
+  key: CharacterKey,
+  reservation: ScheduledEvidence["reservation"]
+): DossierEvidenceCandidate {
+  const completed = reservation.completed;
+  const selection =
+    completed && "snapshotRunId" in completed ? completed : null;
+  return {
+    key,
+    completed: selection,
+    completedVersionCurrent:
+      reservation.kind === "fresh" ||
+      (reservation.kind === "reserved" &&
+        reservation.completedVersionCurrent === true),
+    fresh: reservation.kind === "fresh",
+    active: reservation.active,
+    tierSearchResumesAt:
+      reservation.kind === "fresh"
+        ? (reservation.tierSearchResumesAt ?? null)
+        : null
   };
 }
 
@@ -987,35 +1055,172 @@ async function assembleDossier(options: {
     (subject) =>
       canonicalCharacterId(subject.key) === canonicalCharacterId(options.root)
   );
-  const rootScheduling = rootSubject
-    ? await scheduleCharacterEvidence(rootSubject, gatherOptions)
-    : undefined;
-  const evidence = await Promise.all(
-    options.subjects.map(async (character) =>
-      mergeIdentityEvidence(
-        await Promise.all(
-          [character.key, ...(character.warcraftLogsAliases ?? [])].map((key) =>
-            gatherCharacterEvidence(
-              { ...character, key },
-              { ...gatherOptions, attributeTo: character.key },
-              rootScheduling &&
-                canonicalCharacterId(key) === canonicalCharacterId(options.root)
-                ? rootScheduling
-                : undefined
+  const store = options.repositories.evidence;
+  const useBatch =
+    !!store.readDossierEvidence && !!store.hydrateDossierEvidence;
+  let evidence: IdentityEvidence[];
+  let aliases: readonly (readonly CharacterKey[])[];
+  if (useBatch) {
+    const aliasSubjects = [...options.subjects, ...options.excludedSubjects];
+    const keys = [
+      ...options.subjects.flatMap((character) => [
+        character.key,
+        ...(character.warcraftLogsAliases ?? [])
+      ]),
+      ...options.excludedSubjects.map((character) => character.key)
+    ];
+    const initial = await store.readDossierEvidence!({
+      keys,
+      root: options.root,
+      at: new Date(),
+      freshnessCutoff: options.freshnessCutoff
+    });
+    const byId = new Map(
+      initial.candidates.map((candidate) => [
+        canonicalCharacterId(candidate.key),
+        candidate
+      ])
+    );
+    const rootCandidate = byId.get(canonicalCharacterId(options.root));
+    const rootScheduling = rootSubject
+      ? rootCandidate
+        ? await scheduleBatchCandidate(
+            rootSubject,
+            rootCandidate,
+            gatherOptions
+          )
+        : await scheduleCharacterEvidence(rootSubject, gatherOptions)
+      : undefined;
+    const scheduledById = new Map<string, ScheduledEvidence>();
+    if (rootScheduling)
+      scheduledById.set(canonicalCharacterId(options.root), rootScheduling);
+    const otherCandidates = initial.candidates.filter(
+      (candidate) =>
+        canonicalCharacterId(candidate.key) !==
+        canonicalCharacterId(options.root)
+    );
+    const reservations = await Promise.all(
+      otherCandidates.map((candidate) =>
+        options.concurrency.run(async () => {
+          const character =
+            options.subjects.find(
+              (subject) =>
+                canonicalCharacterId(subject.key) ===
+                  canonicalCharacterId(candidate.key) ||
+                subject.warcraftLogsAliases?.some(
+                  (alias) =>
+                    canonicalCharacterId(alias) ===
+                    canonicalCharacterId(candidate.key)
+                )
+            ) ?? rootOnlySubject(candidate.key);
+          return [
+            canonicalCharacterId(candidate.key),
+            await scheduleBatchCandidate(character, candidate, gatherOptions)
+          ] as const;
+        })
+      )
+    );
+    for (const [id, scheduled] of reservations)
+      scheduledById.set(id, scheduled);
+
+    const finalCandidates = initial.candidates.map((candidate) => {
+      const scheduled = scheduledById.get(canonicalCharacterId(candidate.key));
+      return scheduled
+        ? reservationCandidate(candidate.key, scheduled.reservation)
+        : candidate;
+    });
+    const freshRoot = rootScheduling?.reservation.kind === "fresh";
+    const payloads = new Map<string, DossierEvidencePayload>(
+      (initial.payloads ?? []).map((payload) => [
+        canonicalCharacterId(payload.key),
+        payload
+      ])
+    );
+    const needsHydration = finalCandidates.filter(
+      (candidate) => !payloads.has(canonicalCharacterId(candidate.key))
+    );
+    if (!freshRoot || needsHydration.length > 0) {
+      const loaded = await store.hydrateDossierEvidence!(needsHydration);
+      for (const payload of loaded)
+        payloads.set(canonicalCharacterId(payload.key), payload);
+    }
+    evidence = await Promise.all(
+      options.subjects.map(async (character) =>
+        mergeIdentityEvidence(
+          await Promise.all(
+            [character.key, ...(character.warcraftLogsAliases ?? [])].map(
+              async (key) => {
+                const id = canonicalCharacterId(key);
+                const scheduled = scheduledById.get(id);
+                const payload = payloads.get(id);
+                if (!scheduled || !payload) {
+                  // Newly reserved runs have no prior publication to hydrate.
+                  if (!scheduled)
+                    return gatherCharacterEvidence(
+                      { ...character, key },
+                      { ...gatherOptions, attributeTo: character.key },
+                      undefined,
+                      payload
+                    );
+                  return gatherCharacterEvidence(
+                    { ...character, key },
+                    { ...gatherOptions, attributeTo: character.key },
+                    scheduled,
+                    payload
+                  );
+                }
+                return gatherCharacterEvidence(
+                  { ...character, key },
+                  { ...gatherOptions, attributeTo: character.key },
+                  scheduled,
+                  payload
+                );
+              }
             )
           )
         )
       )
-    )
-  );
-  const aliases = await Promise.all(
-    [...options.subjects, ...options.excludedSubjects].map(
-      async (character) =>
-        (await options.repositories.evidence.historicAliases?.(
-          character.key
-        )) ?? []
-    )
-  );
+    );
+    const payloadById = new Map(
+      [...payloads.values()].map((payload) => [
+        canonicalCharacterId(payload.key),
+        payload.historicAliases
+      ])
+    );
+    aliases = aliasSubjects.map(
+      (character) => payloadById.get(canonicalCharacterId(character.key)) ?? []
+    );
+  } else {
+    const rootScheduling = rootSubject
+      ? await scheduleCharacterEvidence(rootSubject, gatherOptions)
+      : undefined;
+    evidence = await Promise.all(
+      options.subjects.map(async (character) =>
+        mergeIdentityEvidence(
+          await Promise.all(
+            [character.key, ...(character.warcraftLogsAliases ?? [])].map(
+              (key) =>
+                gatherCharacterEvidence(
+                  { ...character, key },
+                  { ...gatherOptions, attributeTo: character.key },
+                  rootScheduling &&
+                    canonicalCharacterId(key) ===
+                      canonicalCharacterId(options.root)
+                    ? rootScheduling
+                    : undefined
+                )
+            )
+          )
+        )
+      )
+    );
+    aliases = await Promise.all(
+      [...options.subjects, ...options.excludedSubjects].map(
+        async (character) =>
+          (await store.historicAliases?.(character.key)) ?? []
+      )
+    );
+  }
   const [cuttingEdgeEvidence, ranked] = await Promise.all([
     gatherCuttingEdgeEvidence(options.subjects, {
       blizzard: options.blizzard,

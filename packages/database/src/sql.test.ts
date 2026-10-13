@@ -1,5 +1,6 @@
 import type { Pool, PoolClient, QueryResult } from "pg";
 import { describe, expect, it, vi } from "vitest";
+import { DatabasePoolExhaustedError } from "./pool-exhausted-error";
 import { one, withConsistentRead, withTransaction } from "./sql";
 
 function fakePool(options: { failOn?: string } = {}) {
@@ -17,6 +18,18 @@ function fakePool(options: { failOn?: string } = {}) {
 }
 
 describe("withTransaction", () => {
+  it("classifies a pool acquisition timeout without exposing its driver message", async () => {
+    const pool = {
+      connect: async () => {
+        throw new Error("timeout exceeded when trying to connect");
+      }
+    } as unknown as Pool;
+
+    await expect(
+      withConsistentRead(pool, async () => "unreachable")
+    ).rejects.toThrow(DatabasePoolExhaustedError);
+  });
+
   it("commits and returns what the work returns", async () => {
     const { pool, client, statements } = fakePool();
 

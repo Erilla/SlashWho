@@ -85,7 +85,8 @@ const expectedPerformanceFields = [
   "cacheMisses",
   "cacheShared",
   "cacheFailures",
-  "cacheCapacity"
+  "cacheCapacity",
+  "dbPoolExhausted"
 ];
 
 it("serializes closed rankings failures on http_request without lookup or response data", async () => {
@@ -126,6 +127,25 @@ it("serializes closed rankings failures on http_request without lookup or respon
   expect(captured).not.toMatch(/PRIVATE_|https:/);
 });
 
+it("exports pool exhaustion code and count in production request logs", async () => {
+  const output = new PassThrough();
+  let captured = "";
+  output.on("data", (chunk) => {
+    captured += chunk.toString();
+  });
+  const logger = createWebLogger(output);
+  logger.info({
+    event: "http_request",
+    endpoint: "dossier",
+    status: 503,
+    errorCode: "db_pool_exhausted",
+    dbPoolExhausted: 1
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(captured).toContain('"errorCode":"db_pool_exhausted"');
+  expect(captured).toContain('"dbPoolExhausted":1');
+});
+
 it("logs only operational fields and redacts request and upstream secrets", async () => {
   // Break caught: HTTP diagnostics could persist credentials or private lookup data.
   const marker = "UNIQUE_WEB_PRIVATE_MARKER_f353d8";
@@ -142,6 +162,8 @@ it("logs only operational fields and redacts request and upstream secrets", asyn
     durationMs: 12,
     count: 3,
     reason: "all_domains_fresh_terminal",
+    errorCode: "db_pool_exhausted",
+    dbPoolExhausted: 17,
     errorName: "UpstreamReadError",
     errorMessage: marker,
     authorization: marker,
@@ -158,6 +180,7 @@ it("logs only operational fields and redacts request and upstream secrets", asyn
   expect(captured).toContain('"status":202');
   expect(captured).toContain('"errorName":"UpstreamReadError"');
   expect(captured).toContain('"reason":"all_domains_fresh_terminal"');
+  expect(captured).not.toContain("UNIQUE_WEB_PRIVATE_MARKER");
   expect(captured).not.toContain("errorMessage");
   expect(captured).not.toContain(marker);
 });

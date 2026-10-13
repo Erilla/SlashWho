@@ -11,6 +11,7 @@ import type {
   StoredRaiderIoLoggedEncounter,
   StoredRaiderIoLoggedEncounterAnswers
 } from "../repositories";
+import type { EvidenceReadStepMeasurement } from "../repositories";
 import { withTransaction, type Queryable } from "../sql";
 import { insertEvidenceRows } from "./rows";
 
@@ -312,26 +313,66 @@ async function loadShownRaiderIoLoggedEncounters(
 /** One run's first kills, each with the stored encounter it names, as a dossier may show it. */
 export async function loadPublishedRaiderIoFirstKills(
   client: Queryable,
-  runId: string
+  runId: string,
+  measureReadStep?: EvidenceReadStepMeasurement
 ): Promise<StoredCharacterRaiderIoFirstKill[]> {
-  const kills = await loadRunRaiderIoFirstKills(client, runId);
-  const readIds = kills.flatMap((kill) =>
-    kill.encounterState === "read" && kill.loggedEncounterId !== null
-      ? [kill.loggedEncounterId]
+  const results = await loadPublishedRaiderIoFirstKillsBatch(
+    client,
+    [runId],
+    measureReadStep
+  );
+  return [...(results.get(runId) ?? [])];
+}
+
+/** Hydrate first kills and shared logged encounters for a set of publications. */
+export async function loadPublishedRaiderIoFirstKillsBatch(
+  client: Queryable,
+  runIds: readonly string[],
+  measureReadStep?: EvidenceReadStepMeasurement
+): Promise<ReadonlyMap<string, readonly StoredCharacterRaiderIoFirstKill[]>> {
+  if (runIds.length === 0) return new Map();
+  const result = await client.query<FirstKillRow & { evidence_run_id: string }>(
+    `SELECT evidence_run_id, raid_slug, boss_slug, killed_at, guild_name,
+            guild_realm, guild_region, logged_encounter_id, encounter_state,
+            encounter_limitation_code, historic_world_rank,
+            historic_rank_checked_at, presence_checked
+       FROM character_raiderio_first_kills
+      WHERE evidence_run_id = ANY($1::uuid[])
+      ORDER BY evidence_run_id, killed_at, raid_slug, boss_slug`,
+    [runIds]
+  );
+  const killsByRun = new Map<string, CharacterRaiderIoFirstKillInput[]>();
+  for (const row of result.rows) {
+    killsByRun.set(row.evidence_run_id, [
+      ...(killsByRun.get(row.evidence_run_id) ?? []),
+      mapFirstKill(row)
+    ]);
+  }
+  const readIds = result.rows.flatMap((row) =>
+    row.encounter_state === "read" && row.logged_encounter_id !== null
+      ? [Number(row.logged_encounter_id)]
       : []
   );
+  const loadRoster = () => loadShownRaiderIoLoggedEncounters(client, readIds);
   const encounters = new Map(
-    (await loadShownRaiderIoLoggedEncounters(client, readIds)).map(
-      (encounter) => [encounter.loggedEncounterId, encounter] as const
-    )
+    (
+      await (measureReadStep
+        ? measureReadStep("evidence.raiderIoRoster", loadRoster)
+        : loadRoster())
+    ).map((encounter) => [encounter.loggedEncounterId, encounter] as const)
   );
-  return kills.map((kill) => ({
-    ...kill,
-    encounter:
-      kill.encounterState === "read" && kill.loggedEncounterId !== null
-        ? (encounters.get(kill.loggedEncounterId) ?? null)
-        : null
-  }));
+  return new Map(
+    runIds.map((runId) => [
+      runId,
+      (killsByRun.get(runId) ?? []).map((kill) => ({
+        ...kill,
+        encounter:
+          kill.encounterState === "read" && kill.loggedEncounterId !== null
+            ? (encounters.get(kill.loggedEncounterId) ?? null)
+            : null
+      }))
+    ])
+  );
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { CharacterKey } from "@slashwho/domain";
+import { decideLightRefresh, type CharacterKey } from "@slashwho/domain";
 import type { Pool, PoolClient } from "pg";
 import { createRosterProfileResolutionRepository } from "../roster-profile-resolutions";
 import { lockCharacterEvidence } from "../locks";
@@ -11,9 +11,11 @@ import {
 import type {
   CharacterEvidenceRun,
   CompletedCharacterEvidence,
+  CompletedEvidenceSelection,
   EvidenceRepository,
   EvidenceMonitorPhase,
   EvidenceReservationResult,
+  EvidenceSchedulingReads,
   EvidenceRunMode,
   EvidenceRunPhase,
   HistoricAliasScanProgress,
@@ -53,6 +55,52 @@ import {
   storeRaiderIoLoggedEncounters
 } from "./raiderio-first-kills";
 import { insertEvidenceRows, performanceColumns } from "./rows";
+import {
+  hydrateDossierEvidence as hydrateDossierEvidenceBatch,
+  readDossierEvidence as readDossierEvidenceBatch
+} from "./dossier-read";
+
+async function chooseLightRefresh(
+  client: PoolClient,
+  key: CharacterKey,
+  completed: CompletedEvidenceSelection | null,
+  at: Date
+): Promise<boolean> {
+  if (!completed || !("snapshotRunId" in completed)) return false;
+  const selection = completed;
+  const reads: EvidenceSchedulingReads = createSchedulingReads(
+    client,
+    selection
+  );
+  const stored = await reads.storedEvidenceTiers(key);
+  const terminal = await reads.terminalTiers(key);
+  const recoveredAt = await reads.lastRaiderIoRecoveryAt(key);
+  const completedVersionCurrent =
+    completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION;
+  const eligibility = {
+    at,
+    completed: selection,
+    completedVersionCurrent,
+    stored,
+    terminal,
+    recoveredAt,
+    kills: [],
+    hydratedFightUrls: [],
+    collectedTierZones: []
+  };
+  // The pure policy also provides the old staged early exit: don't load
+  // settlement kills or parse hydration unless every cheap guard passes.
+  if (!decideLightRefresh(eligibility)) return false;
+  const kills = await reads.completedSettlementKills(selection);
+  const hydratedFightUrls = await reads.hydratedFightUrls(key, at);
+  const collectedTierZones = await reads.collectedTierZones(key);
+  return decideLightRefresh({
+    ...eligibility,
+    kills,
+    hydratedFightUrls,
+    collectedTierZones
+  });
+}
 
 /**
  * The distinct guilds a character's stored kills were in. A guild is in the
@@ -123,10 +171,7 @@ export function createEvidenceRepositories(
   >(
     input: Parameters<EvidenceRepository["reserve"]>[0],
     loadCompleted: (client: PoolClient, key: CharacterKey) => Promise<T | null>,
-    prepareNewRun?: (
-      completed: T | null,
-      client: PoolClient
-    ) => Promise<boolean>
+    decideLightRefreshForNewRun = false
   ): Promise<EvidenceReservationResult<T>> {
     const {
       key,
@@ -268,8 +313,13 @@ export function createEvidenceRepositories(
 
       const newLightRefresh =
         continuationRaidId === null &&
-        (prepareNewRun
-          ? await prepareNewRun(completed, client)
+        (decideLightRefreshForNewRun
+          ? await chooseLightRefresh(
+              client,
+              key,
+              completed as CompletedEvidenceSelection | null,
+              at
+            )
           : lightRefresh === true);
       const inserted = await client.query<EvidenceRunRow>(
         `INSERT INTO character_evidence_runs
@@ -334,6 +384,10 @@ export function createEvidenceRepositories(
   return {
     evidence: {
       ...createSharedSettlementReads(pool),
+      readDossierEvidence: (input, measureReadStep) =>
+        readDossierEvidenceBatch(pool, input, measureReadStep),
+      hydrateDossierEvidence: (candidates, measureReadStep) =>
+        hydrateDossierEvidenceBatch(pool, candidates, measureReadStep),
       rosterProfileResolutions: createRosterProfileResolutionRepository(pool),
       async historicAliases(key) {
         const result = await pool.query<{
@@ -421,21 +475,8 @@ export function createEvidenceRepositories(
         });
       },
       reserve: (input) => reserveEvidence(input, loadCompletedEvidence),
-      reserveForScheduling: (input, prepareNewRun) =>
-        reserveEvidence(
-          input,
-          loadCompletedEvidenceSelection,
-          prepareNewRun
-            ? (completed, client) =>
-                prepareNewRun({
-                  completed,
-                  reads: createSchedulingReads(client, completed),
-                  completedVersionCurrent:
-                    completed?.evidenceVersion !== undefined &&
-                    completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
-                })
-            : undefined
-        ),
+      reserveForScheduling: (input) =>
+        reserveEvidence(input, loadCompletedEvidenceSelection, true),
       hydrateCompletedEvidence: (selection) =>
         hydrateCompletedEvidence(pool, selection),
       completedSettlementKills: (selection) =>

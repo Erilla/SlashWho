@@ -14,6 +14,7 @@ import {
   safeApiErrorSchema,
   type PublicErrorCode
 } from "@slashwho/contracts";
+import { DatabasePoolExhaustedError } from "@slashwho/database";
 import type { CharacterKey } from "@slashwho/domain";
 import { randomUUID } from "node:crypto";
 
@@ -223,7 +224,13 @@ export async function withHttpRequest(
     });
   } catch (error) {
     failure = errorFields(error);
-    response = apiError("search_failed");
+    if (error instanceof DatabasePoolExhaustedError) {
+      scope.increment("dbPoolExhausted");
+      failure = { ...failure, errorCode: error.errorCode };
+      response = apiError("database_unavailable");
+    } else {
+      response = apiError("search_failed");
+    }
   }
   // Every response this wraps is private to its caller, so one that names no
   // caching policy gets the safe one rather than whatever a proxy assumes.

@@ -22,6 +22,7 @@ import { decryptCredential } from "./credential-encryption";
 import { createApplicantDossierService } from "./applicant-dossier-service";
 import { limitationRecovery } from "./dossier-limitations";
 import { retryDelayMsFor } from "./limitation-retry-policy";
+import { staleReadNeedsOnlyNewestPage } from "./settled-collection";
 import { createMeasurementScope } from "./measurement";
 import { createSearchService } from "./search-service";
 
@@ -568,7 +569,7 @@ describe("a stale dossier read (#540)", () => {
             Awaited<ReturnType<typeof repositories.evidence.getCompleted>>
           >
         >();
-        repositories.evidence.reserveForScheduling = async (input, prepare) => {
+        repositories.evidence.reserveForScheduling = async (input) => {
           const reserved = await repositories.evidence.reserve(input);
           if (!reserved.completed)
             throw new Error("fixture_missing_completed_evidence");
@@ -580,16 +581,15 @@ describe("a stale dossier read (#540)", () => {
             wipeCapable: true
           };
           const light =
-            reserved.kind === "reserved" && prepare
-              ? await prepare({
-                  completed: selection,
+            reserved.kind === "reserved"
+              ? await staleReadNeedsOnlyNewestPage({
+                  key: input.key,
+                  at: input.at ?? new Date(),
+                  completed: reserved.completed,
                   completedVersionCurrent:
                     reserved.completedVersionCurrent ?? false,
-                  reads: {
-                    ...repositories.evidence,
-                    completedSettlementKills: async (chosen) =>
-                      completed.get(chosen.snapshotRunId)!.kills
-                  }
+                  loadKills: async () => reserved.completed!.kills,
+                  evidence: repositories.evidence
                 })
               : false;
           const run = light
