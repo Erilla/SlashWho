@@ -20,6 +20,8 @@ import {
 import type {
   CharacterTierBestParseInput,
   CompletedCharacterEvidence,
+  CompletedEvidenceSelection,
+  EvidenceSettlementKill,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe
 } from "../repositories";
@@ -30,6 +32,14 @@ export async function loadCompletedEvidence(
   client: Queryable,
   key: CharacterKey
 ): Promise<CompletedCharacterEvidence | null> {
+  const selection = await loadCompletedEvidenceSelection(client, key);
+  return selection ? hydrateCompletedEvidence(client, selection) : null;
+}
+
+export async function loadCompletedEvidenceSelection(
+  client: Queryable,
+  key: CharacterKey
+): Promise<CompletedEvidenceSelection | null> {
   // Two runs speak for a character, and they are usually the same one. The
   // newest publication holds the snapshot: every kill, wipe and parse there
   // is. The newest `full` publication holds what was last collected in full:
@@ -58,6 +68,37 @@ export async function loadCompletedEvidence(
       ? ((await selectRun("full")).rows[0] ?? snapshot)
       : snapshot;
 
+  return {
+    run: mapEvidenceRun(run),
+    evidenceVersion: run.evidence_version,
+    snapshotRunId: snapshot.id,
+    wipeCapable: snapshot.evidence_version >= 2
+  };
+}
+
+export async function loadCompletedSettlementKills(
+  client: Queryable,
+  selection: CompletedEvidenceSelection
+): Promise<readonly EvidenceSettlementKill[]> {
+  const result = await client.query<{
+    raid_id: string;
+    killed_at: Date;
+    fight_url: string;
+  }>(
+    `SELECT raid_id, killed_at, fight_url FROM character_mythic_kills WHERE evidence_run_id = $1`,
+    [selection.snapshotRunId]
+  );
+  return result.rows.map((row) => ({
+    raidId: row.raid_id,
+    killedAt: row.killed_at.toISOString(),
+    fightUrl: row.fight_url
+  }));
+}
+
+export async function hydrateCompletedEvidence(
+  client: Queryable,
+  selection: CompletedEvidenceSelection
+): Promise<CompletedCharacterEvidence> {
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
             boss_order, killed_at, report_url, fight_url,
@@ -68,7 +109,7 @@ export async function loadCompletedEvidence(
      FROM character_mythic_kills
      WHERE evidence_run_id = $1
      ORDER BY killed_at, source_fight_key`,
-    [snapshot.id]
+    [selection.snapshotRunId]
   );
   const wipesResult = await client.query<CharacterMythicWipeRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
@@ -76,14 +117,14 @@ export async function loadCompletedEvidence(
      FROM character_mythic_wipes
      WHERE evidence_run_id = $1
      ORDER BY raid_id, boss_order, attempted_at DESC, fight_url`,
-    [snapshot.id]
+    [selection.snapshotRunId]
   );
   const tierBestsResult = await client.query<CharacterTierBestParseRow>(
     `SELECT ${tierBestParseColumns}
      FROM character_tier_best_parses
      WHERE evidence_run_id = $1
      ORDER BY raid_id, boss_id`,
-    [snapshot.id]
+    [selection.snapshotRunId]
   );
   const cuttingEdgesResult = await client.query<{
     achievement_id: string;
@@ -93,16 +134,16 @@ export async function loadCompletedEvidence(
        FROM character_evidence_cutting_edges
       WHERE evidence_run_id = $1
       ORDER BY achievement_id`,
-    [run.id]
+    [selection.run.id]
   );
   const blizzardPhase = await client.query<{ state: string }>(
     `SELECT state FROM character_evidence_run_phases
       WHERE run_id = $1 AND phase_id = 'blizzard_achievements'`,
-    [run.id]
+    [selection.run.id]
   );
   return {
-    run: mapEvidenceRun(run),
-    evidenceVersion: run.evidence_version,
+    run: selection.run,
+    evidenceVersion: selection.evidenceVersion,
     kills: killsResult.rows.map(mapCharacterMythicKill),
     wipes: wipesResult.rows.map(mapCharacterMythicWipe),
     tierBests: tierBestsResult.rows.map(mapCharacterTierBestParse),
@@ -110,14 +151,14 @@ export async function loadCompletedEvidence(
     // the newest publication shows, read with today's suppressions.
     raiderIoFirstKills: await loadPublishedRaiderIoFirstKills(
       client,
-      snapshot.id
+      selection.snapshotRunId
     ),
     cuttingEdges: cuttingEdgesResult.rows.map((row) => ({
       achievementId: row.achievement_id,
       completedAt: row.completed_at.toISOString()
     })),
     cuttingEdgesCollected: blizzardPhase.rows[0]?.state === "completed",
-    wipeCapable: snapshot.evidence_version >= 2
+    wipeCapable: selection.wipeCapable
   };
 }
 
@@ -361,4 +402,98 @@ export async function loadLatestTierSearchKills(
         lookupRaidForEvidence(kill)?.raidId === journalRaidId
     )
     .map(({ kill }) => kill);
+}
+
+export function killEvidenceIsHydrated(
+  kill: {
+    killedAt: string;
+    parsesReadAt: string | null;
+    performance: {
+      spec?: unknown;
+      damage: { state: string };
+      healing: { state: string };
+      bossDamage: { state: string };
+    };
+  },
+  beforeIso: string
+): boolean {
+  return (
+    kill.killedAt < beforeIso &&
+    (kill.performance.damage.state === "available" ||
+    kill.performance.healing.state === "available" ||
+    kill.performance.bossDamage.state === "available"
+      ? kill.performance.spec !== null
+      : kill.parsesReadAt !== null)
+  );
+}
+
+/** The selected publication's hydration flags, without its display payload. */
+export async function loadSchedulingHydratedUrls(
+  client: Queryable,
+  selected: CompletedEvidenceSelection | null,
+  before: Date
+): Promise<string[]> {
+  if (!selected) return [];
+  const { rows } = await client.query<
+    Pick<
+      CharacterMythicKillRow,
+      | "fight_url"
+      | "killed_at"
+      | "parses_read_at"
+      | "spec_name"
+      | "spec_icon_url"
+      | "damage_parse_state"
+      | "damage_percentile"
+      | "healing_parse_state"
+      | "healing_percentile"
+      | "boss_damage_parse_state"
+      | "boss_damage_percentile"
+    >
+  >(
+    `SELECT fight_url, killed_at, parses_read_at, spec_name, spec_icon_url,
+             damage_parse_state, damage_percentile, healing_parse_state, healing_percentile,
+             boss_damage_parse_state, boss_damage_percentile
+       FROM character_mythic_kills WHERE evidence_run_id = $1`,
+    [selected.snapshotRunId]
+  );
+  const beforeIso = before.toISOString();
+  return [
+    ...new Set(
+      rows
+        .filter((row) =>
+          killEvidenceIsHydrated(
+            {
+              killedAt: row.killed_at.toISOString(),
+              parsesReadAt: row.parses_read_at?.toISOString() ?? null,
+              performance: {
+                ...parsePerformanceValues({
+                  spec:
+                    row.spec_name === null || row.spec_icon_url === null
+                      ? null
+                      : { name: row.spec_name, iconUrl: row.spec_icon_url },
+                  damage: mapParseMetric(
+                    row.damage_parse_state,
+                    row.damage_percentile
+                  ),
+                  healing: mapParseMetric(
+                    row.healing_parse_state,
+                    row.healing_percentile
+                  ),
+                  bossDamage: mapParseMetric(
+                    row.boss_damage_parse_state,
+                    row.boss_damage_percentile
+                  )
+                }),
+                spec:
+                  row.spec_name === null || row.spec_icon_url === null
+                    ? null
+                    : { name: row.spec_name, iconUrl: row.spec_icon_url }
+              }
+            },
+            beforeIso
+          )
+        )
+        .map((row) => row.fight_url)
+    )
+  ].sort();
 }

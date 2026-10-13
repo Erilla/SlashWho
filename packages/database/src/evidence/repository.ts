@@ -10,7 +10,8 @@ import {
 } from "../mappers";
 import type {
   CharacterEvidenceRun,
-  EvidenceCollectionDomain,
+  CompletedCharacterEvidence,
+  EvidenceRepository,
   EvidenceMonitorPhase,
   EvidenceReservationResult,
   EvidenceRunMode,
@@ -22,6 +23,10 @@ import type {
   StoredEvidenceGuild,
   StoredRankedBackfillCursor
 } from "../repositories";
+import {
+  createSchedulingReads,
+  createSharedSettlementReads
+} from "./settlement";
 import { one, withTransaction } from "../sql";
 import {
   CURRENT_COLLECTION_VERSIONS,
@@ -31,6 +36,10 @@ import {
 } from "./freshness";
 import {
   loadCompletedEvidence,
+  killEvidenceIsHydrated,
+  loadCompletedEvidenceSelection,
+  hydrateCompletedEvidence,
+  loadCompletedSettlementKills,
   loadLatestTierSearchKills,
   loadPositiveEvidenceForPartial,
   loadStoredPerformanceByFightUrl,
@@ -109,8 +118,222 @@ async function requestHistoricAliasRecollection(
 export function createEvidenceRepositories(
   pool: Pool
 ): Pick<Repositories, "evidence"> {
+  async function reserveEvidence<
+    T extends Pick<CompletedCharacterEvidence, "run" | "evidenceVersion">
+  >(
+    input: Parameters<EvidenceRepository["reserve"]>[0],
+    loadCompleted: (client: PoolClient, key: CharacterKey) => Promise<T | null>,
+    prepareNewRun?: (
+      completed: T | null,
+      client: PoolClient
+    ) => Promise<boolean>
+  ): Promise<EvidenceReservationResult<T>> {
+    const {
+      key,
+      freshnessCutoff,
+      at,
+      origin,
+      root,
+      credentials,
+      phasePlan,
+      lightRefresh
+    } = input;
+
+    if (Number.isNaN(freshnessCutoff.valueOf()) || Number.isNaN(at.valueOf())) {
+      throw new RangeError("character_evidence_reservation_time_invalid");
+    }
+    return withTransaction(pool, async (client) => {
+      await lockCharacterEvidence(client, key);
+      const aliasRecollection = await client.query(
+        `SELECT 1 FROM character_alias_recollections
+              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+        [key.region, key.realm, key.name]
+      );
+      const aliasRecollectionPending = aliasRecollection.rowCount === 1;
+      const completed = await loadCompleted(client, key);
+      // Asked before the freshness check, not after it. A refresh forces a
+      // run past the freshness window, so a caller reading fresh evidence
+      // can be looking at a character that is being re-collected right now
+      // -- and it has no other way to find that out.
+      const active = await client.query<EvidenceRunRow>(
+        `SELECT ${evidenceRunColumns()}
+             FROM character_evidence_runs
+             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+               AND status IN ('queued', 'running', 'retrying')
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1`,
+        [key.region, key.realm, key.name]
+      );
+      const activeRun = active.rows[0] ? mapEvidenceRun(active.rows[0]) : null;
+      // A capped ranked walk has already paid for its explicit tier
+      // search. Its retry is continuation work, even if an unrelated
+      // ordinary collection published after it. A failed attempt has no
+      // publication or cursor; retain the last published cursor and back
+      // off for 30 minutes after a failure so a low points balance cannot
+      // create a tight retry loop.
+      //
+      // Every capped walk is read, not only the due ones: one that is not
+      // due yet is when fresh evidence next changes, and a page stops
+      // following evidence it has no such time for (#663). `due_at` is
+      // the later of the walk's retry time and the failure cool-down.
+      const rankedContinuations = await client.query<{
+        tier_search_raid_id: string;
+        due_at: Date;
+      }>(
+        `WITH latest AS (
+               SELECT DISTINCT ON (tier_search_raid_id)
+                      tier_search_raid_id, created_at, status,
+                      ranked_backfill_attempted, ranked_backfill_cursor,
+                      retry_after_at
+                 FROM character_evidence_runs
+                WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
+                  AND mode = 'tier_search'
+                  AND status IN ('complete', 'partial')
+                ORDER BY tier_search_raid_id, created_at DESC, id DESC
+             )
+             SELECT tier_search_raid_id,
+                    GREATEST(
+                      retry_after_at,
+                      (SELECT MAX(failed.completed_at) + interval '30 minutes'
+                         FROM character_evidence_runs failed
+                        WHERE failed.region = $1 AND failed.realm_slug = $2
+                          AND failed.normalized_name = $3
+                          AND failed.tier_search_raid_id = latest.tier_search_raid_id
+                          AND failed.mode = 'tier_search'
+                          AND failed.status = 'failed'
+                          AND failed.created_at > latest.created_at)
+                    ) AS due_at
+               FROM latest
+              WHERE status = 'partial' AND ranked_backfill_attempted = true
+                AND jsonb_typeof(ranked_backfill_cursor) = 'object'
+                AND retry_after_at IS NOT NULL
+              ORDER BY retry_after_at, tier_search_raid_id`,
+        [key.region, key.realm, key.name]
+      );
+      const continuationRaidId =
+        rankedContinuations.rows.find((row) => row.due_at <= at)
+          ?.tier_search_raid_id ?? null;
+      const pendingContinuations = rankedContinuations.rows
+        .map((row) => row.due_at)
+        .filter((dueAt) => dueAt > at);
+      const tierSearchResumesAt =
+        pendingContinuations.length === 0
+          ? null
+          : new Date(
+              Math.min(...pendingContinuations.map((due) => due.getTime()))
+            );
+      if (
+        completed !== null &&
+        completed.evidenceVersion !== undefined &&
+        completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION &&
+        completed.run.completedAt !== null &&
+        !aliasRecollectionPending &&
+        continuationRaidId === null &&
+        isEvidenceFresh(
+          completed.run.completedAt,
+          completed.run.retryAfterAt,
+          freshnessCutoff,
+          at
+        )
+      ) {
+        return {
+          kind: "fresh",
+          run: completed.run,
+          completed,
+          active: activeRun,
+          tierSearchResumesAt
+        } satisfies EvidenceReservationResult<T>;
+      }
+
+      if (activeRun) {
+        return {
+          kind: "active",
+          run: activeRun,
+          completed,
+          active: activeRun
+        } satisfies EvidenceReservationResult<T>;
+      }
+
+      if (aliasRecollectionPending) {
+        // An older active run may have re-marked stale tiers after the edit.
+        // Clear them again at the reservation that will actually re-read
+        // the aliases, then consume the request in the same transaction.
+        await invalidateHistoricAliasKillScan(client, key);
+        await client.query(
+          `DELETE FROM character_alias_recollections
+                WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+      }
+
+      const newLightRefresh =
+        continuationRaidId === null &&
+        (prepareNewRun
+          ? await prepareNewRun(completed, client)
+          : lightRefresh === true);
+      const inserted = await client.query<EvidenceRunRow>(
+        `INSERT INTO character_evidence_runs
+              (region, realm_slug, normalized_name, mode, tier_search_raid_id,
+               wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
+               light_refresh, origin,
+               root_region, root_realm_slug, root_normalized_name)
+             VALUES ($1, $2, $3,
+                     CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
+                     $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             RETURNING ${evidenceRunColumns()}`,
+        [
+          key.region,
+          key.realm,
+          key.name,
+          continuationRaidId,
+          credentials && "wclClientIdEncrypted" in credentials
+            ? credentials.wclClientIdEncrypted
+            : null,
+          credentials && "wclClientSecretEncrypted" in credentials
+            ? credentials.wclClientSecretEncrypted
+            : null,
+          credentials && "accountId" in credentials
+            ? credentials.accountId
+            : null,
+          credentials && "credentialVersion" in credentials
+            ? credentials.credentialVersion
+            : null,
+          // A tier continuation is its own mode, never a light refresh.
+          newLightRefresh,
+          // A continuation is still whatever asked for this run: the
+          // caller, not the tier search that capped, queued it.
+          origin,
+          root?.region ?? null,
+          root?.realm ?? null,
+          root?.name ?? null
+        ]
+      );
+      const reservedRun = mapEvidenceRun(one(inserted));
+      if (phasePlan && phasePlan.length > 0) {
+        await client.query(
+          `INSERT INTO character_evidence_run_phases
+                 (run_id, phase_id, ordinal, state)
+               SELECT $1, item.phase_id, item.ordinal, 'pending'
+                 FROM unnest($2::text[]) WITH ORDINALITY
+                   AS item(phase_id, ordinal)`,
+          [reservedRun.id, phasePlan]
+        );
+      }
+      return {
+        kind: "reserved",
+        run: reservedRun,
+        completed,
+        active: reservedRun,
+        completedVersionCurrent:
+          completed?.evidenceVersion !== undefined &&
+          completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
+      } satisfies EvidenceReservationResult<T>;
+    });
+  }
+
   return {
     evidence: {
+      ...createSharedSettlementReads(pool),
       rosterProfileResolutions: createRosterProfileResolutionRepository(pool),
       async historicAliases(key) {
         const result = await pool.query<{
@@ -197,207 +420,26 @@ export function createEvidenceRepositories(
           return result.rowCount === 1 ? "removed" : "missing";
         });
       },
-      async reserve({
-        key,
-        freshnessCutoff,
-        at,
-        origin,
-        root,
-        credentials,
-        phasePlan,
-        lightRefresh
-      }) {
-        if (
-          Number.isNaN(freshnessCutoff.valueOf()) ||
-          Number.isNaN(at.valueOf())
-        ) {
-          throw new RangeError("character_evidence_reservation_time_invalid");
-        }
-        return withTransaction(pool, async (client) => {
-          await lockCharacterEvidence(client, key);
-          const aliasRecollection = await client.query(
-            `SELECT 1 FROM character_alias_recollections
-              WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
-            [key.region, key.realm, key.name]
-          );
-          const aliasRecollectionPending = aliasRecollection.rowCount === 1;
-          const completed = await loadCompletedEvidence(client, key);
-          // Asked before the freshness check, not after it. A refresh forces a
-          // run past the freshness window, so a caller reading fresh evidence
-          // can be looking at a character that is being re-collected right now
-          // -- and it has no other way to find that out.
-          const active = await client.query<EvidenceRunRow>(
-            `SELECT ${evidenceRunColumns()}
-             FROM character_evidence_runs
-             WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
-               AND status IN ('queued', 'running', 'retrying')
-             ORDER BY created_at DESC, id DESC
-             LIMIT 1`,
-            [key.region, key.realm, key.name]
-          );
-          const activeRun = active.rows[0]
-            ? mapEvidenceRun(active.rows[0])
-            : null;
-          // A capped ranked walk has already paid for its explicit tier
-          // search. Its retry is continuation work, even if an unrelated
-          // ordinary collection published after it. A failed attempt has no
-          // publication or cursor; retain the last published cursor and back
-          // off for 30 minutes after a failure so a low points balance cannot
-          // create a tight retry loop.
-          //
-          // Every capped walk is read, not only the due ones: one that is not
-          // due yet is when fresh evidence next changes, and a page stops
-          // following evidence it has no such time for (#663). `due_at` is
-          // the later of the walk's retry time and the failure cool-down.
-          const rankedContinuations = await client.query<{
-            tier_search_raid_id: string;
-            due_at: Date;
-          }>(
-            `WITH latest AS (
-               SELECT DISTINCT ON (tier_search_raid_id)
-                      tier_search_raid_id, created_at, status,
-                      ranked_backfill_attempted, ranked_backfill_cursor,
-                      retry_after_at
-                 FROM character_evidence_runs
-                WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
-                  AND mode = 'tier_search'
-                  AND status IN ('complete', 'partial')
-                ORDER BY tier_search_raid_id, created_at DESC, id DESC
-             )
-             SELECT tier_search_raid_id,
-                    GREATEST(
-                      retry_after_at,
-                      (SELECT MAX(failed.completed_at) + interval '30 minutes'
-                         FROM character_evidence_runs failed
-                        WHERE failed.region = $1 AND failed.realm_slug = $2
-                          AND failed.normalized_name = $3
-                          AND failed.tier_search_raid_id = latest.tier_search_raid_id
-                          AND failed.mode = 'tier_search'
-                          AND failed.status = 'failed'
-                          AND failed.created_at > latest.created_at)
-                    ) AS due_at
-               FROM latest
-              WHERE status = 'partial' AND ranked_backfill_attempted = true
-                AND jsonb_typeof(ranked_backfill_cursor) = 'object'
-                AND retry_after_at IS NOT NULL
-              ORDER BY retry_after_at, tier_search_raid_id`,
-            [key.region, key.realm, key.name]
-          );
-          const continuationRaidId =
-            rankedContinuations.rows.find((row) => row.due_at <= at)
-              ?.tier_search_raid_id ?? null;
-          const pendingContinuations = rankedContinuations.rows
-            .map((row) => row.due_at)
-            .filter((dueAt) => dueAt > at);
-          const tierSearchResumesAt =
-            pendingContinuations.length === 0
-              ? null
-              : new Date(
-                  Math.min(...pendingContinuations.map((due) => due.getTime()))
-                );
-          if (
-            completed !== null &&
-            completed.evidenceVersion !== undefined &&
-            completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION &&
-            completed.run.completedAt !== null &&
-            !aliasRecollectionPending &&
-            continuationRaidId === null &&
-            isEvidenceFresh(
-              completed.run.completedAt,
-              completed.run.retryAfterAt,
-              freshnessCutoff,
-              at
-            )
-          ) {
-            return {
-              kind: "fresh",
-              run: completed.run,
-              completed,
-              active: activeRun,
-              tierSearchResumesAt
-            } satisfies EvidenceReservationResult;
-          }
-
-          if (activeRun) {
-            return {
-              kind: "active",
-              run: activeRun,
-              completed,
-              active: activeRun
-            } satisfies EvidenceReservationResult;
-          }
-
-          if (aliasRecollectionPending) {
-            // An older active run may have re-marked stale tiers after the edit.
-            // Clear them again at the reservation that will actually re-read
-            // the aliases, then consume the request in the same transaction.
-            await invalidateHistoricAliasKillScan(client, key);
-            await client.query(
-              `DELETE FROM character_alias_recollections
-                WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
-              [key.region, key.realm, key.name]
-            );
-          }
-
-          const inserted = await client.query<EvidenceRunRow>(
-            `INSERT INTO character_evidence_runs
-              (region, realm_slug, normalized_name, mode, tier_search_raid_id,
-               wcl_client_id_encrypted, wcl_client_secret_encrypted, account_credential_owner_id, account_credential_version,
-               light_refresh, origin,
-               root_region, root_realm_slug, root_normalized_name)
-             VALUES ($1, $2, $3,
-                     CASE WHEN $4::text IS NULL THEN 'full' ELSE 'tier_search' END,
-                     $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-             RETURNING ${evidenceRunColumns()}`,
-            [
-              key.region,
-              key.realm,
-              key.name,
-              continuationRaidId,
-              credentials && "wclClientIdEncrypted" in credentials
-                ? credentials.wclClientIdEncrypted
-                : null,
-              credentials && "wclClientSecretEncrypted" in credentials
-                ? credentials.wclClientSecretEncrypted
-                : null,
-              credentials && "accountId" in credentials
-                ? credentials.accountId
-                : null,
-              credentials && "credentialVersion" in credentials
-                ? credentials.credentialVersion
-                : null,
-              // A tier continuation is its own mode, never a light refresh.
-              continuationRaidId === null && lightRefresh === true,
-              // A continuation is still whatever asked for this run: the
-              // caller, not the tier search that capped, queued it.
-              origin,
-              root?.region ?? null,
-              root?.realm ?? null,
-              root?.name ?? null
-            ]
-          );
-          const reservedRun = mapEvidenceRun(one(inserted));
-          if (phasePlan && phasePlan.length > 0) {
-            await client.query(
-              `INSERT INTO character_evidence_run_phases
-                 (run_id, phase_id, ordinal, state)
-               SELECT $1, item.phase_id, item.ordinal, 'pending'
-                 FROM unnest($2::text[]) WITH ORDINALITY
-                   AS item(phase_id, ordinal)`,
-              [reservedRun.id, phasePlan]
-            );
-          }
-          return {
-            kind: "reserved",
-            run: reservedRun,
-            completed,
-            active: reservedRun,
-            completedVersionCurrent:
-              completed?.evidenceVersion !== undefined &&
-              completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
-          } satisfies EvidenceReservationResult;
-        });
-      },
+      reserve: (input) => reserveEvidence(input, loadCompletedEvidence),
+      reserveForScheduling: (input, prepareNewRun) =>
+        reserveEvidence(
+          input,
+          loadCompletedEvidenceSelection,
+          prepareNewRun
+            ? (completed, client) =>
+                prepareNewRun({
+                  completed,
+                  reads: createSchedulingReads(client, completed),
+                  completedVersionCurrent:
+                    completed?.evidenceVersion !== undefined &&
+                    completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
+                })
+            : undefined
+        ),
+      hydrateCompletedEvidence: (selection) =>
+        hydrateCompletedEvidence(pool, selection),
+      completedSettlementKills: (selection) =>
+        loadCompletedSettlementKills(pool, selection),
 
       async latestTierSearches(keys, since) {
         if (Number.isNaN(since.valueOf())) {
@@ -1236,52 +1278,12 @@ export function createEvidenceRepositories(
         const completed = await loadCompletedEvidence(pool, key);
         const hydrated = new Set(
           (completed?.kills ?? [])
-            .filter(
-              (kill) =>
-                // A kill whose rankings have not settled is re-read rather
-                // than left frozen at whatever it showed on the night. Its
-                // percentile is still moving, so skipping it would freeze a
-                // value we have reason to believe is wrong.
-                kill.killedAt < settledBeforeIso &&
-                (kill.performance.damage.state === "available" ||
-                kill.performance.healing.state === "available" ||
-                kill.performance.bossDamage.state === "available"
-                  ? // Metrics collected before specialization support are not
-                    // hydrated: the parse-tier version bump must let Warcraft
-                    // Logs replace them with its now-available spec data.
-                    kill.performance.spec !== null
-                  : // Asked and answered with nothing is finished too. Without
-                    // this half the parse budget goes on re-reading reports
-                    // that have already said no -- and the hydration order
-                    // sorts those failed groups to the front, so they are what
-                    // it spends the budget on first (#297).
-                    kill.parsesReadAt !== null)
-            )
+            // Shared with the slim scheduling read so zero/spec/unavailable
+            // semantics cannot diverge between collection and dispatch policy.
+            .filter((kill) => killEvidenceIsHydrated(kill, settledBeforeIso))
             .map((kill) => kill.fightUrl)
         );
         return [...hydrated].sort();
-      },
-
-      async collectedTierZones(key) {
-        // Scoped exactly like `loadStoredTierBestParses`, which is the set
-        // `publish` carries forward: a zone counts as collected only while its
-        // rows survive into the next run's evidence. `completed_at` is the
-        // run's, so a kill newer than it reopens the zone for collection.
-        const result = await pool.query<{
-          raid_id: string;
-          collected_at: Date;
-        }>(
-          `SELECT t.raid_id, max(t.collected_at) AS collected_at
-             FROM character_tier_best_parses t
-             JOIN character_evidence_runs r ON r.id = t.evidence_run_id
-            WHERE r.region = $1 AND r.realm_slug = $2 AND r.normalized_name = $3
-              AND r.status IN ('complete', 'partial')
-            GROUP BY t.raid_id`,
-          [key.region, key.realm, key.name]
-        );
-        return result.rows
-          .map((row) => [row.raid_id, row.collected_at.toISOString()] as const)
-          .sort((a, b) => a[0].localeCompare(b[0]));
       },
 
       async storedEvidenceTiers(key, tierSearchRaidId) {
@@ -1413,49 +1415,6 @@ export function createEvidenceRepositories(
               }
             : {})
         };
-      },
-
-      async lastRaiderIoRecoveryAt(key) {
-        const result = await pool.query<{ completed_at: Date | null }>(
-          `SELECT max(run.completed_at) AS completed_at
-             FROM character_evidence_run_costs cost
-             JOIN character_evidence_runs run ON run.id = cost.run_id
-            WHERE run.region = $1 AND run.realm_slug = $2
-              AND run.normalized_name = $3
-              AND run.status IN ('complete', 'partial')
-              AND cost.raiderio_historic_outcome = 'evidence'`,
-          [key.region, key.realm, key.name]
-        );
-        return result.rows[0]?.completed_at ?? null;
-      },
-
-      async terminalTiers(key) {
-        const result = await pool.query<{
-          raid_id: string;
-          domain: EvidenceCollectionDomain;
-        }>(
-          `SELECT raid_id, domain
-             FROM character_terminal_tiers
-            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3
-              AND collection_version >= CASE domain
-                    WHEN 'kills' THEN $4::integer
-                    WHEN 'parses' THEN $5::integer
-                    ELSE $6::integer
-                  END
-            ORDER BY raid_id, domain`,
-          [
-            key.region,
-            key.realm,
-            key.name,
-            CURRENT_COLLECTION_VERSIONS.kills,
-            CURRENT_COLLECTION_VERSIONS.parses,
-            CURRENT_COLLECTION_VERSIONS.tier_bests
-          ]
-        );
-        return result.rows.map((row) => ({
-          raidId: row.raid_id,
-          domain: row.domain
-        }));
       },
 
       async recordWarcraftLogsCharacterId(key, characterId, at) {

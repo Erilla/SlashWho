@@ -8,6 +8,13 @@ export const collectCharacterEvidenceQueueName = "collect-character-evidence";
 export const evidenceResumeQueueName = "evidence-resume";
 export const applicantSheetTickQueueName = "applicant-sheet-tick";
 
+export { evidenceRunPriority } from "./evidence-priority";
+
+export type EvidenceJobMetadata = JobTelemetry & {
+  mode?: "full" | "light";
+  priority?: number;
+};
+
 /** Optional so jobs enqueued before this deployment stay valid in flight. */
 export type JobTelemetry = {
   correlationId?: string | undefined;
@@ -66,8 +73,9 @@ export interface DiscoveryQueue {
   enqueueFingerprintAdmission(runId: string): Promise<string>;
   enqueueCharacterEvidence(
     runId: string,
-    meta?: JobTelemetry & { mode?: "full" | "light" }
+    meta?: EvidenceJobMetadata
   ): Promise<string>;
+  promoteCharacterEvidence(jobId: string, priority: number): Promise<void>;
   work(
     handler: (
       payload: DiscoverCharacterJob,
@@ -272,6 +280,20 @@ export function createDiscoveryQueue(
     return typeof row?.id === "string" ? row.id : null;
   }
 
+  async function promoteCharacterEvidence(jobId: string, priority: number) {
+    if (!ready) throw new Error("discovery_queue_not_ready");
+    if (!uuidPattern.test(jobId)) throw new Error("invalid_evidence_job_id");
+    if (!Number.isInteger(priority) || priority < 0 || priority > 30)
+      throw new Error("invalid_evidence_priority");
+    // pg-boss 12.27.0 private schema contract: pin changes with the Docker
+    // promotion test. Claimed/settled jobs are expected no-ops; never duplicate.
+    await boss.getDb().executeSql(
+      `UPDATE pgboss.job SET priority = GREATEST(priority, $2)
+       WHERE name = $3 AND id = $1::uuid AND state IN ('created', 'retry')`,
+      [jobId, priority, collectCharacterEvidenceQueueName]
+    );
+  }
+
   return {
     async start() {
       await boss.start();
@@ -373,9 +395,10 @@ export function createDiscoveryQueue(
       if (meta?.enqueuedAt !== undefined) data.enqueuedAt = meta.enqueuedAt;
       if (meta?.mode !== undefined) data.mode = meta.mode;
       const id = await boss.send(collectCharacterEvidenceQueueName, data, {
-        singletonKey: runId
+        singletonKey: runId,
+        ...(meta?.priority !== undefined ? { priority: meta.priority } : {})
       });
-      return (
+      const jobId =
         id ??
         (await existingSingletonJobId(
           collectCharacterEvidenceQueueName,
@@ -383,9 +406,14 @@ export function createDiscoveryQueue(
         )) ??
         (() => {
           throw new Error("character_evidence_enqueue_not_created");
-        })()
-      );
+        })();
+      if (id === null && meta?.priority !== undefined) {
+        await promoteCharacterEvidence(jobId, meta.priority);
+      }
+      return jobId;
     },
+
+    promoteCharacterEvidence,
 
     async work(handler) {
       if (!ready) throw new Error("discovery_queue_not_ready");
