@@ -1,6 +1,7 @@
 # Short discovery-job polling and hidden-tab pause (#825)
 
-Status: proposed for Manager review; no product implementation yet.
+Status: approved at `c3dd883c` in Manager review 5507191913, with the
+15-second continuous-failure notice condition incorporated below.
 
 ## Purpose and checked baseline
 
@@ -14,9 +15,8 @@ The job effect still has its own timer loop, uses the general 1/2/4/8/10-second
 backoff and has no visibility handling. It reads the full dossier after complete.
 The existing authoritative evidence poll already pauses when hidden.
 
-Verified worktree: `G:\repos\SlashWho\.claude\worktrees\feat-825-discovery-job-poll`.
-Branch: `feat/825-discovery-job-poll`. Coordinator verification received before
-setup or edits. Only #825 is active for implementation; #824 remains open for
+Coordinator verified the isolated worktree and base before setup or edits.
+Only #825 is active for implementation; #824 remains open for
 its separate deployment acceptance and later queue entries remain unstarted.
 
 ## Approach and alternatives
@@ -50,10 +50,10 @@ floor when visibility changes. Malformed or absent Retry-After adds no floor,
 matching the current parser semantics.
 
 The short schedule applies to transient failures as well as queued/running/
-retrying statuses. Preserve the existing five-consecutive-failure threshold and
-success recovery. Consequently the fifth failed ask can show its existing
-notice at seven seconds instead of fifteen during the fast window; update its
-comment and timing tests to reflect that consequence. No new error data is
+retrying statuses. Show the existing failure notice only once both at least five asks have failed
+and those failures have continued for at least 15 seconds. A successful answer
+resets both the count and the failure-start time and clears the notice as today.
+Pin both conditions and success recovery in timing tests. No new error data is
 stored or logged.
 
 ## Visibility, in-flight reads and completion
@@ -84,7 +84,7 @@ retains `jsonNoStore`; no route, contract, database, logger or storage change.
    the narrow schedule helper.
 2. Add failing page tests for short polling through at least the first 60 seconds
    and an immediate full read after completion. Implement the helper integration
-   and update the existing failure-notice timing assertions.
+   and pin the dual time/count failure-notice conditions.
 3. Add page regressions for an initially hidden tab, hiding a scheduled timer,
    immediate visible resume, hiding during an in-flight status or completion
    read, single pending resume/no overlap, terminal completion not restarting,
@@ -127,9 +127,9 @@ without new production logging or persistent per-visitor data. Local timer tests
 are not deployment measurements. If the approved measurement window or adequate
 timing access is absent, leave acceptance pending and report that dependency.
 
-## Decisions requested
+## Accepted decisions
 
-Approve the minimal existing-loop change, 90-second fast window with hidden time
-included, retained five-failure threshold on the faster schedule, and serialized
-visible resume that preserves Retry-After. Confirm #902 overlap handling and the
-separate authorisation gate for the five-search measurement window.
+Manager approved the minimal existing-loop change, 90-second fast window with hidden time
+included, dual 15-second/five-failure threshold on the faster schedule, and serialized
+visible resume that preserves Retry-After. #902 overlap handling and the separate five-search measurement authorisation
+gate remain as approved; #904 is held for ship evidence, so #825 may land first.
