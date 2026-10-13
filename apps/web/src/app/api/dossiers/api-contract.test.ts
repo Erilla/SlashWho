@@ -69,7 +69,10 @@ const dossiers = {
     return ids.map((id) => ({
       id,
       state: "running" as const,
-      version: "running:active"
+      version: "running:active",
+      key: { region: "eu", realm: "silvermoon", name: "ryii" },
+      evidenceState: "scanning",
+      collectionProgress: [{ id: "publication", state: "active" }]
     }));
   }
 };
@@ -480,8 +483,22 @@ describe("GET /api/dossiers/evidence-runs", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     await expect(response.json()).resolves.toEqual({
       runs: [
-        { id: runId, state: "running", version: "running:active" },
-        { id: otherRunId, state: "running", version: "running:active" }
+        {
+          id: runId,
+          state: "running",
+          version: "running:active",
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          evidenceState: "scanning",
+          collectionProgress: [{ id: "publication", state: "active" }]
+        },
+        {
+          id: otherRunId,
+          state: "running",
+          version: "running:active",
+          key: { region: "eu", realm: "silvermoon", name: "ryii" },
+          evidenceState: "scanning",
+          collectionProgress: [{ id: "publication", state: "active" }]
+        }
       ]
     });
     expect(progressCalls).toEqual([[runId, otherRunId]]);

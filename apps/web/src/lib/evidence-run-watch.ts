@@ -36,96 +36,81 @@ type RunProgress = EvidenceRunProgressResponse["runs"][number];
 export type EvidenceRunDecision =
   { kind: "reread" } | { kind: "unchanged"; delayMs: number };
 
-/**
- * Watches the evidence runs a dossier is waiting on, between full reads.
- *
- * A run that published, or that is gone, is re-read at once: that is the news
- * the page exists to show. Any other move (a step starting or finishing, a
- * run starting, a deferral) is re-read no more often than the dossier's own
- * backoff, which is how often the page re-read before it watched its runs, so
- * watching never costs more full reads than it replaced.
- */
+/** Watches cheap row progress and folds nearby publishes into one full read. */
 export function createEvidenceRunWatch(
   now: () => number = () => performance.now()
 ) {
   let watched: readonly string[] = [];
   let seen: ReadonlyMap<string, string> | undefined;
-  let lastFullReadAt = Number.NEGATIVE_INFINITY;
-  let progressGap = createBackoff(pollDelaysMs);
-  let nextProgressGapMs = progressGap.next();
+  let lastFullReadDurationMs = 0;
+  let publishDueAt: number | undefined;
   let running = createBackoff(runningPollDelaysMs);
   let queued = createBackoff(queuedPollDelaysMs);
   let afterFullRead = createBackoff(afterFullReadDelaysMs);
 
-  /**
-   * A full read has landed, naming `ids`: what was seen before it no longer
-   * applies. A new set of runs starts the backoff over, as a restarted poll
-   * did.
-   */
-  function landed(ids: readonly string[]) {
-    if (ids.join() !== watched.join())
-      progressGap = createBackoff(pollDelaysMs);
-    nextProgressGapMs = progressGap.next();
+  function landed(ids: readonly string[], durationMs?: number) {
     watched = ids;
     seen = undefined;
-    lastFullReadAt = now();
+    publishDueAt = undefined;
+    if (durationMs !== undefined) lastFullReadDurationMs = durationMs;
     running = createBackoff(runningPollDelaysMs);
     queued = createBackoff(queuedPollDelaysMs);
   }
 
   return {
-    /** The runs being watched: the last full read's. */
+    /** The last authoritative full read's runs, including pending publishes. */
     watching(): readonly string[] {
       return watched;
     },
 
-    /**
-     * The poll's own full read landed. Returns how long to wait before asking
-     * after its runs.
-     */
-    fullRead(ids: readonly string[]): number {
-      landed(ids);
+    /** A poll full read landed. A stale watched set retains the read backoff. */
+    fullRead(ids: readonly string[], durationMs?: number): number {
+      landed(ids, durationMs);
       return afterFullRead.next();
     },
 
-    /**
-     * Some other read showed a dossier: research, a refresh, a tier search.
-     * It counts as a full read, but the poll's own schedule is unchanged.
-     */
-    shown(ids: readonly string[]): void {
-      landed(ids);
+    /** An external full read landed; leaves the poll's fallback unchanged. */
+    shown(ids: readonly string[], durationMs?: number): void {
+      landed(ids, durationMs);
     },
 
-    /** Decides from one progress read of the watched runs. */
     observe(runs: readonly RunProgress[]): EvidenceRunDecision {
       const byId = new Map(runs.map((run) => [run.id, run]));
-      const published = watched.some((id) => {
+      const active = watched.flatMap((id) => {
         const run = byId.get(id);
-        return run === undefined || run.state === "settled";
+        return run && run.state !== "settled" ? [run] : [];
       });
-      if (published) return { kind: "reread" };
+      if (active.length < watched.length) {
+        // First observed publish fixes the deadline. Later publishes do not
+        // postpone it; final settlement overrides it, even on the first poll.
+        publishDueAt ??= now() + Math.max(10_000, lastFullReadDurationMs);
+        if (active.length === 0 || now() >= publishDueAt)
+          return { kind: "reread" };
+      }
 
       const moved =
         seen !== undefined &&
-        watched.some((id) => seen!.get(id) !== byId.get(id)!.version);
-      if (moved && now() - lastFullReadAt >= nextProgressGapMs) {
-        return { kind: "reread" };
-      }
-      // A move not yet due is left unrecorded, so it is still a move when it
-      // falls due.
-      if (!moved) {
-        seen = new Map(watched.map((id) => [id, byId.get(id)!.version]));
-      }
+        active.some((run) => seen!.get(run.id) !== run.version);
+      seen = new Map(active.map((run) => [run.id, run.version]));
+      // An actual active collection breaks the chain of stale full snapshots.
       afterFullRead = createBackoff(afterFullReadDelaysMs);
-      if (watched.some((id) => byId.get(id)!.state === "running")) {
+      let delayMs: number;
+      if (active.some((run) => run.state === "running")) {
         queued = createBackoff(queuedPollDelaysMs);
-        return {
-          kind: "unchanged",
-          delayMs: moved ? runningPollDelaysMs[0]! : running.next()
-        };
+        if (moved) running = createBackoff(runningPollDelaysMs);
+        delayMs = running.next();
+      } else {
+        running = createBackoff(runningPollDelaysMs);
+        if (moved) queued = createBackoff(queuedPollDelaysMs);
+        delayMs = queued.next();
       }
-      running = createBackoff(runningPollDelaysMs);
-      return { kind: "unchanged", delayMs: queued.next() };
+      return {
+        kind: "unchanged",
+        delayMs:
+          publishDueAt === undefined
+            ? delayMs
+            : Math.min(delayMs, Math.max(0, publishDueAt - now()))
+      };
     }
   };
 }
