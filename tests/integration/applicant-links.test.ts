@@ -352,6 +352,57 @@ it("expires waiting members seven days after settlement, and hard-closes after t
   });
 });
 
+it("expires a ready member seven days after settlement rather than linking it", async () => {
+  // Break caught: expiry applied only to members that were not ready, so
+  // switching linking on after a pause linked up to 30 days of applications.
+  await character("lateroot");
+  await character("latemember");
+  const root = await intent(id("lateroot"), "done");
+  const member = await intent(id("latemember"), "done");
+  await application({ identity: id("lateroot"), sequence: root }, [
+    { identity: id("latemember"), sequence: member }
+  ]);
+  await settleApplicantApplications(pool);
+  await pool.query(
+    "UPDATE applicant_source_applications SET settled_at = now() - interval '8 days'"
+  );
+  expect(await link()).toMatchObject({ expired: 1, linked: 0 });
+  expect(await links()).toEqual([]);
+  const closed = await pool.query(
+    "SELECT closed_at, expired_count FROM applicant_source_applications"
+  );
+  expect(closed.rows[0]).toMatchObject({ expired_count: 1 });
+  expect(closed.rows[0].closed_at).not.toBeNull();
+});
+
+it("expires and closes an application settled seven days ago in the hourly cleanup", async () => {
+  // Break caught: only the link step expired settled applications, so with
+  // the flag off an open application kept its member rows for 30 days.
+  await character("idleroot");
+  const root = await intent(id("idleroot"), "done");
+  const member = await intent(id("idlemember"), "done");
+  await application({ identity: id("idleroot"), sequence: root }, [
+    { identity: id("idlemember"), sequence: member }
+  ]);
+  await settleApplicantApplications(pool);
+  await pool.query(
+    "UPDATE applicant_source_applications SET settled_at = now() - interval '8 days'"
+  );
+  expect(await closeStaleApplicantApplications(pool)).toEqual({
+    expired: 1,
+    deleted: 0
+  });
+  const closed = await pool.query(
+    "SELECT closed_at, expired_count FROM applicant_source_applications"
+  );
+  expect(closed.rows[0]).toMatchObject({ expired_count: 1 });
+  expect(closed.rows[0].closed_at).not.toBeNull();
+  const members = await pool.query(
+    "SELECT 1 FROM applicant_source_application_members"
+  );
+  expect(members.rowCount).toBe(0);
+});
+
 it("visits the least recently checked applications first and skips locked ones", async () => {
   await character("orderroot");
   for (const name of ["o1", "o2", "o3"]) {

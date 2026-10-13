@@ -218,6 +218,15 @@ async function linkApplication(
     await close(client, application.id);
     return;
   }
+  // Seven days after settlement nothing more is linked, ready or not: the
+  // clock must not restart when linking is switched on after a pause, or a
+  // month of applications would link in one burst.
+  if (expired) {
+    for (const member of members.rows)
+      await decide(client, application.id, member.ordinal, "expired", counts);
+    await close(client, application.id);
+    return;
+  }
   const rootId = rootKey ? await characterId(client, rootKey) : undefined;
   let open = 0;
   for (const member of members.rows) {
@@ -239,9 +248,7 @@ async function linkApplication(
       ? keyOf(member.canonical)
       : keyOf(member.identity);
     if (!rootId || !settled || !memberKey) {
-      if (expired)
-        await decide(client, application.id, member.ordinal, "expired", counts);
-      else open++;
+      open++;
       continue;
     }
     if (await input.repositories.suppressions.isActive(memberKey, now)) {
@@ -267,9 +274,7 @@ async function linkApplication(
     }
     const memberId = await characterId(client, memberKey);
     if (!memberId) {
-      if (expired)
-        await decide(client, application.id, member.ordinal, "expired", counts);
-      else open++;
+      open++;
       continue;
     }
     if (memberKey.region !== rootKey!.region) {
@@ -385,8 +390,9 @@ export async function linkApplicantApplications(
 }
 
 /**
- * Hourly, whatever the linking flag says: closes applications that never
- * settled within 30 days, and deletes closed ones 30 days on.
+ * Hourly, whatever the linking flag says: closes applications settled seven
+ * days ago or created 30 days ago, every undecided member expired, and
+ * deletes closed ones 30 days on. Retention so holds with linking off.
  */
 export async function closeStaleApplicantApplications(
   pool: Pool,
@@ -402,9 +408,11 @@ export async function closeStaleApplicantApplications(
               expired_count = expired_count + (
                 SELECT count(*) FROM applicant_source_application_members m
                  WHERE m.application_id = application.id AND m.outcome IS NULL)
-        WHERE closed_at IS NULL AND created_at <= $1::timestamptz - interval '30 days'
+        WHERE closed_at IS NULL
+          AND (created_at <= $1::timestamptz - interval '30 days'
+               OR settled_at <= $1::timestamptz - make_interval(days => $2::int))
         RETURNING id`,
-      [now]
+      [now, settleAfterDays]
     );
     if (stale.rowCount)
       await client.query(
