@@ -193,11 +193,12 @@ that a suppressed character exists.
   ```
 
   `outcome` is `queued | existing | rate_limited | suppressed | not_found |
-failed`.
-  `retryAfterSeconds` is present only when some character was limited. The HTTP
-  status is `200` only when every character's outcome is `existing`; otherwise
-  `202` when anything was queued, skipped, suppressed or limited, and `503
-upstream_unavailable` when any outcome is `failed`. A partial create still
+failed`. `retryAfterSeconds` is present only when some character was limited.
+  The HTTP status is `200` only when every character's outcome is `existing`;
+  otherwise `202` when anything was queued, skipped, suppressed or limited. Any
+  `failed` outcome makes the response `503`, **with the same body** and the
+  failing characters marked `failed` — there is no separate error envelope,
+  because the bot needs to know which characters failed. A partial create still
   returns `202` with the limited characters named, so the bot can show "queued
   3 of 10" and retry only the rest.
 
@@ -431,7 +432,9 @@ when the bucket is exhausted and a retry costs no read token. `429` carries
 - `research = partial` is a normal summary state; `limitations` explains it.
   `cuttingEdge: null` and `cuttingEdgesRestored: false` mean the stored read
   could not restore it.
-- Upstream failure: `503 upstream_unavailable`.
+- Upstream failure: `503`. On a create, the 503 carries the create body with
+  the failing characters marked `failed`; elsewhere it is
+  `503 upstream_unavailable`.
 
 ## Testing
 

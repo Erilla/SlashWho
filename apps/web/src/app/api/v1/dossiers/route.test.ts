@@ -118,4 +118,40 @@ describe("POST /api/v1/dossiers", () => {
       outcomes: [{ outcome: "queued" }]
     });
   });
+
+  it("returns the create body with 503 when a character failed", async () => {
+    create.mockResolvedValueOnce({
+      kind: "created",
+      status: 503,
+      body: {
+        root: key,
+        state: "collecting",
+        snapshotId: null,
+        lastCollectedAt: null,
+        evidenceRunIds: [],
+        outcomes: [
+          { key, outcome: "existing" },
+          {
+            key: { region: "eu", realm: "silvermoon", name: "alt" },
+            outcome: "failed"
+          }
+        ]
+      }
+    });
+    const response = await POST(
+      request({
+        authorization: authorisation,
+        body: {
+          characters: [
+            "https://raider.io/characters/eu/silvermoon/ryii",
+            "https://raider.io/characters/eu/silvermoon/alt"
+          ]
+        }
+      })
+    );
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      outcomes: [{ outcome: "existing" }, { outcome: "failed" }]
+    });
+  });
 });

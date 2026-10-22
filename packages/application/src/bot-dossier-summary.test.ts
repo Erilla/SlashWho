@@ -261,6 +261,18 @@ describe("botDossierState", () => {
     ).toBe("collecting");
   });
 
+  it("collects while a subject is scanning over an earlier completed run", () => {
+    expect(
+      botDossierState({
+        snapshotId,
+        snapshotState: "complete",
+        activeDiscovery: false,
+        evidenceRunIds: [],
+        evidence: [evidence(root, { evidenceState: "scanning" })]
+      }).state
+    ).toBe("collecting");
+  });
+
   it("collects while a declared character has no terminal run", () => {
     // A pending manual connection is an included subject with no run. The
     // root's snapshot alone must not let the dossier publish.
@@ -377,6 +389,34 @@ describe("botDossierSummaryOf", () => {
       evidenceState: "waiting",
       pending: true
     });
+  });
+
+  it("reports a pending link being collected as scanning, not ready", () => {
+    const pendingCharacter = {
+      key: alt,
+      displayName: "Alt",
+      className: null,
+      guild: null,
+      raiderIoUrl: "https://raider.io/characters/eu/silvermoon/alt",
+      source: "manually_added" as const,
+      evidenceState: "waiting" as const
+    };
+    const summary = botDossierSummaryOf(
+      read({
+        dossier: dossier({
+          characters: [...dossier().characters, pendingCharacter]
+        }),
+        evidence: [
+          evidence(root),
+          evidence(alt, { evidenceState: "scanning" })
+        ],
+        pendingKeys: [alt]
+      })
+    );
+    expect(
+      summary?.characters.find((character) => character.key.name === alt.name)
+    ).toMatchObject({ evidenceState: "scanning", pending: true });
+    expect(summary?.state).toBe("collecting");
   });
 
   it("omits excluded characters", () => {
