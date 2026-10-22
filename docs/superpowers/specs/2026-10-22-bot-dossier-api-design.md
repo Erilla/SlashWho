@@ -44,7 +44,11 @@ chat-sized summary that costs no provider budget.
 1. **Confidence is null in v1.** SlashWho does not retain a fingerprint score.
    The summary carries `confidence: number | null`, always `null`, with a doc
    comment and a contract test. The contract says the bot must not infer a score
-   from it. A real score is a separate discovery/storage change.
+   from it. This is a deliberate, flagged exception to `CONTEXT.md`'s Source
+   label ("no confidence value is retained alongside it") and its `Avoid:
+Confidence` line: the field is a forward-compatible placeholder, carries no
+   value, and does not amend the domain model. A real score is a separate
+   discovery/storage change.
 2. **Links are written only after the search is accepted.** `search.create`
    checks suppression before reading Raider.IO and returns the profile it read
    on the queued path. Create writes `characters.ensure` and the `bot` link
@@ -76,7 +80,10 @@ null` means "not restored by this read", never "not earned". If no stored
    mismatch and the bot re-reads.
 7. **A new `bot` origin.** Bot links are `origin = 'bot'` with no foreign key.
    The public dossier maps both `applicant_sheet` and `bot` to
-   `origin: "application"`, so reviewers still read "From application".
+   `origin: "application"`, so reviewers still read "From application". This
+   extends `CONTEXT.md`'s **Manual connection** definition to a declaration the
+   bot recorded rather than the sheet watcher; `CONTEXT.md` is updated to say
+   so.
 8. **At most 10 declared characters per create.** A maximum create spends 10 of
    the bot's 60 searches an hour, leaving 50 for retries and later calls. The
    applicant sheet's own cap is lower (root plus four). The bot's existing
@@ -182,7 +189,8 @@ that a suppressed character exists.
   }
   ```
 
-  `outcome` is `queued | existing | rate_limited | suppressed | not_found`.
+  `outcome` is `queued | existing | rate_limited | suppressed | not_found |
+failed`.
   `retryAfterSeconds` is present only when some character was limited. The HTTP
   status is `202` when anything was queued and `200` when every character was
   `existing`; a partial create still returns `202` with the limited characters
@@ -200,6 +208,8 @@ Small body, DB-only, no provider calls:
 - `state`, `snapshotId`, `lastCollectedAt`, `evidenceRunIds` from the shared
   state helper.
 - `etag`: SHA-256 of the body without the etag. `304` on `If-None-Match`.
+- Every response, including a `304`, keeps `Cache-Control: no-store`. The ETag
+  is a conditional-read validator, not permission to store the payload.
 - `404 character_not_found` for an unknown or suppressed key.
 - Reserves the read bucket, never the search bucket.
 
@@ -272,11 +282,15 @@ Projection rules:
   in two guilds appears in both; a night with kills in both counts for each.
   The span's `tiers` are the span's tier names.
 - Each span's `raids` are the stored kills in that span and guild, grouped by
-  raid: kills, first/last kill, and character keys. There is no per-stint
+  raid: kills, first/last kill, and **display names**. There is no per-stint
   `cuttingEdge`: stored Cutting Edge is account-wide and carries no guild or
   raid, so attributing it to a stint would be invented.
 - Top-level `raids` keeps bosses whose state is `kill` or `wipe`, for raids with
-  at least one kill. `no_logs` and `incomplete` bosses are omitted. `cuttingEdge`
+  at least one kill, and is capped at the **five most recent such raids**. The
+  bot's own raid view already stops at five tiers, so this is parity; older
+  raids remain reachable through the dossier link. `no_logs` and `incomplete`
+  bosses are omitted. Boss `characters` are display names; the top-level
+  `characters` list carries the key for each name. `cuttingEdge`
   is `true | null`: `true` means stored evidence supports it, `null` means the
   stored-only read did not restore it, **not** that the account lacks it. The
   bot must not render `null` as false.
@@ -315,8 +329,9 @@ labelled synthetic expansion and record which was used.
 ### `POST .../refresh`
 
 Delegates to the existing `refreshCharacter`, returns the existing
-`dossierRefreshResponseSchema` shape. It is the only summary-side call that may
-spend provider budget.
+`dossierRefreshResponseSchema` shape: `mode` is `full` outside the character's
+refresh cooldown and `light` inside it (the public refresh control's meaning).
+It is the only summary-side call that may spend provider budget.
 
 ## Contracts
 
