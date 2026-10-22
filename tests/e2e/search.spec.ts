@@ -248,7 +248,7 @@ test("shows submitted-character evidence while privacy-safe discovery is held", 
 
   await expect(
     page.getByText(
-      "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive.",
+      "Raider.IO shows no public account claim for Queued, so additional linked characters may exist.",
       { exact: true }
     )
   ).toBeVisible({ timeout: 15_000 });

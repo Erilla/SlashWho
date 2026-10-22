@@ -115,6 +115,7 @@ export const dossierCharacterSchema = z
      */
     guild: dossierGuildSchema.nullable().optional(),
     source: dossierSourceLabelSchema,
+    hasManualConnection: z.boolean().optional(),
     /**
      * Set only on a manual connection the applicant sheet watcher made from an
      * application. It changes the label alone; the connection is otherwise a
@@ -400,7 +401,7 @@ export const dossierResearchSchema = z
   .strict();
 
 export const createDossierRequestSchema = z
-  .object({ characterUrl: z.url() })
+  .object({ characterUrl: z.url(), startedFrom: z.literal("page").optional() })
   .strict();
 
 /**
@@ -476,6 +477,7 @@ export const dossierGuildHistoryEntrySchema = z
 export const applicantDossierSchema = z
   .object({
     root: characterKeySchema,
+    groupStale: z.boolean().optional(),
     research: dossierResearchSchema,
     characters: z.array(dossierCharacterSchema),
     raids: z.array(dossierRaidSchema),

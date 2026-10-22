@@ -241,6 +241,137 @@ function withCharacterEvidenceStates(
 }
 
 describe("DossierPageClient live evidence", () => {
+  it("keeps a stale group dossier after a refused automatic page start", async () => {
+    const stale = { ...expanded, groupStale: true };
+    const requests: string[] = [];
+    vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
+      if (input === "/api/dossiers") {
+        requests.push(init?.body as string);
+        return Response.json(
+          { error: { code: "rate_limited", message: "Too many requests" } },
+          { status: 429 }
+        );
+      }
+      return Response.json(stale);
+    });
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(JSON.parse(requests[0]!)).toMatchObject({ startedFrom: "page" });
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+  it.each(["failed", "refused"])(
+    "keeps a stale group silent after a joined job is %s",
+    async (outcome) => {
+      // A page visit may join existing research; its failure must not replace
+      // the usable group evidence with the root-only research error banner.
+      const stale = { ...expanded, groupStale: true };
+      let finishJob!: (response: Response) => void;
+      vi.stubGlobal("fetch", async (input: string) => {
+        if (input === "/api/dossiers")
+          return Response.json({ kind: "job", jobId, status: "running" });
+        if (input === `/api/dossiers/jobs/${jobId}`)
+          return new Promise<Response>((resolve) => {
+            finishJob = resolve;
+          });
+        return Response.json(stale);
+      });
+      render(
+        <DossierPageClient
+          identity={identity}
+          initialDossier={null}
+          jobId={null}
+        />
+      );
+      await waitFor(() => expect(finishJob).toBeDefined());
+      await act(async () => {
+        finishJob(
+          outcome === "failed"
+            ? Response.json({
+                status: "failed",
+                error: {
+                  code: "upstream_unavailable",
+                  message: "Joined research failed."
+                }
+              })
+            : Response.json(
+                {
+                  error: {
+                    code: "unauthorized",
+                    message: "Joined research is unavailable."
+                  }
+                },
+                { status: 403 }
+              )
+        );
+      });
+      expect(screen.getByText("Expanded evidence")).toBeVisible();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/research failed; this evidence/)
+      ).not.toBeInTheDocument();
+    }
+  );
+  it("does not restart a failed silent group poll after a hidden tab becomes visible", async () => {
+    vi.useFakeTimers();
+    const visibleState = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue("visible");
+    const visibility = (state: DocumentVisibilityState) => {
+      visibleState.mockReturnValue(state);
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    const stale = { ...expanded, groupStale: true };
+    let finishJob!: (response: Response) => void;
+    let statusCalls = 0;
+    vi.stubGlobal("fetch", async (input: string) => {
+      if (input === "/api/dossiers")
+        return Response.json({ kind: "job", jobId, status: "running" });
+      if (input === `/api/dossiers/jobs/${jobId}`) {
+        statusCalls++;
+        return new Promise<Response>((resolve) => {
+          finishJob = resolve;
+        });
+      }
+      return Response.json(stale);
+    });
+    render(
+      <DossierPageClient
+        identity={identity}
+        initialDossier={null}
+        jobId={null}
+      />
+    );
+    await flushAsyncWork();
+    expect(statusCalls).toBe(1);
+
+    await act(async () => {
+      visibility("hidden");
+      finishJob(
+        Response.json({
+          status: "failed",
+          error: {
+            code: "upstream_unavailable",
+            message: "Joined research failed."
+          }
+        })
+      );
+    });
+    expect(screen.getByText("Expanded evidence")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await act(async () => visibility("visible"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(statusCalls).toBe(1);
+  });
   it("hides the Refresh control for a read-only dossier", () => {
     // Break caught: the frozen demo can expose a refresh action even though it
     // has no writable data source or character-management controls.

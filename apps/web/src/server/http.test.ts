@@ -14,6 +14,7 @@ import {
   startResultResponse,
   withHttpRequest
 } from "./http";
+import { errorName } from "./error-name";
 
 const silentLogger = { info: () => {} };
 /** Opts a request into Server-Timing with the gate on. */
@@ -546,7 +547,19 @@ describe("withHttpRequest", () => {
     expect(records[0]).toMatchObject({ status: 500, errorName: "TypeError" });
   });
 });
-import { errorName } from "./error-name";
+it("returns a retryable no-store response when a web transaction times out on a lock", async () => {
+  const response = await withHttpRequest(
+    "dossier_connection",
+    async () => {
+      throw Object.assign(new Error("lock timeout"), { code: "55P03" });
+    },
+    { info: () => undefined }
+  );
+  expect(response.status).toBe(503);
+  expect(response.headers.get("retry-after")).toBe("5");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(await errorCode(response)).toBe("upstream_unavailable");
+});
 
 it("logs the explicit name and registered code of a renamed constructor", async () => {
   class Stable extends Error {

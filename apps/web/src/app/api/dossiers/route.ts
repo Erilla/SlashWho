@@ -22,14 +22,15 @@ export async function POST(request: Request): Promise<Response> {
       {
         characterUrl: body.data.characterUrl,
         headers: request.headers,
-        correlationId
+        correlationId,
+        startedFrom: body.data.startedFrom
       },
       scope
     );
     if ("joinedExistingRun" in result && result.joinedExistingRun) {
       scope.mark("runJoined");
     }
-    if (result.kind === "character") {
+    if (result.kind === "character" || result.kind === "group_ready") {
       return jsonNoStore(dossierStartResponseSchema, { kind: "ready" });
     }
     return startResultResponse(result);

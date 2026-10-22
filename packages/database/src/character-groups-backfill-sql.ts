@@ -1,6 +1,8 @@
+import { COUNTING_LINKS } from "./counting-links";
 /**
- * The rebuild's SQL, copied verbatim from the migration's backfill
- * (`drizzle/0069_character_groups.sql`), so the two never drift (#738).
+ * The rebuild retains the migration's pinned backfill structure
+ * (`drizzle/0069_character_groups.sql`), with counting links shared with live
+ * recompute and audit so their predicates stay in step (#738).
  *
  * The rebuild runs while the live worker may still be publishing, so it must
  * see the same pinned snapshot the migration's backfill sees: `pinLatest`
@@ -114,22 +116,7 @@ SELECT discovery_run_id, reservation_id, root_character_id, family, 'replaced', 
 -- after phase 3 exists, so it must honour rejections the migration's
 -- one-time backfill never had to.
 WITH RECURSIVE edges AS (
-  SELECT connection.character_low_id AS a, connection.character_high_id AS b
-  FROM character_connections connection
-  WHERE connection.kind = 'observed'
-    AND NOT EXISTS (
-      SELECT 1 FROM character_connections rejection
-      WHERE rejection.kind = 'rejected'
-        AND rejection.character_low_id = connection.character_low_id
-        AND rejection.character_high_id = connection.character_high_id
-    )
-  UNION
-  SELECT manual.root_character_id, target.id
-  FROM manual_dossier_connections manual
-  JOIN characters target ON target.region = manual.connected_region
-    AND target.realm_slug = manual.connected_realm_slug
-    AND target.normalized_name = manual.connected_normalized_name
-  WHERE target.id <> manual.root_character_id
+  ${COUNTING_LINKS}
 ), undirected AS (
   SELECT a, b FROM edges UNION SELECT b, a FROM edges
 ), reach(start, node) AS (

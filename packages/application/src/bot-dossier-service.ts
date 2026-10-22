@@ -105,6 +105,7 @@ function outcomeOf(
         jobId: result.jobId
       };
     case "character":
+    case "group_ready":
       return { key, outcome: "existing" };
     case "rate_limited":
       return { key, outcome: "rate_limited" };
@@ -119,6 +120,7 @@ function outcomeOf(
     case "failed":
     case "unauthorized":
     case "client_ip_unavailable":
+    case "rejected":
       return { key, outcome: "failed" };
   }
 }
@@ -322,6 +324,7 @@ export function createBotDossierService(options: {
       switch (result.kind) {
         case "job":
         case "character":
+        case "group_ready":
           await options.repositories.manualConnections.add(root, target, {
             origin: "bot"
           });
@@ -344,6 +347,7 @@ export function createBotDossierService(options: {
           return { kind: "failed", code: result.code };
         case "unauthorized":
         case "client_ip_unavailable":
+        case "rejected":
           return { kind: "failed", code: "search_failed" };
       }
     },

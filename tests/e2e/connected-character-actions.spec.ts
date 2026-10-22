@@ -85,7 +85,7 @@ test("unlinks a manually added character only after a real modal confirms it", a
   await page.getByRole("menuitem", { name: "Remove…" }).click();
 
   const dialog = page.getByRole("dialog", {
-    name: "Remove connected character"
+    name: "Remove the manual connection to Removable"
   });
   await expect(dialog).toBeVisible();
   expect(await dialog.evaluate((element) => element.matches(":modal"))).toBe(

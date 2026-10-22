@@ -53,7 +53,7 @@ function decodeCursor(cursor: string): { refreshedAt: Date; id: string } {
   }
 }
 
-async function loadSnapshot(
+export async function loadSnapshot(
   client: Queryable,
   id: string
 ): Promise<StoredSnapshot | null> {
