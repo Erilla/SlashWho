@@ -633,7 +633,7 @@ describe("consistent group dossier projection", () => {
     await pool.query(
       "INSERT INTO applicant_source_state (source, initialized_at, last_polled_at, parser_version) VALUES ('applicant_sheet', now(), now(), 2) ON CONFLICT DO NOTHING"
     );
-    const rootIdentity = `character:[\"${rootKey.region}\",\"${rootKey.realm}\",\"${rootKey.name}\"]`;
+    const rootIdentity = `character:["${rootKey.region}","${rootKey.realm}","${rootKey.name}"]`;
     const intent = await pool.query<{ sequence: string }>(
       "INSERT INTO applicant_source_intents (source, identity, observed_at) VALUES ('applicant_sheet', $1, now()) RETURNING sequence",
       [rootIdentity]
