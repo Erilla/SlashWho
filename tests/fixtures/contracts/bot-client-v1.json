@@ -1,144 +1,129 @@
 {
   "version": "v1",
-  "search": {
-    "endpoint": "POST /api/v1/searches",
+  "create": {
+    "endpoint": "POST /api/v1/dossiers",
     "request": {
-      "characterUrl": "https://raider.io/characters/eu/silvermoon/ryii"
-    },
-    "response": {
-      "kind": "job",
-      "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145",
-      "status": "queued",
-      "statusUrl": "/api/v1/searches/54f14e37-7df7-43db-91d5-21e797d1d145",
-      "characterUrl": "/characters/eu/silvermoon/ryii"
-    }
-  },
-  "staleRefresh": {
-    "endpoint": "POST /api/v1/searches",
-    "note": "A search for a character that already has a snapshot but is past its freshness window returns HTTP 200 with kind \"character\" and the stale snapshot, not 202. The queued refresh is reachable two ways: the Location header, and character.activeJob.statusUrl. Clients must handle this alongside the 202-then-poll shape: read activeJob and poll it if present, otherwise the data is current.",
-    "status": 200,
-    "headers": {
-      "Location": "/api/v1/searches/54f14e37-7df7-43db-91d5-21e797d1d145",
-      "Cache-Control": "no-store"
-    },
-    "response": {
-      "kind": "character",
-      "character": {
-        "character": {
-          "region": "eu",
-          "realm": "silvermoon",
-          "name": "Ryii",
-          "className": "Mage",
-          "level": 80,
-          "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
-        },
-        "snapshot": {
-          "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
-          "state": "complete",
-          "refreshedAt": "2026-08-02T09:15:00.000Z",
-          "characterCount": 1,
-          "characters": [
-            {
-              "region": "eu",
-              "realm": "silvermoon",
-              "name": "Ryii",
-              "className": "Mage",
-              "level": 80,
-              "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
-            }
-          ]
-        },
-        "activeJob": {
-          "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145",
-          "status": "queued",
-          "statusUrl": "/api/v1/searches/54f14e37-7df7-43db-91d5-21e797d1d145"
-        }
-      }
-    }
-  },
-  "job": {
-    "endpoint": "GET /api/v1/searches/{jobId}",
-    "response": {
-      "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145",
-      "status": "retrying",
-      "characterUrl": "/characters/eu/silvermoon/ryii",
-      "createdAt": "2026-08-04T12:00:00.000Z",
-      "startedAt": "2026-08-04T12:01:00.000Z",
-      "completedAt": null,
-      "retryAt": "2026-08-04T12:02:00.000Z",
-      "error": null
-    }
-  },
-  "character": {
-    "endpoint": "GET /api/v1/characters/{region}/{realm}/{name}",
-    "response": {
-      "character": {
-        "region": "eu",
-        "realm": "silvermoon",
-        "name": "Ryii",
-        "className": "Mage",
-        "level": 80,
-        "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
-      },
-      "snapshot": {
-        "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
-        "state": "complete",
-        "refreshedAt": "2026-08-04T12:30:00.000Z",
-        "characterCount": 1,
-        "characters": [
-          {
-            "region": "eu",
-            "realm": "silvermoon",
-            "name": "Ryii",
-            "className": "Mage",
-            "level": 80,
-            "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
-          }
-        ]
-      },
-      "activeJob": null
-    }
-  },
-  "history": {
-    "endpoint": "GET /api/v1/characters/{region}/{realm}/{name}/history",
-    "response": {
-      "items": [
-        {
-          "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
-          "refreshedAt": "2026-08-04T12:30:00.000Z",
-          "state": "complete",
-          "characterCount": 1,
-          "url": "/api/v1/characters/eu/silvermoon/ryii/history/13af3173-e97c-4c78-a6cb-a54b647b209f",
-          "characterUrl": "/characters/eu/silvermoon/ryii"
-        }
-      ],
-      "nextCursor": null
-    }
-  },
-  "snapshot": {
-    "endpoint": "GET /api/v1/characters/{region}/{realm}/{name}/history/{snapshotId}",
-    "response": {
-      "id": "13af3173-e97c-4c78-a6cb-a54b647b209f",
-      "root": {
-        "region": "eu",
-        "realm": "silvermoon",
-        "name": "Ryii",
-        "className": "Mage",
-        "level": 80,
-        "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
-      },
-      "refreshedAt": "2026-08-04T12:30:00.000Z",
-      "state": "complete",
       "characters": [
+        "https://raider.io/characters/eu/silvermoon/ryii",
+        "https://raider.io/characters/eu/silvermoon/alt"
+      ]
+    },
+    "response": {
+      "root": { "region": "eu", "realm": "silvermoon", "name": "ryii" },
+      "state": "collecting",
+      "snapshotId": null,
+      "lastCollectedAt": null,
+      "evidenceRunIds": [],
+      "outcomes": [
         {
-          "region": "eu",
-          "realm": "silvermoon",
-          "name": "Ryii",
-          "className": "Mage",
-          "level": 80,
-          "raiderIoUrl": "https://raider.io/characters/eu/silvermoon/ryii"
+          "key": { "region": "eu", "realm": "silvermoon", "name": "ryii" },
+          "outcome": "queued",
+          "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145"
+        },
+        {
+          "key": { "region": "eu", "realm": "silvermoon", "name": "alt" },
+          "outcome": "existing"
         }
       ]
+    }
+  },
+  "status": {
+    "endpoint": "GET /api/v1/dossiers/eu/silvermoon/ryii/status",
+    "response": {
+      "state": "ready",
+      "snapshotId": "13af3173-e97c-4c78-a6cb-a54b647b209f",
+      "lastCollectedAt": "2026-10-22T09:45:52.977Z",
+      "evidenceRunIds": [],
+      "etag": "3d8c0e62a1a0b4f5e6d7c8b9a0f1e2d3c4b5a6978877665544332211ffeeddcc"
+    }
+  },
+  "summary": {
+    "endpoint": "GET /api/v1/dossiers/eu/silvermoon/ryii",
+    "response": {
+      "root": { "region": "eu", "realm": "silvermoon", "name": "ryii" },
+      "state": "ready",
+      "snapshotId": "13af3173-e97c-4c78-a6cb-a54b647b209f",
+      "lastCollectedAt": "2026-10-22T09:45:52.977Z",
+      "cuttingEdgesRestored": true,
+      "characters": [
+        {
+          "key": { "region": "eu", "realm": "silvermoon", "name": "ryii" },
+          "displayName": "Ryii",
+          "className": "Mage",
+          "guild": {
+            "name": "Seriously Casual",
+            "region": "eu",
+            "realm": "silvermoon"
+          },
+          "source": "submitted",
+          "confidence": null,
+          "evidenceState": "complete",
+          "pending": false
+        }
+      ],
+      "guildHistory": [
+        {
+          "guild": {
+            "name": "Seriously Casual",
+            "region": "eu",
+            "realm": "silvermoon"
+          },
+          "firstNight": "2026-09-05",
+          "lastNight": "2026-10-09",
+          "raidNights": 2,
+          "tiers": ["The Venomous Abyss"],
+          "characters": ["Ryii"],
+          "raids": [
+            {
+              "raidName": "The Venomous Abyss",
+              "kills": 2,
+              "firstKillAt": "2026-09-05T18:26:29.653Z",
+              "lastKillAt": "2026-10-09T21:09:30.000Z",
+              "characters": ["Ryii"]
+            }
+          ]
+        }
+      ],
+      "raids": [
+        {
+          "raidName": "The Venomous Abyss",
+          "cuttingEdge": true,
+          "bosses": [
+            {
+              "bossName": "Nymrissa Wavecaller",
+              "state": "kill",
+              "firstKilledAt": "2026-09-05T18:26:29.653Z",
+              "characters": ["Ryii"],
+              "worldRank": 1724,
+              "reportUrl": "https://www.warcraftlogs.com/reports/example"
+            }
+          ]
+        }
+      ],
+      "cuttingEdges": [
+        {
+          "achievementName": "Cutting Edge: Midnight Falls",
+          "completedAt": "2026-10-09T21:09:30.000Z"
+        }
+      ],
+      "limitations": []
+    }
+  },
+  "addCharacter": {
+    "endpoint": "POST /api/v1/dossiers/eu/silvermoon/ryii/characters",
+    "request": {
+      "characterUrl": "https://raider.io/characters/eu/silvermoon/alt"
+    },
+    "response": {
+      "kind": "linked",
+      "jobId": "54f14e37-7df7-43db-91d5-21e797d1d145"
+    }
+  },
+  "refresh": {
+    "endpoint": "POST /api/v1/dossiers/eu/silvermoon/ryii/refresh",
+    "response": {
+      "mode": "full",
+      "lastCollectedAt": "2026-10-22T09:45:52.977Z"
     }
   },
   "error": {

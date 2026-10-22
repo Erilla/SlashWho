@@ -115,3 +115,39 @@ export type {
   DiscoveryRunStatus,
   JobStatusResponse
 } from "./search";
+export {
+  botAddDossierCharacterRequestSchema,
+  botAddDossierCharacterResponseSchema,
+  botCreateDossierOutcomeSchema,
+  botCreateDossierRequestSchema,
+  botCreateDossierResponseSchema,
+  botDossierBossSchema,
+  botDossierCharacterSchema,
+  botDossierCuttingEdgeSchema,
+  botDossierEvidenceStateSchema,
+  botDossierGuildHistorySchema,
+  botDossierGuildRaidSchema,
+  botDossierLimitationSchema,
+  botDossierRaidSchema,
+  botDossierStateSchema,
+  botDossierStatusSchema,
+  botDossierSummarySchema
+} from "./bot-dossier";
+export type {
+  BotAddDossierCharacterRequest,
+  BotAddDossierCharacterResponse,
+  BotCreateDossierOutcome,
+  BotCreateDossierRequest,
+  BotCreateDossierResponse,
+  BotDossierBoss,
+  BotDossierCharacter,
+  BotDossierCuttingEdge,
+  BotDossierEvidenceState,
+  BotDossierGuildHistory,
+  BotDossierGuildRaid,
+  BotDossierLimitation,
+  BotDossierRaid,
+  BotDossierState,
+  BotDossierStatus,
+  BotDossierSummary
+} from "./bot-dossier";
