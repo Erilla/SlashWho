@@ -401,7 +401,8 @@ describe("character groups replay", () => {
       {
         makerId: await characterId("oscar"),
         targetKey: key("uniform"),
-        excluded: false
+        excluded: false,
+        origin: "dossier"
       }
     ]);
     // The group read shapes the target field for field as today's read does.

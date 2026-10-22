@@ -194,7 +194,7 @@ describe("database migrations", () => {
     ) as { entries: Array<{ idx: number; tag: string }> };
 
     expect(
-      journal.entries.slice(-42).map(({ idx, tag }) => ({ idx, tag }))
+      journal.entries.slice(-43).map(({ idx, tag }) => ({ idx, tag }))
     ).toEqual([
       { idx: 32, tag: "0033_history_scan_resume_boundary" },
       { idx: 33, tag: "0034_remove_vestigial_kill_columns" },
@@ -237,7 +237,8 @@ describe("database migrations", () => {
       { idx: 70, tag: "0071_discovery_evidence_origin" },
       { idx: 71, tag: "0072_fingerprint_delivery" },
       { idx: 72, tag: "0073_roster_profile_resolutions" },
-      { idx: 73, tag: "0074_applicant_applications" }
+      { idx: 73, tag: "0074_applicant_applications" },
+      { idx: 74, tag: "0075_bot_dossier_connections" }
     ]);
   });
 
@@ -287,6 +288,41 @@ describe("database migrations", () => {
       expect(after.rows).toEqual([
         { origin: "applicant_sheet", applicant_application_id: null }
       ]);
+    } finally {
+      await stop();
+    }
+  });
+
+  it("widens the manual-connection origin check to accept bot links", async () => {
+    // Break caught: the 0074 CHECK is inline on the column, so 0075 must drop
+    // and re-add it; an unknown origin must still be refused.
+    const { pool, stop } = await startPostgres();
+    try {
+      await runMigrations(pool);
+      const root = await pool.query<{ id: string }>(
+        "INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url) VALUES ('eu', 'hyjal', 'botroot', 'Botroot', 'Mage', 80, 'https://raider.io/characters/eu/hyjal/botroot') RETURNING id"
+      );
+      await pool.query(
+        "INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name, origin) VALUES ($1, 'eu', 'hyjal', 'botalt', 'bot')",
+        [root.rows[0]!.id]
+      );
+      await pool.query(
+        "INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name, origin) VALUES ($1, 'eu', 'hyjal', 'sheetalt', 'applicant_sheet')",
+        [root.rows[0]!.id]
+      );
+      const origins = await pool.query<{ origin: string }>(
+        "SELECT origin FROM manual_dossier_connections ORDER BY connected_normalized_name"
+      );
+      expect(origins.rows).toEqual([
+        { origin: "bot" },
+        { origin: "applicant_sheet" }
+      ]);
+      await expect(
+        pool.query(
+          "INSERT INTO manual_dossier_connections (root_character_id, connected_region, connected_realm_slug, connected_normalized_name, origin) VALUES ($1, 'eu', 'hyjal', 'webalt', 'web')",
+          [root.rows[0]!.id]
+        )
+      ).rejects.toThrow();
     } finally {
       await stop();
     }

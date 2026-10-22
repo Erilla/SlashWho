@@ -2,6 +2,7 @@ import {
   applicantDossierSchema,
   type ApplicantDossier as ContractApplicantDossier,
   type CollectionPhase,
+  type DossierTierSearch,
   type EvidenceRunProgressResponse
 } from "@slashwho/contracts";
 import { evidenceRunPriority } from "@slashwho/database/evidence-priority";
@@ -17,7 +18,8 @@ import type {
   Repositories,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe,
-  StoredCharacterTierBestParse
+  StoredCharacterTierBestParse,
+  StoredSnapshot
 } from "@slashwho/database";
 import { groupMemberFacts } from "@slashwho/domain";
 import {
@@ -34,6 +36,7 @@ import {
   toRaiderIoUrl,
   type CharacterKey,
   type DossierCuttingEdgeEvidence,
+  type DossierKillEvidence,
   type DossierWipeEvidence,
   type DossierTierBestParse,
   type DossierLimitation,
@@ -72,7 +75,11 @@ import {
   searchDossierTier,
   type SearchDossierTierResult
 } from "./search-dossier-tier";
-import { resolveSubjects, type DossierSubject } from "./dossier-subjects";
+import {
+  legacyResolveSubjects,
+  resolveSubjects,
+  type DossierSubject
+} from "./dossier-subjects";
 import { dossierRaiderIoFirstKill } from "./raiderio-first-kill-evidence";
 import {
   TIER_SEARCH_SPACING_MS,
@@ -102,6 +109,67 @@ export type CreateDossierCommand = CreateSearchCommand;
 export type CreateDossierResult = CreateSearchResult;
 export type ReadDossierResult =
   { kind: "ready"; dossier: ContractApplicantDossier } | { kind: "not_ready" };
+
+/** What a stored-only read tells the bot about one character's evidence. */
+export type StoredDossierLimitation = {
+  code: ContractApplicantDossier["limitations"][number]["code"];
+  affects: ContractApplicantDossier["limitations"][number]["affects"];
+  character: CharacterKey | null;
+  recovery: "automatic" | "none";
+};
+
+export type StoredDossierEvidence = Readonly<{
+  key: CharacterKey;
+  evidenceState: DossierEvidenceState;
+  completedAt: Date | null;
+  limitations: readonly StoredDossierLimitation[];
+}>;
+
+export type StoredDossierSnapshotState = "complete" | "partial" | null;
+
+/**
+ * The stored-only read behind the bot summary. `collecting` is returned when
+ * the character has no snapshot of its own yet; the subjects are still listed
+ * so a declared but undiscovered character is visible as pending.
+ */
+export type StoredDossierRead =
+  | { kind: "not_found" }
+  | {
+      kind: "collecting";
+      subjects: readonly DossierSubject[];
+      evidence: readonly StoredDossierEvidence[];
+      limitations: readonly { recovery: "automatic" | "none" }[];
+    }
+  | {
+      kind: "ready";
+      dossier: ContractApplicantDossier;
+      snapshotId: string;
+      snapshotState: Exclude<StoredDossierSnapshotState, null>;
+      snapshotLimitationCode: string | null;
+      lastCollectedAt: Date | null;
+      kills: readonly DossierKillEvidence[];
+      subjects: readonly DossierSubject[];
+      pendingKeys: readonly CharacterKey[];
+      evidence: readonly StoredDossierEvidence[];
+      limitations: readonly { recovery: "automatic" | "none" }[];
+      cuttingEdgesRestored: boolean;
+      evidenceRunIds: readonly string[];
+      activeDiscovery: boolean;
+    };
+
+export type StoredDossierStatus =
+  | { kind: "not_found" }
+  | {
+      kind: "ok";
+      snapshotId: string | null;
+      snapshotState: StoredDossierSnapshotState;
+      snapshotLimitationCode: string | null;
+      lastCollectedAt: Date | null;
+      evidence: readonly StoredDossierEvidence[];
+      limitations: readonly { recovery: "automatic" | "none" }[];
+      evidenceRunIds: readonly string[];
+      activeDiscovery: boolean;
+    };
 /**
  * The two reads that can reserve collection: `readInitial`, the root-only
  * answer while discovery runs, and an ordinary `read`.
@@ -176,7 +244,10 @@ export interface ApplicantDossierService {
   refreshCharacter(
     key: CharacterKey,
     scope?: MeasurementScope,
-    overrides?: DossierGatewayOverrides
+    overrides?: DossierGatewayOverrides,
+    beforeReserve?: () => Promise<
+      { allowed: true } | { allowed: false; retryAfterSeconds: number }
+    >
   ): Promise<RefreshCharacterResult>;
   /**
    * Forgets every terminal mark for one character, so its history is collected
@@ -212,6 +283,19 @@ export interface ApplicantDossierService {
     ids: readonly string[],
     scope?: MeasurementScope
   ): Promise<EvidenceRunProgressResponse["runs"]>;
+  /**
+   * The bot summary's source: the dossier assembled from stored evidence only.
+   * No reservation, provider call, publish or repair.
+   */
+  readStored(
+    key: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<StoredDossierRead>;
+  /** The bot's cheap poll, from the same stored evidence. */
+  readStatus(
+    key: CharacterKey,
+    scope?: MeasurementScope
+  ): Promise<StoredDossierStatus>;
 }
 
 /**
@@ -257,6 +341,8 @@ type EvidenceResult = Readonly<{
   tierBests: readonly DossierTierBestParse[];
   raiderIoFirstKills: readonly DossierRaiderIoFirstKill[];
   cuttingEdges: readonly DossierCuttingEdgeEvidence[] | null;
+  /** Whether the completed run actually collected account-wide Cutting Edge. */
+  cuttingEdgesCollected: boolean;
   warcraftLogsComplete: boolean;
   limitations: readonly DossierLimitation[];
   evidenceState: DossierEvidenceState;
@@ -486,6 +572,59 @@ async function scheduleCharacterEvidence(
   return { reservation, lightRunId };
 }
 
+/** The shortfalls a completed publication reports, without any live run. */
+function completedLimitations(
+  completed: CompletedCharacterEvidence | undefined,
+  attributed: CharacterKey
+): DossierLimitation[] {
+  const limitations: DossierLimitation[] = [];
+  const lastRun = completed?.run;
+  if (lastRun?.limitationCode) {
+    limitations.push(
+      limitation(
+        "warcraft_logs",
+        attributed,
+        lastRun.limitationCode,
+        lastRun.completedAt ?? new Date(),
+        lastRun.retryAfterAt
+      )
+    );
+  }
+  if (lastRun?.omittedInvalidTimestamp) {
+    limitations.push(
+      limitation(
+        "warcraft_logs",
+        attributed,
+        "invalid_fight_timestamp",
+        lastRun.completedAt ?? new Date()
+      )
+    );
+  }
+  if (lastRun?.parseLimitationCode) {
+    // Every reason the run met, not only the one it is judged by: two
+    // characters capped for different reasons read differently (#526).
+    const missingParses = summarizeLimitationEncounters(
+      (completed?.kills ?? []).filter(hasNoParse)
+    );
+    for (const code of new Set([
+      lastRun.parseLimitationCode,
+      ...(lastRun.parseLimitationCodesSeen ?? [])
+    ])) {
+      limitations.push(
+        limitation(
+          "warcraft_logs",
+          attributed,
+          code,
+          lastRun.completedAt ?? new Date(),
+          lastRun.retryAfterAt,
+          missingParses
+        )
+      );
+    }
+  }
+  return limitations;
+}
+
 async function gatherCharacterEvidence(
   character: DossierSubject,
   options: GatherEvidenceOptions,
@@ -526,28 +665,12 @@ async function gatherCharacterEvidence(
     activeRun.id !== completed?.run.id &&
     activeRun.mode !== "tier_search" &&
     activeRun.lightRefresh !== true;
-  const lastRun = superseded ? undefined : completed?.run;
-  if (lastRun?.limitationCode) {
-    limitations.push(
-      limitation(
-        "warcraft_logs",
-        attributed,
-        lastRun.limitationCode,
-        lastRun.completedAt ?? new Date(),
-        lastRun.retryAfterAt
-      )
-    );
-  }
-  if (lastRun?.omittedInvalidTimestamp) {
-    limitations.push(
-      limitation(
-        "warcraft_logs",
-        attributed,
-        "invalid_fight_timestamp",
-        lastRun.completedAt ?? new Date()
-      )
-    );
-  }
+  limitations.push(
+    ...completedLimitations(
+      superseded ? undefined : (completed ?? undefined),
+      attributed
+    )
+  );
   // The run that is collecting right now, not the last one that finished. A
   // points-budget refusal publishes nothing, so a deferral exists only here --
   // without this the reader sees an indefinite "collecting" and no reason for
@@ -563,30 +686,6 @@ async function gatherCharacterEvidence(
         active.retryAfterAt
       )
     );
-  }
-  if (lastRun?.parseLimitationCode) {
-    // Every reason the run met, not only the one it is judged by: two
-    // characters capped for different reasons read differently (#526). The
-    // kills are the ones whose parses are missing, which no single reason
-    // owns, so each reason names them all.
-    const missingParses = summarizeLimitationEncounters(
-      (completed?.kills ?? []).filter(hasNoParse)
-    );
-    for (const code of new Set([
-      lastRun.parseLimitationCode,
-      ...(lastRun.parseLimitationCodesSeen ?? [])
-    ])) {
-      limitations.push(
-        limitation(
-          "warcraft_logs",
-          attributed,
-          code,
-          lastRun.completedAt ?? new Date(),
-          lastRun.retryAfterAt,
-          missingParses
-        )
-      );
-    }
   }
   return {
     limitations,
@@ -607,6 +706,7 @@ async function gatherCharacterEvidence(
     cuttingEdges: completed?.cuttingEdgesCollected
       ? completed.cuttingEdges
       : null,
+    cuttingEdgesCollected: completed?.cuttingEdgesCollected === true,
     // Negative conclusions rest on the history scan, which `limitationCode`
     // reports. A run whose only shortfall is its parse budget, or its
     // Raider.IO logged-encounter reads (#732), scanned the whole history and
@@ -724,6 +824,7 @@ function mergeIdentityEvidence(
       (kill) => `${kill.raidSlug}\0${kill.bossSlug}`
     ),
     cuttingEdges: own.cuttingEdges,
+    cuttingEdgesCollected: results.every((item) => item.cuttingEdgesCollected),
     warcraftLogsComplete: results.every((item) => item.warcraftLogsComplete),
     limitations: mergeLimitations(results.flatMap((item) => item.limitations)),
     evidenceState: results.reduce(
@@ -745,6 +846,108 @@ function mergeIdentityEvidence(
     collectionProgress:
       results.find((item) => item.gathering)?.collectionProgress ?? []
   };
+}
+
+/**
+ * One stored publication as the dossier would show it, with no reservation and
+ * no provider call. A character with no completed evidence is `waiting`, which
+ * is what keeps a declared but undiscovered character from publishing early.
+ */
+async function storedEvidenceFor(
+  key: CharacterKey,
+  repositories: Pick<Repositories, "evidence">,
+  attributed: CharacterKey
+): Promise<IdentityEvidence> {
+  const completed = await repositories.evidence.getCompleted(key);
+  return {
+    limitations: completedLimitations(completed ?? undefined, attributed),
+    collectedAt: completed?.run.completedAt ?? null,
+    kills:
+      completed?.kills.map((kill) => cachedKill(kill, attributed, key)) ?? [],
+    wipes: completed?.wipes.map((wipe) => cachedWipe(wipe, attributed)) ?? [],
+    tierBests:
+      completed?.tierBests.map((tierBest) =>
+        cachedTierBest(tierBest, attributed, key)
+      ) ?? [],
+    raiderIoFirstKills:
+      completed?.raiderIoFirstKills?.map((kill) =>
+        dossierRaiderIoFirstKill(kill, attributed)
+      ) ?? [],
+    cuttingEdges: completed?.cuttingEdgesCollected
+      ? completed.cuttingEdges
+      : null,
+    cuttingEdgesCollected: completed?.cuttingEdgesCollected === true,
+    // The same negative-conclusion rule as a live read, minus the freshness
+    // reservation: only a run that scanned the history and reported no
+    // shortfall supports a negative.
+    warcraftLogsComplete:
+      completed !== null &&
+      (completed.run.status === "complete" ||
+        (completed.run.status === "partial" &&
+          completed.run.killScanSkipped !== true &&
+          (completed.run.parseLimitationCode !== null ||
+            completed.run.raiderIoLimitationCode != null))) &&
+      completed.run.limitationCode === null &&
+      completed.wipeCapable,
+    gathering: false,
+    activeRunIds: [],
+    collectionProgress: [],
+    resumesAt: completed?.run.retryAfterAt ?? null,
+    evidenceState: !completed
+      ? "waiting"
+      : completed.run.status === "partial"
+        ? "partial"
+        : "complete"
+  };
+}
+
+/**
+ * Stored evidence for every subject, merging the names that share a Warcraft
+ * Logs identity. A suppressed alias is skipped; a suppressed subject is
+ * filtered out before assembly, because this loader has no suppression filter.
+ */
+async function readStoredEvidence(
+  subjects: readonly DossierSubject[],
+  repositories: Pick<Repositories, "evidence" | "suppressions">,
+  at: Date
+): Promise<IdentityEvidence[]> {
+  return Promise.all(
+    subjects.map(async (character) => {
+      const keys: CharacterKey[] = [];
+      for (const key of [
+        character.key,
+        ...(character.warcraftLogsAliases ?? [])
+      ]) {
+        if (!(await repositories.suppressions.isActive(key, at)))
+          keys.push(key);
+      }
+      if (keys.length === 0) {
+        // A suppression can land between the subject filter and this read. A
+        // vanished alias is waiting, not a 500.
+        return {
+          limitations: [],
+          collectedAt: null,
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          raiderIoFirstKills: [],
+          cuttingEdges: null,
+          cuttingEdgesCollected: false,
+          warcraftLogsComplete: false,
+          gathering: false,
+          activeRunIds: [],
+          collectionProgress: [],
+          resumesAt: null,
+          evidenceState: "waiting"
+        };
+      }
+      return mergeIdentityEvidence(
+        await Promise.all(
+          keys.map((key) => storedEvidenceFor(key, repositories, character.key))
+        )
+      );
+    })
+  );
 }
 
 type CuttingEdgeOutcome =
@@ -781,6 +984,8 @@ async function gatherCuttingEdgeEvidence(
     stored: readonly (readonly DossierCuttingEdgeEvidence[] | null)[];
     concurrency: ReturnType<typeof createConcurrencyLimiter>;
     signal?: AbortSignal;
+    /** Use the stored achievements only; never call Blizzard. */
+    storedOnly?: boolean;
   }
 ): Promise<CuttingEdgeEvidenceResult> {
   // Never throws: an abort is returned as an outcome so a concurrent batch
@@ -791,14 +996,15 @@ async function gatherCuttingEdgeEvidence(
     index: number
   ): Promise<CuttingEdgeOutcome> {
     try {
-      const achievements =
-        options.stored[index] ??
-        (await options.concurrency.run(() =>
-          options.blizzard.getCompletedAchievements(
-            character.key,
-            options.signal
-          )
-        ));
+      const achievements = options.storedOnly
+        ? (options.stored[index] ?? [])
+        : (options.stored[index] ??
+          (await options.concurrency.run(() =>
+            options.blizzard.getCompletedAchievements(
+              character.key,
+              options.signal
+            )
+          )));
       const supported = achievements.filter((achievement) =>
         isAccountWideCuttingEdgeAchievement(achievement.achievementId)
       );
@@ -964,7 +1170,7 @@ async function assembleDossier(options: {
   research: ContractApplicantDossier["research"];
   /** The roster is unknown and only durable evidence for the submitted root is shown. */
   rootOnlyStoredEvidence?: boolean;
-  repositories: Pick<Repositories, "evidence">;
+  repositories: Pick<Repositories, "evidence" | "suppressions">;
   queue: Pick<
     DiscoveryQueue,
     "enqueueCharacterEvidence" | "promoteCharacterEvidence"
@@ -981,7 +1187,19 @@ async function assembleDossier(options: {
   encryptionKey: Buffer;
   /** The read's scope, which times the assembly as `assemble` (#687). */
   scope?: MeasurementScope | undefined;
-}): Promise<ContractApplicantDossier> {
+  /**
+   * Assemble only from stored evidence: no reservation, no live Blizzard
+   * Cutting Edge call, no Raider.IO rank restore, no queue. Used by the bot
+   * summary so a read spends no provider budget.
+   */
+  storedOnly?: boolean;
+  /** The evidence a stored-only caller already read, reused instead of re-read. */
+  storedEvidence?: readonly IdentityEvidence[];
+}): Promise<{
+  dossier: ContractApplicantDossier;
+  evidence: readonly IdentityEvidence[];
+  rankedKills: readonly DossierKillEvidence[];
+}> {
   const gatherOptions: GatherEvidenceOptions = {
     origin: options.evidenceOrigin,
     root: options.root,
@@ -998,27 +1216,38 @@ async function assembleDossier(options: {
     (subject) =>
       canonicalCharacterId(subject.key) === canonicalCharacterId(options.root)
   );
-  const rootScheduling = rootSubject
-    ? await scheduleCharacterEvidence(rootSubject, gatherOptions)
-    : undefined;
-  const evidence = await Promise.all(
-    options.subjects.map(async (character) =>
-      mergeIdentityEvidence(
-        await Promise.all(
-          [character.key, ...(character.warcraftLogsAliases ?? [])].map((key) =>
-            gatherCharacterEvidence(
-              { ...character, key },
-              { ...gatherOptions, attributeTo: character.key },
-              rootScheduling &&
-                canonicalCharacterId(key) === canonicalCharacterId(options.root)
-                ? rootScheduling
-                : undefined
+  const evidence = options.storedOnly
+    ? (options.storedEvidence ??
+      (await readStoredEvidence(
+        options.subjects,
+        options.repositories,
+        new Date()
+      )))
+    : await (async () => {
+        const rootScheduling = rootSubject
+          ? await scheduleCharacterEvidence(rootSubject, gatherOptions)
+          : undefined;
+        return Promise.all(
+          options.subjects.map(async (character) =>
+            mergeIdentityEvidence(
+              await Promise.all(
+                [character.key, ...(character.warcraftLogsAliases ?? [])].map(
+                  (key) =>
+                    gatherCharacterEvidence(
+                      { ...character, key },
+                      { ...gatherOptions, attributeTo: character.key },
+                      rootScheduling &&
+                        canonicalCharacterId(key) ===
+                          canonicalCharacterId(options.root)
+                        ? rootScheduling
+                        : undefined
+                    )
+                )
+              )
             )
           )
-        )
-      )
-    )
-  );
+        );
+      })();
   const aliases = await Promise.all(
     [...options.subjects, ...options.excludedSubjects].map(
       async (character) =>
@@ -1032,16 +1261,22 @@ async function assembleDossier(options: {
       blizzard: options.blizzard,
       stored: evidence.map((item) => item.cuttingEdges),
       concurrency: options.concurrency,
-      signal: options.signal
+      signal: options.signal,
+      ...(options.storedOnly ? { storedOnly: true } : {})
     }),
-    restoreMissingHistoricRanks({
-      kills: evidence.flatMap((item) => item.kills),
-      raiderio: options.raiderio,
-      recordLookup: (...args) =>
-        options.repositories.evidence.recordHistoricRankLookup(...args),
-      concurrency: options.concurrency,
-      signal: options.signal
-    })
+    options.storedOnly
+      ? Promise.resolve({
+          kills: evidence.flatMap((item) => item.kills),
+          limitations: [] as DossierLimitation[]
+        })
+      : restoreMissingHistoricRanks({
+          kills: evidence.flatMap((item) => item.kills),
+          raiderio: options.raiderio,
+          recordLookup: (...args) =>
+            options.repositories.evidence.recordHistoricRankLookup(...args),
+          concurrency: options.concurrency,
+          signal: options.signal
+        })
   ]);
   // Everything from here on works on evidence already in hand, so it is timed
   // as the read's own `assemble` bucket (#687). The two database reads inside
@@ -1101,50 +1336,60 @@ async function assembleDossier(options: {
     // A character with nothing collected cannot be searched, so it is never
     // offered as remaining. Searches reserve under the name shown, so that is
     // the name checked; a failed read leaves every character searchable.
-    const withEvidence = await excluded(() =>
-      Promise.resolve()
-        .then(() =>
-          options.repositories.evidence.withCompletedEvidence?.(
-            searchSubjects.map((subject) => subject.key)
-          )
-        )
-        .then((keys) =>
-          keys ? new Set(keys.map(canonicalCharacterId)) : undefined
-        )
-        .catch(() => undefined)
-    );
-    const latestTierSearches = await excluded(() =>
-      Promise.resolve()
-        .then(() =>
-          options.repositories.evidence.latestTierSearches(
-            searchSubjects.flatMap((subject) => [
-              subject.key,
-              ...(subject.aliases ?? [])
-            ]),
-            new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
-          )
-        )
-        .catch(() => [])
-    );
-    const tierSearches = tierSearchStates(
-      searchSubjects,
-      latestTierSearches,
-      searchedAt,
-      withEvidence
-    );
+    const withEvidence = options.storedOnly
+      ? undefined
+      : await excluded(() =>
+          Promise.resolve()
+            .then(() =>
+              options.repositories.evidence.withCompletedEvidence?.(
+                searchSubjects.map((subject) => subject.key)
+              )
+            )
+            .then((keys) =>
+              keys ? new Set(keys.map(canonicalCharacterId)) : undefined
+            )
+            .catch(() => undefined)
+        );
+    const latestTierSearches = options.storedOnly
+      ? []
+      : await excluded(() =>
+          Promise.resolve()
+            .then(() =>
+              options.repositories.evidence.latestTierSearches(
+                searchSubjects.flatMap((subject) => [
+                  subject.key,
+                  ...(subject.aliases ?? [])
+                ]),
+                new Date(searchedAt.getTime() - TIER_SEARCH_SPACING_MS)
+              )
+            )
+            .catch(() => [])
+        );
+    const tierSearches: ReadonlyMap<string, DossierTierSearch> =
+      options.storedOnly
+        ? new Map<string, DossierTierSearch>()
+        : tierSearchStates(
+            searchSubjects,
+            latestTierSearches,
+            searchedAt,
+            withEvidence
+          );
     // A character past the display cap has no evidence row, so its tier
     // search is the only way the page learns that run is still going.
-    const evidenceRunIds = [
-      ...new Set([
-        ...evidence.flatMap((item) => item.activeRunIds),
-        ...latestTierSearches.flatMap((search) =>
-          search.runId !== undefined && ACTIVE_RUN_STATUSES.has(search.status)
-            ? [search.runId]
-            : []
-        )
-      ])
-    ];
-    return applicantDossierSchema.parse({
+    const evidenceRunIds = options.storedOnly
+      ? []
+      : [
+          ...new Set([
+            ...evidence.flatMap((item) => item.activeRunIds),
+            ...latestTierSearches.flatMap((search) =>
+              search.runId !== undefined &&
+              ACTIVE_RUN_STATUSES.has(search.status)
+                ? [search.runId]
+                : []
+            )
+          ])
+        ];
+    const contractDossier = applicantDossierSchema.parse({
       ...dossier,
       raids: dossier.raids.map((raid) => {
         const tierSearch = tierSearches.get(raid.raidId);
@@ -1197,6 +1442,7 @@ async function assembleDossier(options: {
       ],
       limitations: dossier.limitations.map(contractLimitation)
     });
+    return { dossier: contractDossier, evidence, rankedKills: ranked.kills };
   };
   return options.scope
     ? options.scope.time("assemble", assemble)
@@ -1221,8 +1467,9 @@ export function createApplicantDossierService(options: {
     | "recentSearches"
     | "runs"
     | "groupReads"
-  > &
-    Partial<Pick<Repositories, "suppressions">>;
+    | "suppressions"
+    | "characters"
+  >;
   queue: Pick<
     DiscoveryQueue,
     "enqueueCharacterEvidence" | "promoteCharacterEvidence"
@@ -1388,7 +1635,7 @@ export function createApplicantDossierService(options: {
     scope: MeasurementScope | undefined,
     request: Pick<
       Parameters<typeof refreshCharacter>[0],
-      "rebuild" | "credentials"
+      "rebuild" | "credentials" | "beforeReserve"
     > & { origin: "refresh" | "rebuild" }
   ): Promise<RefreshCharacterResult> {
     return refreshCharacter({
@@ -1433,25 +1680,177 @@ export function createApplicantDossierService(options: {
     evidenceOrigin: DossierReadOrigin,
     context: ReturnType<typeof assemblyContext>
   ): Promise<ReadDossierResult> {
+    const { dossier } = await assembleDossier({
+      root: key,
+      evidenceOrigin,
+      subjects: [rootOnlySubject(key)],
+      skippedSubjects: [],
+      excludedSubjects: [],
+      research: {
+        state: "initial",
+        message: hasStoredEvidence
+          ? "Linked-character research is pending; stored evidence is shown only for the submitted character."
+          : "Linked-character research is still running; this evidence covers only the submitted character."
+      },
+      rootOnlyStoredEvidence: hasStoredEvidence,
+      ...context
+    });
+    return { kind: "ready", dossier };
+  }
+
+  async function pendingSubjects(
+    root: CharacterKey,
+    repositories: typeof options.repositories,
+    at: Date
+  ): Promise<DossierSubject[]> {
+    const subjects: DossierSubject[] = [
+      {
+        ...rootOnlySubject(root),
+        displayName: formatCharacterDisplayName(root.name)
+      }
+    ];
+    for (const connection of await repositories.manualConnections.list(root)) {
+      if (connection.excluded) continue;
+      if (await repositories.suppressions.isActive(connection.key, at))
+        continue;
+      subjects.push({
+        key: connection.key,
+        displayName: formatCharacterDisplayName(connection.displayName),
+        className: connection.className,
+        guild: null,
+        raiderIoUrl: connection.raiderIoUrl,
+        source: "manually_added",
+        ...(connection.pending ? { pending: true } : {})
+      });
+    }
+    return subjects;
+  }
+
+  async function characterHasDossier(
+    key: CharacterKey,
+    own: StoredSnapshot | null,
+    repositories: typeof options.repositories,
+    at: Date
+  ): Promise<boolean> {
+    if (await repositories.suppressions.isActive(key, at)) return false;
+    if (!(await repositories.characters.find(key))) return false;
+    if (own) return true;
+    const [discovery, evidence] = await Promise.all([
+      repositories.runs.findActiveMany([key]),
+      repositories.evidence.activeRuns([key])
+    ]);
+    if (discovery.length > 0 || evidence.length > 0) return true;
+    return (await repositories.evidence.getCompleted(key)) !== null;
+  }
+
+  function earliestCollected(
+    evidence: readonly IdentityEvidence[]
+  ): Date | null {
+    const times = evidence.flatMap((item) =>
+      item.collectedAt ? [item.collectedAt.getTime()] : []
+    );
+    return times.length === 0 ? null : new Date(Math.min(...times));
+  }
+
+  /**
+   * The subject list and stored evidence both bot routes share. A pending
+   * manual connection is an included subject with no terminal run, so it keeps
+   * the dossier collecting until every declared character settles.
+   */
+  async function dossierEvidence(
+    key: CharacterKey,
+    own: StoredSnapshot | null,
+    repositories: typeof options.repositories,
+    at: Date
+  ): Promise<{
+    subjects: readonly DossierSubject[];
+    skipped: readonly DossierSubject[];
+    evidence: readonly IdentityEvidence[];
+    views: StoredDossierEvidence[];
+    limitations: readonly { recovery: "automatic" | "none" }[];
+    activeEvidenceRunIds: readonly string[];
+    activeDiscovery: boolean;
+  }> {
+    let subjects: DossierSubject[];
+    let skipped: DossierSubject[] = [];
+    if (own) {
+      const resolved = await legacyResolveSubjects(
+        key,
+        repositories,
+        options.config
+      );
+      if (!resolved) {
+        subjects = await pendingSubjects(key, repositories, at);
+      } else {
+        skipped = [];
+        for (const subject of resolved.skipped) {
+          if (!(await repositories.suppressions.isActive(subject.key, at))) {
+            skipped.push(subject);
+          }
+        }
+        subjects = [];
+        for (const subject of resolved.selected) {
+          if (!(await repositories.suppressions.isActive(subject.key, at))) {
+            subjects.push(subject);
+          }
+        }
+      }
+    } else {
+      subjects = await pendingSubjects(key, repositories, at);
+    }
+    const evidence = await readStoredEvidence(subjects, repositories, at);
+    const keys = subjects.flatMap((subject) => [
+      subject.key,
+      ...(subject.warcraftLogsAliases ?? [])
+    ]);
+    const [activeRuns, activeDiscoveryRuns] = await Promise.all([
+      repositories.evidence.activeRuns(keys),
+      repositories.runs.findActiveMany(keys)
+    ]);
+    const activeIds = new Set(
+      activeRuns.map((run) => canonicalCharacterId(run.key))
+    );
+    const views = subjects.map((subject, index) => {
+      const active = [subject.key, ...(subject.warcraftLogsAliases ?? [])].some(
+        (key) => activeIds.has(canonicalCharacterId(key))
+      );
+      const item = evidence[index];
+      return {
+        key: subject.key,
+        evidenceState: active
+          ? ("scanning" as const)
+          : (item?.evidenceState ?? "waiting"),
+        completedAt: item?.collectedAt ?? null,
+        limitations: (item?.limitations ?? []).map((limitation) => {
+          const contract = contractLimitation(limitation);
+          return {
+            code: contract.code,
+            affects: contract.affects,
+            character: contract.character,
+            recovery: contract.recovery ?? "none"
+          };
+        })
+      };
+    });
+    const limitations = [
+      ...views.flatMap((view) =>
+        view.limitations.map((item) => ({ recovery: item.recovery }))
+      ),
+      // A character past the ceiling is not researched; its cap is still a
+      // shortfall the payload carries, so the state cannot call itself ready.
+      ...skipped.map(() => ({ recovery: "none" as const }))
+    ];
     return {
-      kind: "ready",
-      dossier: await assembleDossier({
-        root: key,
-        evidenceOrigin,
-        subjects: [rootOnlySubject(key)],
-        skippedSubjects: [],
-        excludedSubjects: [],
-        research: {
-          state: "initial",
-          message: hasStoredEvidence
-            ? "Linked-character research is pending; stored evidence is shown only for the submitted character."
-            : "Linked-character research is still running; this evidence covers only the submitted character."
-        },
-        rootOnlyStoredEvidence: hasStoredEvidence,
-        ...context
-      })
+      subjects,
+      skipped,
+      evidence,
+      views,
+      limitations,
+      activeEvidenceRunIds: activeRuns.map((run) => run.id),
+      activeDiscovery: activeDiscoveryRuns.length > 0
     };
   }
+
   return {
     async addHistoricAlias(root, character, alias, scope) {
       const repositories = scopedRepositories(scope);
@@ -1492,6 +1891,85 @@ export function createApplicantDossierService(options: {
         )) ?? [];
       return progress.map(evidenceRunProgressView);
     },
+    async readStored(key, scope) {
+      const repositories = scopedRepositories(scope);
+      const at = new Date();
+      const own = await repositories.snapshots.getCurrent(key);
+      if (!(await characterHasDossier(key, own, repositories, at))) {
+        return { kind: "not_found" };
+      }
+      const state = await dossierEvidence(key, own, repositories, at);
+      const views = state.views;
+      if (!own) {
+        return {
+          kind: "collecting",
+          subjects: state.subjects,
+          evidence: views,
+          limitations: state.limitations
+        };
+      }
+      const assembled = await assembleDossier({
+        root: own.rootKey,
+        evidenceOrigin: "dossier_read",
+        subjects: state.subjects,
+        skippedSubjects: state.skipped,
+        excludedSubjects: [],
+        research: {
+          state: own.state === "complete" ? "complete" : "partial",
+          message: "Stored evidence."
+        },
+        storedOnly: true,
+        storedEvidence: state.evidence,
+        ...assemblyContext(repositories)
+      });
+      return {
+        kind: "ready",
+        dossier: assembled.dossier,
+        snapshotId: own.id,
+        snapshotState: own.state,
+        snapshotLimitationCode: own.limitationCode,
+        lastCollectedAt: earliestCollected(state.evidence),
+        kills: assembled.rankedKills,
+        subjects: state.subjects,
+        pendingKeys: state.subjects
+          .filter(
+            (subject, index) =>
+              subject.pending === true &&
+              state.evidence[index]?.collectedAt === null
+          )
+          .map((subject) => subject.key),
+        evidence: views,
+        limitations: assembled.dossier.limitations.map((limitation) => ({
+          recovery: limitation.recovery ?? "none"
+        })),
+        cuttingEdgesRestored: state.subjects.every(
+          (_subject, index) =>
+            state.evidence[index]?.cuttingEdgesCollected === true
+        ),
+        evidenceRunIds: state.activeEvidenceRunIds,
+        activeDiscovery: state.activeDiscovery
+      };
+    },
+    async readStatus(key, scope) {
+      const repositories = scopedRepositories(scope);
+      const at = new Date();
+      const own = await repositories.snapshots.getCurrent(key);
+      if (!(await characterHasDossier(key, own, repositories, at))) {
+        return { kind: "not_found" };
+      }
+      const state = await dossierEvidence(key, own, repositories, at);
+      return {
+        kind: "ok",
+        snapshotId: own?.id ?? null,
+        snapshotState: own?.state ?? null,
+        snapshotLimitationCode: own?.limitationCode ?? null,
+        lastCollectedAt: earliestCollected(state.evidence),
+        evidence: state.views,
+        limitations: state.limitations,
+        evidenceRunIds: state.activeEvidenceRunIds,
+        activeDiscovery: state.activeDiscovery
+      };
+    },
     async start(input, scope) {
       // start does real database and queue work through search.create, so its
       // scope is threaded through rather than discarded: this is the endpoint
@@ -1512,8 +1990,8 @@ export function createApplicantDossierService(options: {
           result.kind === "group_ready")
       ) {
         await scopedRepositories(scope)
-          .recentSearches?.record(key)
-          .catch(() => {
+          .recentSearches?.record?.(key)
+          ?.catch(() => {
             options.logger?.info({ event: "dossier_search_record_failed" });
           });
       }
@@ -1644,13 +2122,14 @@ export function createApplicantDossierService(options: {
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
     },
 
-    async refreshCharacter(key, scope, overrides) {
+    async refreshCharacter(key, scope, overrides, beforeReserve) {
       // Deliberately takes no mode. The reader-facing control is `full` outside
       // the cooldown and `light` inside it, one run either way, and there is no
       // argument a caller could pass to turn it into a rebuild.
       return requestCollection(key, scope, {
         origin: "refresh",
-        credentials: overrides?.wclCredentialRef
+        credentials: overrides?.wclCredentialRef,
+        ...(beforeReserve ? { beforeReserve } : {})
       });
     },
 
@@ -1805,37 +2284,38 @@ export function createApplicantDossierService(options: {
           options.config.FRESHNESS_HOURS,
           options.config.FINGERPRINT_SWEEP_CADENCE_HOURS
         );
+      const { dossier } = await assembleDossier({
+        root: key,
+        evidenceOrigin: "dossier_read",
+        subjects: selected,
+        skippedSubjects: skipped,
+        excludedSubjects: excludedOrdered,
+        research:
+          resolved.research ??
+          (provisional
+            ? {
+                state: "provisional",
+                message:
+                  "Linked characters are shown from an existing dossier while this character's own research runs; the list may change."
+              }
+            : snapshot?.state === "complete"
+              ? {
+                  state: "complete",
+                  message: "Linked-character research is complete."
+                }
+              : {
+                  state: "partial",
+                  message:
+                    snapshot?.limitationCode === "privacy_hidden"
+                      ? "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive."
+                      : "Additional linked characters may exist; this dossier is not exhaustive."
+                }),
+        ...assemblyContext(repositories, signal, overrides, scope)
+      });
       return {
         kind: "ready",
         dossier: {
-          ...(await assembleDossier({
-            root: key,
-            evidenceOrigin: "dossier_read",
-            subjects: selected,
-            skippedSubjects: skipped,
-            excludedSubjects: excludedOrdered,
-            research:
-              resolved.research ??
-              (provisional
-                ? {
-                    state: "provisional",
-                    message:
-                      "Linked characters are shown from an existing dossier while this character's own research runs; the list may change."
-                  }
-                : snapshot?.state === "complete"
-                  ? {
-                      state: "complete",
-                      message: "Linked-character research is complete."
-                    }
-                  : {
-                      state: "partial",
-                      message:
-                        snapshot?.limitationCode === "privacy_hidden"
-                          ? "Raider.IO shows no public account claim for this character, so additional linked characters may exist; this dossier is not exhaustive."
-                          : "Additional linked characters may exist; this dossier is not exhaustive."
-                    }),
-            ...assemblyContext(repositories, signal, overrides, scope)
-          })),
+          ...dossier,
           ...(groupStale ? { groupStale: true } : {})
         }
       };

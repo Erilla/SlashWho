@@ -6,7 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import { dossierStartResponseSchema } from "@slashwho/contracts";
 
 import {
+  etagOf,
+  ifNoneMatch,
   jsonNoStore,
+  notModified,
   resolveCharacterRoute,
   startResultResponse,
   withHttpRequest
@@ -92,7 +95,17 @@ describe("startResultResponse", () => {
       statusUrl: `/api/dossiers/jobs/${jobId}`,
       characterUrl: "/characters/eu/silvermoon/ryii",
       staleCharacter: null,
-      joinedExistingRun: false
+      joinedExistingRun: false,
+      profile: {
+        key: { region: "eu", realm: "silvermoon", name: "ryii" },
+        displayName: "Ryii",
+        className: "Mage",
+        level: 80,
+        guild: null,
+        ownerId: null,
+        profileGuess: null,
+        declaredMain: null
+      }
     });
     expect(response.status).toBe(202);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -619,4 +632,48 @@ it("preserves the first cause if the error response also fails counting", async 
   } finally {
     read.mockRestore();
   }
+});
+
+describe("etag helpers", () => {
+  it("quotes a deterministic hash of the body", () => {
+    expect(etagOf({ a: 1 })).toBe(etagOf({ a: 1 }));
+    expect(etagOf({ a: 1 })).not.toBe(etagOf({ a: 2 }));
+    expect(etagOf({ a: 1 })).toMatch(/^"[0-9a-f]{64}"$/);
+  });
+
+  it("matches a list of tags and a wildcard", () => {
+    const etag = etagOf({ a: 1 });
+    expect(
+      ifNoneMatch(
+        new Request("https://slashwho.example", {
+          headers: { "if-none-match": `"other", ${etag}` }
+        }),
+        etag
+      )
+    ).toBe(true);
+    expect(
+      ifNoneMatch(
+        new Request("https://slashwho.example", {
+          headers: { "if-none-match": "*" }
+        }),
+        etag
+      )
+    ).toBe(true);
+    expect(
+      ifNoneMatch(
+        new Request("https://slashwho.example", {
+          headers: { "if-none-match": '"other"' }
+        }),
+        etag
+      )
+    ).toBe(false);
+  });
+
+  it("keeps a 304 no-store and carries the tag", () => {
+    const etag = etagOf({ a: 1 });
+    const response = notModified(etag);
+    expect(response.status).toBe(304);
+    expect(response.headers.get("etag")).toBe(etag);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
 });

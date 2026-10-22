@@ -396,6 +396,23 @@ export function createDiscoveryRunRepositories(
         return result.rows[0] ? mapRun(result.rows[0]) : null;
       },
 
+      async findActiveMany(keys) {
+        if (keys.length === 0) return [];
+        const result = await pool.query<RunRow>(
+          `SELECT * FROM discovery_runs
+           WHERE (root_region, root_realm_slug, root_normalized_name) IN (
+             SELECT * FROM unnest($1::text[], $2::text[], $3::text[])
+           )
+             AND status IN ${activeRunSql}`,
+          [
+            keys.map((key) => key.region),
+            keys.map((key) => key.realm),
+            keys.map((key) => key.name)
+          ]
+        );
+        return result.rows.map(mapRun);
+      },
+
       async listRecent(limit) {
         const result = await pool.query<RunRow>(
           `SELECT * FROM discovery_runs

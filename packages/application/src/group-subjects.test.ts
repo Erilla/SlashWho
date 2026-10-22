@@ -162,6 +162,21 @@ describe("page members", () => {
       })!.selected[1]
     ).toMatchObject({ source: "claimed", hasManualConnection: true });
   });
+  it("labels a bot-only manual path as coming from an application", () => {
+    const g = graph({
+      names: ["o", "a"],
+      links: [{ a: "o", b: "a", strength: "manual" }],
+      manual: [{ makerId: "o", targetId: "a", excluded: false, origin: "bot" }]
+    });
+    expect(
+      resolveGroupSubjects(key("o"), g, { DOSSIER_CHARACTER_CEILING: 50 })!
+        .selected[1]
+    ).toMatchObject({
+      source: "manually_added",
+      origin: "application",
+      hasManualConnection: true
+    });
+  });
   it("never walks through a suppressed character", () => {
     const g = graph({
       names: ["o", "s", "x"],

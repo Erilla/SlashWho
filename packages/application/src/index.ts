@@ -105,8 +105,28 @@ export type {
   CreateDossierCommand,
   CreateDossierResult,
   DossierGatewayOverrides,
-  ReadDossierResult
+  ReadDossierResult,
+  StoredDossierEvidence,
+  StoredDossierRead,
+  StoredDossierSnapshotState,
+  StoredDossierStatus
 } from "./applicant-dossier-service";
+export { createBotDossierService } from "./bot-dossier-service";
+export type {
+  AddBotDossierCharacterResult,
+  BotDossierService,
+  BotRefreshResult,
+  CreateBotDossierResult
+} from "./bot-dossier-service";
+export {
+  botDossierState,
+  botDossierStatusOf,
+  botDossierSummaryOf
+} from "./bot-dossier-summary";
+export type {
+  BotDossierStateInput,
+  BotDossierStateResult
+} from "./bot-dossier-summary";
 export { allowlistedRecord, createAllowlistLogger } from "./allowlist-logger";
 export type { AllowlistLoggerOptions } from "./allowlist-logger";
 export { BLIZZARD_FAST_CALL_MS, createMeasurementScope } from "./measurement";

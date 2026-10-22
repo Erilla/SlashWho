@@ -205,8 +205,8 @@ export interface ManualConnectionCharacter {
   level: number;
   raiderIoUrl: string;
   pending: boolean;
-  /** A reviewer's own link, or one the applicant sheet watcher made. */
-  origin: "dossier" | "applicant_sheet";
+  /** A reviewer's own link, one the applicant sheet watcher made, or the bot. */
+  origin: "dossier" | "applicant_sheet" | "bot";
   /** A reviewer has hidden this character from the dossier evidence. */
   excluded: boolean;
 }
@@ -244,7 +244,8 @@ export interface ManualConnectionRepository {
   add(
     root: CharacterKey,
     character: CharacterKey,
-    options?: { origin: "applicant_sheet"; applicationId: string }
+    options?:
+      { origin: "applicant_sheet"; applicationId: string } | { origin: "bot" }
   ): Promise<"added" | "duplicate">;
   /**
    * Hides the character from the dossier evidence, or restores it. Reports a
@@ -270,6 +271,22 @@ export interface SuppressionRepository {
   ): Promise<void>;
   isActive(key: CharacterKey, at?: Date): Promise<boolean>;
   cleanupExpired(at?: Date): Promise<number>;
+}
+
+/** The canonical character row, written before discovery has published one. */
+export interface CharacterRepository {
+  /**
+   * Ensures the canonical row and returns its id. An existing row is left
+   * untouched, so a snapshot's class, level, name or URL is never lowered.
+   */
+  ensure(input: {
+    key: CharacterKey;
+    displayName: string;
+    className: string;
+    level: number;
+    raiderIoUrl: string;
+  }): Promise<string>;
+  find(key: CharacterKey): Promise<boolean>;
 }
 
 /** One character on the landing page's list of recent dossier searches. */
@@ -1222,6 +1239,13 @@ export interface EvidenceRepository {
     ids: readonly string[],
     at: Date
   ): Promise<readonly EvidenceRunProgress[]>;
+  /**
+   * The active evidence runs for any of these keys, for a dossier-wide state
+   * read. One query, no provider call.
+   */
+  activeRuns(
+    keys: readonly CharacterKey[]
+  ): Promise<readonly { id: string; key: CharacterKey }[]>;
   publish(
     runId: string,
     input: {
@@ -2132,10 +2156,13 @@ export interface Repositories {
     recordGuildReadsDropped(id: string, count: number): Promise<void>;
     find(id: string): Promise<DiscoveryRun | null>;
     findActive(key: CharacterKey): Promise<DiscoveryRun | null>;
+    /** Every active run for any of these keys, for a dossier-wide state read. */
+    findActiveMany(keys: readonly CharacterKey[]): Promise<DiscoveryRun[]>;
     /** The most recently requested runs, newest first, for the operator monitor. */
     listRecent(limit: number): Promise<readonly DiscoveryRun[]>;
   };
   snapshots: SnapshotRepository;
+  characters: CharacterRepository;
   manualConnections: ManualConnectionRepository;
   suppressions: SuppressionRepository;
   recentSearches?: RecentDossierSearchRepository;

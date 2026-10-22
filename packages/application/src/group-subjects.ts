@@ -80,7 +80,9 @@ export function resolveGroupSubjects(
       present: origins.length > 0,
       applicant:
         origins.length > 0 &&
-        origins.every((origin) => origin === "applicant_sheet")
+        origins.every(
+          (origin) => origin === "applicant_sheet" || origin === "bot"
+        )
     };
   };
   const subject = (id: string): RankedSubject => {

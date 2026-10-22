@@ -21,6 +21,10 @@ export type RefreshCharacterResult = Readonly<{
   lastCollectedAt: Date | null;
   /** Terminal marks a rebuild forgot; 0 on an ordinary refresh. */
   clearedTiers: number;
+  /** False when a light refresh settled with nothing to do. */
+  queued?: boolean;
+  /** Set when a `beforeReserve` gate refused the run. */
+  rateLimited?: { retryAfterSeconds: number };
 }>;
 
 async function lightCollectionIsSettled(options: {
@@ -104,6 +108,14 @@ export async function refreshCharacter(options: {
   rebuild?: boolean;
   /** Emits only static operational facts; callers must not include identity. */
   logger?: { info(value: Record<string, unknown>): void };
+  /**
+   * Called after the light-refresh skip decision and immediately before the
+   * reservation. A caller that charges for the collection charges here, so a
+   * settled light refresh costs nothing.
+   */
+  beforeReserve?: () => Promise<
+    { allowed: true } | { allowed: false; retryAfterSeconds: number }
+  >;
 }): Promise<RefreshCharacterResult> {
   const evidence = options.scope
     ? measuredRepositories(
@@ -141,7 +153,18 @@ export async function refreshCharacter(options: {
       event: "light_collection_skipped",
       reason: "all_domains_fresh_terminal"
     });
-    return { mode, lastCollectedAt, clearedTiers };
+    return { mode, lastCollectedAt, clearedTiers, queued: false };
+  }
+
+  const gate = options.beforeReserve ? await options.beforeReserve() : null;
+  if (gate && !gate.allowed) {
+    return {
+      mode,
+      lastCollectedAt,
+      clearedTiers,
+      queued: false,
+      rateLimited: { retryAfterSeconds: gate.retryAfterSeconds }
+    };
   }
 
   const reservation = await evidence.reserve({
@@ -168,5 +191,10 @@ export async function refreshCharacter(options: {
     );
     await evidence.markEnqueued(reservation.run.id, queueJobId);
   }
-  return { mode, lastCollectedAt, clearedTiers };
+  return {
+    mode,
+    lastCollectedAt,
+    clearedTiers,
+    queued: reservation.kind === "reserved" || reservation.kind === "active"
+  };
 }

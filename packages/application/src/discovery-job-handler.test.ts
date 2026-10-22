@@ -173,6 +173,14 @@ function createMemoryRepositories(): Repositories {
   let snapshotSequence = 0;
 
   return {
+    characters: {
+      async ensure() {
+        return "00000000-0000-4000-8000-000000000001";
+      },
+      async find() {
+        return true;
+      }
+    },
     accountTokens: {
       async admitRequest() {
         throw new Error("not_used");
@@ -379,6 +387,14 @@ function createMemoryRepositories(): Repositories {
               keyId(run.rootKey) === keyId(key) &&
               ["queued", "running", "retrying"].includes(run.status)
           ) ?? null
+        );
+      },
+      async findActiveMany(keys) {
+        const wanted = new Set(keys.map(keyId));
+        return [...runs.values()].filter(
+          (run) =>
+            wanted.has(keyId(run.rootKey)) &&
+            ["queued", "running", "retrying"].includes(run.status)
         );
       },
       async listRecent() {
@@ -614,6 +630,9 @@ function createMemoryRepositories(): Repositories {
         return 0;
       },
       async listForMonitor() {
+        return [];
+      },
+      async activeRuns() {
         return [];
       }
     },
