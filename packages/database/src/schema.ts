@@ -374,7 +374,7 @@ export const manualDossierConnections = pgTable(
      * rather than a flag, so the moment the exclusion was made is recoverable.
      */
     excludedAt: timestamp("excluded_at", { withTimezone: true }),
-    /** `dossier` for reviewer links, `applicant_sheet` for application links. */
+    /** `dossier` for reviewer links, `applicant_sheet` for application links, `bot` for the bot API. */
     origin: text("origin").notNull().default("dossier"),
     /** The application that created the link; null once that row is deleted. */
     applicantApplicationId: uuid("applicant_application_id")

@@ -15,7 +15,7 @@ import {
   type PublicErrorCode
 } from "@slashwho/contracts";
 import type { CharacterKey } from "@slashwho/domain";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
 import { parseCharacterRoute } from "../lib/character-route";
 import { loadWebConfig } from "./config";
@@ -80,6 +80,29 @@ export function jsonNoStore<T>(
   const headers = new Headers(init.headers);
   headers.set("cache-control", "no-store");
   return Response.json(schema.parse(value), { ...init, headers });
+}
+
+/** A content hash used as an ETag, quoted as the header requires. */
+export function etagOf(value: unknown): string {
+  return `"${createHash("sha256").update(JSON.stringify(value)).digest("hex")}"`;
+}
+
+/** Whether `If-None-Match` names this entity tag (or accepts any). */
+export function ifNoneMatch(request: Request, etag: string): boolean {
+  const header = request.headers.get("if-none-match");
+  if (header === null) return false;
+  return header
+    .split(",")
+    .map((value) => value.trim())
+    .some((value) => value === "*" || value === etag);
+}
+
+/** A 304 carrying the tag, with no body. */
+export function notModified(etag: string): Response {
+  return new Response(null, {
+    status: 304,
+    headers: { etag, "cache-control": "no-store" }
+  });
 }
 
 /**

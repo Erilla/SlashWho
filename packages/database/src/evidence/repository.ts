@@ -741,6 +741,36 @@ export function createEvidenceRepositories(
         return result.rows;
       },
 
+      async activeRuns(keys) {
+        if (keys.length === 0) return [];
+        const result = await pool.query<{
+          id: string;
+          region: CharacterKey["region"];
+          realm_slug: string;
+          normalized_name: string;
+        }>(
+          `SELECT id, region, realm_slug, normalized_name
+             FROM character_evidence_runs
+            WHERE (region, realm_slug, normalized_name) IN (
+                    SELECT * FROM unnest($1::text[], $2::text[], $3::text[])
+                  )
+              AND status IN ('queued', 'running', 'retrying')`,
+          [
+            keys.map((key) => key.region),
+            keys.map((key) => key.realm),
+            keys.map((key) => key.name)
+          ]
+        );
+        return result.rows.map((row) => ({
+          id: row.id,
+          key: {
+            region: row.region,
+            realm: row.realm_slug,
+            name: row.normalized_name
+          }
+        }));
+      },
+
       async readRunProgress(ids, at) {
         if (Number.isNaN(at.valueOf())) {
           throw new RangeError("character_evidence_progress_time_invalid");

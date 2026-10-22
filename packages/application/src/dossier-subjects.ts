@@ -18,6 +18,8 @@ export type DossierSubject = Readonly<{
   guild: CharacterGuild | null;
   raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
+  /** Set on a manually connected character whose own discovery has not run. */
+  pending?: boolean;
   /** Set on a manual connection the applicant sheet watcher made; label only. */
   origin?: "application";
   /**
@@ -160,7 +162,7 @@ export async function legacyResolveSubjects(
         ...rest,
         guild: connectedGuild,
         source: "manually_added",
-        ...(origin === "applicant_sheet"
+        ...(origin === "applicant_sheet" || origin === "bot"
           ? { origin: "application" as const }
           : {})
       },

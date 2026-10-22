@@ -125,6 +125,55 @@ describe("PostgreSQL repositories: dossier connections", () => {
       ).toBe("dossier");
     });
 
+    it("never relabels an applicant or reviewer link when the bot adds it", async () => {
+      const root = {
+        region: "eu" as const,
+        realm: "hyjal",
+        name: "originroot"
+      };
+      const member = {
+        region: "eu" as const,
+        realm: "hyjal",
+        name: "originmember"
+      };
+      const other = {
+        region: "eu" as const,
+        realm: "hyjal",
+        name: "originother"
+      };
+      await pool.query(
+        "INSERT INTO characters (region, realm_slug, normalized_name, display_name, class_name, level, raider_io_url) VALUES ('eu', 'hyjal', 'originroot', 'Originroot', 'Mage', 80, 'https://raider.io/characters/eu/hyjal/originroot')"
+      );
+      const application = await insertApplication(pool);
+
+      await repositories.manualConnections.add(root, member, {
+        origin: "applicant_sheet",
+        applicationId: application
+      });
+      expect(
+        await repositories.manualConnections.add(root, member, {
+          origin: "bot"
+        })
+      ).toBe("duplicate");
+      expect(
+        (await repositories.manualConnections.list(root)).find(
+          (row) => row.key.name === member.name
+        )?.origin
+      ).toBe("applicant_sheet");
+
+      await repositories.manualConnections.add(root, other);
+      expect(
+        await repositories.manualConnections.add(root, other, {
+          origin: "bot"
+        })
+      ).toBe("duplicate");
+      expect(
+        (await repositories.manualConnections.list(root)).find(
+          (row) => row.key.name === other.name
+        )?.origin
+      ).toBe("dossier");
+    });
+
     it("reports a repeated link as a duplicate rather than adding it twice", async () => {
       await seedCompleteSnapshot(repositories);
       await repositories.manualConnections.add(rootKey, pendingKey);

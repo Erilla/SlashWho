@@ -519,6 +519,13 @@
       "when": 1792098000000,
       "tag": "0074_applicant_applications",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1792184400000,
+      "tag": "0075_bot_dossier_connections",
+      "breakpoints": true
     }
   ]
 }

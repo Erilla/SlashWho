@@ -191,6 +191,12 @@ it("exposes a dossier service built from server-only gateway dependencies", asyn
     async readEvidenceRunProgress() {
       return [];
     },
+    async readStored() {
+      return { kind: "not_found" as const };
+    },
+    async readStatus() {
+      return { kind: "not_found" as const };
+    },
     async read() {
       return { kind: "not_ready" as const };
     },
@@ -294,6 +300,7 @@ it("clears a rejected startup promise so the next request can recover", async ()
     return {
       searches: {} as never,
       dossiers: {} as never,
+      botDossiers: {} as never,
       collectionMonitor: {} as never,
       accountAuth: {} as never,
       accountAdmin: {} as never,

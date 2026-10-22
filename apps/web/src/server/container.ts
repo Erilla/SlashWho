@@ -1,10 +1,12 @@
 import {
   BLIZZARD_WEB_REQUEST_LIMITS,
   createApplicantDossierService,
+  createBotDossierService,
   createSearchService,
   throttleReporter,
   type ApplicantDossierService,
   type ApplicationConfig,
+  type BotDossierService,
   type SearchService
 } from "@slashwho/application";
 import {
@@ -48,6 +50,7 @@ type WebPool = {
 export type WebContainer = Readonly<{
   searches: SearchService;
   dossiers: ApplicantDossierService;
+  botDossiers: BotDossierService;
   collectionMonitor: CollectionMonitorService;
   accountAuth: AccountAuth;
   accountAdmin: Pick<
@@ -199,6 +202,12 @@ export async function createWebContainer(
         config.dossier.evidenceJobCredentialEncryptionKey,
       logger: webLogger
     });
+    const botDossiers = createBotDossierService({
+      repositories,
+      search: searches,
+      dossiers,
+      config: config.application
+    });
     const createWarcraftLogsGateway =
       dependencies.createWarcraftLogsGateway ?? createWarcraftLogsClient;
     const characterIds = createCharacterIdResolver({
@@ -213,6 +222,7 @@ export async function createWebContainer(
     return {
       searches,
       dossiers,
+      botDossiers,
       collectionMonitor,
       accountAuth,
       accountAdmin: repositories.accountAuth,
