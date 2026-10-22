@@ -664,4 +664,3 @@ describe("etag helpers", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 });
-
