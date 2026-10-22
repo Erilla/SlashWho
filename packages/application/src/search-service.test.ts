@@ -291,8 +291,19 @@ function policyFixture(
       async findActive() {
         return activeRun;
       },
+      async findActiveMany() {
+        return activeRun ? [activeRun] : [];
+      },
       async listRecent() {
         throw new Error("not used");
+      }
+    },
+    characters: {
+      async ensure() {
+        return "00000000-0000-4000-8000-000000000001";
+      },
+      async find() {
+        return true;
       }
     },
     snapshots: {
@@ -452,6 +463,9 @@ function policyFixture(
         return 0;
       },
       async listForMonitor() {
+        return [];
+      },
+      async activeRuns() {
         return [];
       }
     },

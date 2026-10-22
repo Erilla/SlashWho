@@ -1798,10 +1798,19 @@ describe("applicant dossier service", () => {
         snapshots: {},
         evidence: {},
         manualConnections: {},
-        runs: {}
+        runs: {},
+        recentSearches: {},
+        suppressions: {},
+        characters: {}
       } as unknown as Pick<
         Repositories,
-        "snapshots" | "evidence" | "manualConnections" | "runs"
+        | "snapshots"
+        | "evidence"
+        | "manualConnections"
+        | "runs"
+        | "recentSearches"
+        | "suppressions"
+        | "characters"
       >,
       search,
       queue: {
@@ -1947,7 +1956,17 @@ describe("applicant dossier service", () => {
       statusUrl: "/api/v1/searches/00000000-0000-4000-8000-000000000010",
       characterUrl: "/characters/eu/silvermoon/ryii",
       staleCharacter: null,
-      joinedExistingRun: true
+      joinedExistingRun: true,
+      profile: {
+        key: root,
+        displayName: "Ryii",
+        className: "Mage",
+        level: 80,
+        guild: null,
+        ownerId: null,
+        profileGuess: null,
+        declaredMain: null
+      }
     } as const;
     vi.mocked(search.create).mockResolvedValue(active);
 

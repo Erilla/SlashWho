@@ -54,6 +54,12 @@ export type CreateSearchResult =
       characterUrl: string;
       staleCharacter: CharacterResource | null;
       joinedExistingRun: boolean;
+      /**
+       * The profile this search read, so a caller that must create the
+       * character row can reuse it instead of reading Raider.IO again. Internal
+       * only: the public response never carries it.
+       */
+      profile: RaiderIoCharacter;
     }
   | { kind: "not_found"; code: "character_not_found" | "suppressed_character" }
   | { kind: "invalid"; code: "invalid_character_url" }
@@ -243,7 +249,8 @@ export function createSearchService(options: {
       SearchReservationResult,
       { kind: "active" | "reserved" }
     >,
-    staleCharacter: CharacterResource | null
+    staleCharacter: CharacterResource | null,
+    profile: RaiderIoCharacter
   ): Extract<CreateSearchResult, { kind: "job" }> {
     if (
       reservation.run.status !== "queued" &&
@@ -261,7 +268,7 @@ export function createSearchService(options: {
       characterUrl: toCharacterPath(reservation.run.rootKey)
     });
     if (response.kind !== "job") throw new Error("invalid_job_response");
-    return searchJobResultSchema.parse({
+    const parsed = searchJobResultSchema.parse({
       kind: "job",
       jobId: response.jobId,
       status,
@@ -270,6 +277,7 @@ export function createSearchService(options: {
       staleCharacter,
       joinedExistingRun: reservation.kind === "active"
     });
+    return { ...parsed, profile };
   }
 
   return {
@@ -330,8 +338,9 @@ export function createSearchService(options: {
         });
       }
 
+      let rootProfile: RaiderIoCharacter;
       try {
-        await readRootCharacter(key, scope);
+        rootProfile = await readRootCharacter(key, scope);
       } catch (error) {
         if (isUpstreamFailure(error) && error.kind === "not_found") {
           await repositories.negativeCache.put(
@@ -405,7 +414,7 @@ export function createSearchService(options: {
         ? serializeCharacterResource(current, reservation.run)
         : null;
       if (reservation.kind === "active") {
-        return jobResult(reservation, staleCharacter);
+        return jobResult(reservation, staleCharacter, rootProfile);
       }
 
       let queueJobId: string;
@@ -423,7 +432,7 @@ export function createSearchService(options: {
       await repositories.searchReservations
         .markEnqueued(reservation.run.id, queueJobId)
         .catch(() => undefined);
-      return jobResult(reservation, staleCharacter);
+      return jobResult(reservation, staleCharacter, rootProfile);
     },
 
     async authorizePublicRead(headers, scope) {
