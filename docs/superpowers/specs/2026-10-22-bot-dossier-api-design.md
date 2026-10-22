@@ -102,7 +102,8 @@ Both routes call one helper with these inputs:
   `completed_at`. A **pending manual connection** — a declared character with
   no snapshot and no terminal run — is an included subject whose terminal run
   is absent, so it keeps the dossier `collecting` until it settles;
-- the stored limitations.
+- the payload limitations, including the `request_cap` recorded for a subject
+  past `DOSSIER_CHARACTER_CEILING`.
 
 Rules, in order:
 
@@ -110,9 +111,11 @@ Rules, in order:
 2. A discovery run or any evidence run is active → `collecting`.
 3. Any included subject has no terminal run → `collecting`.
 4. The own snapshot's state is `partial` (for example `privacy_hidden`), or any
-   terminal run is `partial`, or a stored limitation remains → `partial`.
+   terminal run is `partial`, or the payload carries any limitation → `partial`.
 5. Otherwise → `ready`.
 
+A subject with an active evidence run is `scanning`, including a pending link
+that is being collected; one with no run and no terminal result is `waiting`.
 A borrowed declaring snapshot never counts as the own snapshot, so a character
 whose own discovery is still running is `collecting`, not a provisional
 `ready`. This deliberately differs from `research.state`; the public dossier is
@@ -192,9 +195,11 @@ that a suppressed character exists.
   `outcome` is `queued | existing | rate_limited | suppressed | not_found |
 failed`.
   `retryAfterSeconds` is present only when some character was limited. The HTTP
-  status is `202` when anything was queued and `200` when every character was
-  `existing`; a partial create still returns `202` with the limited characters
-  named, so the bot can show "queued 3 of 10" and retry only the rest.
+  status is `200` only when every character's outcome is `existing`; otherwise
+  `202` when anything was queued, skipped, suppressed or limited, and `503
+upstream_unavailable` when any outcome is `failed`. A partial create still
+  returns `202` with the limited characters named, so the bot can show "queued
+  3 of 10" and retry only the rest.
 
 - Replaying the create joins each active run (`existing`) and writes no link, so
   no second discovery run is queued. A `429` at character 4 leaves the first
@@ -247,14 +252,15 @@ Summary shape:
       ] }
   ],
   "raids": [
-    { "raidName": "The Venomous Abyss", "cuttingEdge": null,
+    { "raidName": "The Venomous Abyss",
       "bosses": [
         { "bossName": "Nymrissa Wavecaller", "state": "kill",
           "firstKilledAt": "2026-09-05T18:26:29.653Z",
-          "characters": [ … ], "worldRank": 1724,
+          "characters": ["eu/kazzak/raasta"], "worldRank": 1724,
           "reportUrl": "https://www.warcraftlogs.com/reports/…" }
       ] }
   ],
+  "raidsTruncated": false,           // older raids with kills were dropped
   "cuttingEdges": [ { "achievementName": "Cutting Edge: Midnight Falls",
                       "completedAt": "…" } ],
   "limitations": [ { "code": "history_limit", "affects": "kill_history",
@@ -282,25 +288,31 @@ Projection rules:
   in two guilds appears in both; a night with kills in both counts for each.
   The span's `tiers` are the span's tier names.
 - Each span's `raids` are the stored kills in that span and guild, grouped by
-  raid: kills, first/last kill, and **display names**. There is no per-stint
-  `cuttingEdge`: stored Cutting Edge is account-wide and carries no guild or
-  raid, so attributing it to a stint would be invented.
+  raid. `kills` counts **distinct kill events** — a boss at one moment is one
+  event however many roster rows name it — and `characters` unions the
+  `region/realm/name` identities on those events. There is no Cutting Edge on a
+  stint: stored Cutting Edge is account-wide and carries no guild or raid.
 - Top-level `raids` keeps bosses whose state is `kill` or `wipe`, for raids with
-  at least one kill, and is capped at the **five most recent such raids**. The
-  bot's own raid view already stops at five tiers, so this is parity; older
-  raids remain reachable through the dossier link. `no_logs` and `incomplete`
-  bosses are omitted. Boss `characters` are display names; the top-level
-  `characters` list carries the key for each name. `cuttingEdge`
-  is `true | null`: `true` means stored evidence supports it, `null` means the
-  stored-only read did not restore it, **not** that the account lacks it. The
-  bot must not render `null` as false.
+  at least one kill, ordered by **latest activity** (newest first) and capped at
+  the five most recent such raids. `raidsTruncated: true` says older raids with
+  kills were dropped. `no_logs` and `incomplete` bosses are omitted. Boss
+  `characters` are `region/realm/name` identities; the top-level `characters`
+  list carries the full key, and two same-named characters on different realms
+  stay distinct. There is no per-raid `cuttingEdge`: the domain never sets it,
+  so the account's achievements in `cuttingEdges` are the only Cutting Edge
+  claim.
 - `cuttingEdgesRestored` is true only when every included subject has stored
   evidence whose Cutting Edge was collected. When false, `cuttingEdges` is an
   incomplete list, not a statement that none exist.
 - `bestWipePercent` is omitted: no stored evidence carries a wipe percentage.
 - `limitations` keeps `code`, `affects` and the character key; the prose
-  `message` and recovery policy are web-only.
-- `ETag` is the SHA-256 of the serialized summary body. `304` on a match.
+  `message` and recovery policy are web-only. A `privacy_hidden` snapshot adds
+  `{ "code": "privacy_hidden", "affects": "linked_characters" }` so a partial
+  state is never explained by an empty list.
+- `ETag` is the SHA-256 of the serialized summary body. `304` on a match. The
+  status ETag covers only the four status fields, not the summary; suppressing a
+  non-oldest character can change the summary while `state`, `snapshotId`,
+  `lastCollectedAt` and `evidenceRunIds` stay the same.
 
 The response must stay under 40 KB for the measured 2-, 5- and 8-character
 samples. The 1.7 MB demo dossier (`apps/web/src/app/demo/ryii-dossier.json`)
@@ -401,9 +413,12 @@ bot identity; a missing, malformed or wrong key returns `401 unauthorized`
 Creates and add-character are charged by the search they start: one search per
 character that queues or joins a run. A path that settles on an already-fresh
 snapshot, or on an existing link with completed evidence, spends no provider
-work and is not charged. Refresh is charged one search explicitly before it
-reserves an evidence run. Status and summary reserve the read bucket. `429`
-carries `Retry-After`.
+work and is not charged. Refresh charges through a gate that runs after the
+light-refresh skip decision and immediately before the reservation, so a settled
+light refresh costs nothing. Status and summary reserve the read bucket only
+after the key is known to exist, so a suppressed or unknown key is a `404` even
+when the bucket is exhausted and a retry costs no read token. `429` carries
+`Retry-After`.
 
 ## Failure semantics
 
