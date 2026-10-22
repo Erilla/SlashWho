@@ -10,12 +10,53 @@ export function createSmallStoreRepositories(
 ): Pick<
   Repositories,
   | "manualConnections"
+  | "characters"
   | "suppressions"
   | "rateLimits"
   | "recentSearches"
   | "negativeCache"
 > {
   return {
+    characters: {
+      async ensure(input) {
+        const values = [
+          input.key.region,
+          input.key.realm,
+          input.key.name,
+          input.displayName,
+          input.className,
+          input.level,
+          input.raiderIoUrl
+        ];
+        const inserted = await pool.query<{ id: string }>(
+          `INSERT INTO characters
+             (region, realm_slug, normalized_name, display_name, class_name,
+              level, raider_io_url)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (region, realm_slug, normalized_name) DO NOTHING
+           RETURNING id`,
+          values
+        );
+        if (inserted.rows[0]) return inserted.rows[0].id;
+        // A conflicting insert returns no row, so the existing id is read
+        // separately. The row is left untouched: the snapshot's profile is
+        // authoritative.
+        const existing = await pool.query<{ id: string }>(
+          `SELECT id FROM characters
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          values.slice(0, 3)
+        );
+        return one(existing).id;
+      },
+      async find(key) {
+        const result = await pool.query(
+          `SELECT 1 FROM characters
+            WHERE region = $1 AND realm_slug = $2 AND normalized_name = $3`,
+          [key.region, key.realm, key.name]
+        );
+        return result.rowCount === 1;
+      }
+    },
     manualConnections: {
       async listDiscoveredExclusions(root) {
         const result = await pool.query<{
@@ -100,7 +141,7 @@ export function createSmallStoreRepositories(
             character.realm,
             character.name,
             options?.origin ?? "dossier",
-            options?.applicationId ?? null
+            options?.origin === "applicant_sheet" ? options.applicationId : null
           ]
         );
         return result.rows[0]?.inserted === true ? "added" : "duplicate";
@@ -167,7 +208,7 @@ export function createSmallStoreRepositories(
             level: row.level ?? 0,
             raiderIoUrl: row.raider_io_url ?? toRaiderIoUrl(key),
             pending: row.display_name === null,
-            origin: row.origin as "dossier" | "applicant_sheet",
+            origin: row.origin as "dossier" | "applicant_sheet" | "bot",
             excluded: row.excluded
           };
         });
