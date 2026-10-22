@@ -1,6 +1,6 @@
 # Bot-facing dossier API under `/api/v1` — design
 
-**Status:** draft for review. Implements Erilla/SlashWho#916.
+**Status:** revised for review. Implements Erilla/SlashWho#916.
 
 **Goal.** One authenticated, bot-only API so the Discord bot can create a single
 dossier from every character an application named, poll it cheaply, and read a
@@ -10,128 +10,205 @@ chat-sized summary that costs no provider budget.
 
 - No webhooks, callbacks or push notifications.
 - No change to the public `/api/dossiers` contract, payload or read path.
-- No Discord id, BattleTag, message id, application id or client IP is stored,
-  logged or returned.
+- No Discord id, BattleTag, message id, application id, client IP, key or raw
+  request URL is stored, logged or returned.
 - No Chinese-region support (#86).
 - No confidence scoring from SlashWho. See decision 1.
 
 ## What already exists
 
-- `classifyCaller` (`packages/application/src/auth.ts`) already classifies a
-  valid `Authorization: Bearer <BOT_API_KEY>` as `bot`, and throws
-  `unauthorized` for a wrong key. A missing header falls through to the trusted
-  client-IP path and returns `anonymous`, which v1 must refuse.
-- The rate limiter already has a bot search bucket
-  (`BOT_SEARCHES_PER_HOUR`, default 60) and a read bucket
-  (`PUBLIC_READS_PER_MINUTE`, default 300), both keyed by a hashed bot bucket.
-- `ApplicantDossierService` assembles the public dossier, including the
+- `classifyCaller` (`packages/application/src/auth.ts`) classifies a valid
+  `Authorization: Bearer <BOT_API_KEY>` as `bot` and throws `unauthorized` for a
+  wrong key. A missing header falls through to the trusted client-IP path and
+  returns `anonymous`, which v1 must refuse.
+- The rate limiter has a bot search bucket (`BOT_SEARCHES_PER_HOUR`, default 60)
+  and a read bucket (`PUBLIC_READS_PER_MINUTE`, default 300), both keyed by a
+  hashed bot bucket.
+- `ApplicantDossierService` assembles the public dossier, including
   applicant-sheet links labelled "From application".
 - `manual_dossier_connections.origin` is `dossier` or `applicant_sheet`.
-- A manual connection stores the _connected_ side by key, so that side may not
-  exist yet. The **root** side is still a foreign key to `characters`.
+- A manual connection stores the _connected_ side by key, so it may not exist
+  yet. The **root** side is a foreign key to `characters`.
+- `manualConnections.list` filters the connected side against
+  `suppressed_characters` (`packages/database/src/small-stores.ts:142-149`).
+  A link to a suppressed character is written and then omitted from every
+  dossier read.
+- `evidence.getCompleted` (`packages/database/src/evidence/load.ts:39-62`) has
+  no suppression filter, while `snapshots.getCurrent` does
+  (`packages/database/src/snapshots.ts:74-81`).
 - Fingerprint-derived membership intentionally stores no score or confidence
   (`CONTEXT.md` — Source label; the fingerprint discovery spec, line 192).
 
-## Decisions to sign off
+## Decisions
 
-1. **Confidence is null in v1.** The issue asks for the fingerprint confidence
-   the bot currently shows. SlashWho does not retain one: the fingerprint is
-   ephemeral and snapshot membership stores no score, by explicit design. The
-   summary will carry `confidence: number | null`, always `null`, with a
-   doc comment and a contract test. This keeps the bot's boundary stable
-   without inventing a number. Shipping a real score means changing discovery
-   and snapshot storage, which is a separate issue.
-2. **Links before the root exists.** `manual_dossier_connections.root_character_id`
-   references `characters`, and a character row is created when a snapshot
-   publishes. A create that linked immediately would silently write nothing for
-   a new root. We will add a small `characters.ensure` store, populated from the
-   Raider.IO profile the root search already reads, before any link is written.
-   No pending-link table and no worker change.
-3. **`snapshotId` is API-only.** The public dossier schema has no snapshot id.
-   The summary and status expose the current root snapshot's id (or the borrowed
-   declaring snapshot's id when the root has none of its own). The public
-   payload stays unchanged.
-4. **Summary reads use stored evidence only.** The issue requires reads to spend
-   no provider budget. The public read can call Blizzard for Cutting Edge and
-   Raider.IO to restore missing historic ranks, and can reserve evidence runs.
-   The bot summary assembles from stored evidence: no evidence reservation, no
-   live Cutting Edge read, no rank restore. It may therefore lag a public read
-   by one collection; the bot calls `/refresh` when it wants more.
-5. **Status is a lightweight projection.** It reads the current snapshot,
-   active evidence runs and the latest completed run per subject; it does not
-   assemble the dossier. A test asserts its `state` agrees with the summary's
-   `state` for representative collecting, ready and partial fixtures.
-6. **A new `bot` origin.** Bot links are `origin = 'bot'` with no foreign key.
+1. **Confidence is null in v1.** SlashWho does not retain a fingerprint score.
+   The summary carries `confidence: number | null`, always `null`, with a doc
+   comment and a contract test. The contract says the bot must not infer a score
+   from it. A real score is a separate discovery/storage change.
+2. **Links are written only after the search is accepted.** `search.create`
+   checks suppression before reading Raider.IO and returns the profile it read
+   on the queued path. Create writes `characters.ensure` and the `bot` link
+   only after that acceptance, so a `429`, a suppressed root or a `not_found`
+   root writes nothing. The fresh-root path reads no profile at all because a
+   fresh snapshot already implies its `characters` row.
+3. **A suppressed target is skipped, not linked.** `manualConnections.list`
+   hides suppressed connected characters, so a written link would silently
+   disappear. Create and add-character check suppression first and report the
+   character as `suppressed`; no row is written. The summary and status also
+   filter suppressed subjects explicitly, because `evidence.getCompleted` has
+   no suppression filter of its own.
+4. **Summary reads use stored evidence only.** The summary assembles from
+   `evidence.getCompleted`: no reservation, no live Blizzard Cutting Edge read,
+   no Raider.IO rank restore, no publish, no repair, no queue. `cuttingEdge:
+null` means "not restored by this read", never "not earned". If no stored
+   evidence exists for a subject, the state says `collecting` rather than
+   pretending the dossier is complete.
+5. **One bot `state`, shared by status and summary.** It is a separate
+   projection from the public `research.state`. `research.state` is derived
+   from the borrowed-snapshot flag and the snapshot's own state, and is
+   overridden to `gathering` while evidence gathers; it can say `partial`
+   forever for a privacy-hidden snapshot. The bot projection is run-based and
+   is defined once in the next section, so status and summary cannot disagree.
+   The public dossier keeps its existing meaning.
+6. **`snapshotId` is the publish gate.** The bot publishes only when status and
+   summary both say `ready` or `partial` **and** both carry the same non-null
+   `snapshotId`. A snapshot publishing between the two reads is detected by the
+   mismatch and the bot re-reads.
+7. **A new `bot` origin.** Bot links are `origin = 'bot'` with no foreign key.
    The public dossier maps both `applicant_sheet` and `bot` to
    `origin: "application"`, so reviewers still read "From application".
+8. **At most 10 declared characters per create.** A maximum create spends 10 of
+   the bot's 60 searches an hour, leaving 50 for retries and later calls. The
+   applicant sheet's own cap is lower (root plus four). The bot's existing
+   `429` pause/resume covers a bucket that is already spent.
+
+## Bot `state` (source of truth)
+
+Both routes call one helper with these inputs:
+
+- the **own** root snapshot (`snapshots.getCurrent`), or null;
+- whether a discovery run is active (`runs.findActive(root)`);
+- the active evidence-run ids for the dossier's subjects;
+- each included subject's latest terminal run (`complete` or `partial`) and its
+  `completed_at`;
+- the stored limitations.
+
+Rules, in order:
+
+1. No own snapshot → `collecting`.
+2. A discovery run or any evidence run is active → `collecting`.
+3. Any included subject has no terminal run → `collecting`.
+4. The own snapshot's state is `partial` (for example `privacy_hidden`), or any
+   terminal run is `partial`, or a stored limitation remains → `partial`.
+5. Otherwise → `ready`.
+
+A borrowed declaring snapshot never counts as the own snapshot, so a character
+whose own discovery is still running is `collecting`, not a provisional
+`ready`. This deliberately differs from `research.state`; the public dossier is
+unchanged.
+
+`lastCollectedAt` is the oldest `completed_at` among those latest terminal runs,
+matching the public dossier's definition, or null before any run. `snapshotId`
+is the own snapshot's id, or null until it exists; a borrowed snapshot's id is
+never used. `evidenceRunIds` are the active evidence runs.
 
 ## Endpoints
 
-All under `/api/v1`, all Bearer-only. A missing or invalid key is
-`401 unauthorized`; the anonymous client-IP fallback is never used on these
-routes.
+All under `/api/v1`, all Bearer-only. A missing, malformed or wrong key is
+`401 unauthorized`; the anonymous client-IP fallback is never used.
 
-| Call                                                       | Request                                    | Response                                                                           |
-| ---------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `POST /api/v1/dossiers`                                    | `{ "characters": ["<raider.io url>", …] }` | `202` or `200` with `{ root, state, snapshotId, lastCollectedAt, evidenceRunIds }` |
-| `GET /api/v1/dossiers/{region}/{realm}/{name}/status`      | optional `If-None-Match`                   | `{ state, snapshotId, lastCollectedAt, evidenceRunIds, etag }`; `304`              |
-| `GET /api/v1/dossiers/{region}/{realm}/{name}`             | optional `If-None-Match`                   | summary; `304`                                                                     |
-| `POST /api/v1/dossiers/{region}/{realm}/{name}/characters` | `{ "characterUrl": "<url>" }`              | `200 { kind: "linked", jobId? }`                                                   |
-| `POST /api/v1/dossiers/{region}/{realm}/{name}/refresh`    | —                                          | `{ mode, lastCollectedAt }`                                                        |
+| Call                                                       | Request                                          | Response                                                                                   |
+| ---------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `POST /api/v1/dossiers`                                    | `{ "characters": ["<raider.io url>", …] }`, 1–10 | `200`/`202` create result with per-character outcomes; `429` only when the root is limited |
+| `GET /api/v1/dossiers/{region}/{realm}/{name}/status`      | optional `If-None-Match`                         | `{ state, snapshotId, lastCollectedAt, evidenceRunIds, etag }`; `304`                      |
+| `GET /api/v1/dossiers/{region}/{realm}/{name}`             | optional `If-None-Match`                         | summary; `304`; `200 collecting` once the dossier is known                                 |
+| `POST /api/v1/dossiers/{region}/{realm}/{name}/characters` | `{ "characterUrl": "<url>" }`                    | `200`/`202` linked, or `429`                                                               |
+| `POST /api/v1/dossiers/{region}/{realm}/{name}/refresh`    | —                                                | `{ mode, lastCollectedAt }`                                                                |
+
+**Existence and suppression.** A key is _known_ when its `characters` row
+exists, it is not suppressed, and it has a snapshot or a discovery/evidence
+run. Create ensures the root row only after a search is accepted, so a created
+dossier is always known. Status and summary return `404 character_not_found`
+for an unknown key and for a suppressed key, so a removal request stops the bot
+polling. Create and add-character return `404 suppressed_character` when the
+root or target is suppressed, before any write; that is where the bot learns
+the removal request applies. The two codes are deliberate: reads do not confirm
+that a suppressed character exists.
 
 ### `POST /api/v1/dossiers`
 
-- 1–50 character URLs. The first is the root.
-- Parse every URL with `parseRaiderIoCharacterUrl` before doing anything.
-  One invalid URL fails the whole request with `400 invalid_character_url`
-  and queues nothing.
-- Resolve the root profile through Raider.IO (the existing search read).
-  A missing root is `404 character_not_found`; an upstream failure is `503`.
-- `characters.ensure` writes the root row from that profile.
-- Start the root search, which reserves one search from the bot's 60/hour
-  bucket, then write one `bot` link per other character and start each
-  character's search, one reservation each. A link is written even when that
-  character's search is suppressed or not found: it is the applicant's
-  statement, and the dossier will show it as pending.
-- A replay joins each active run and writes no link (the link is a no-op), so
-  no second discovery run is queued.
-- A `429` after some characters have been processed is possible. The links
-  already written stay; retrying the same create is idempotent. This is
-  documented rather than hidden behind an all-or-nothing reservation.
-- Returns `200` when the root already has a fresh snapshot, `202` otherwise.
-  `state` is `collecting` until a snapshot exists.
+- Parse every URL with `parseRaiderIoCharacterUrl` before doing anything. One
+  invalid URL fails the whole request with `400 invalid_character_url` and
+  queues nothing.
+- Start the root search first. `search.create` checks suppression and returns:
+  - `not_found` → `404 character_not_found`;
+  - `suppressed_character` → `404 suppressed_character`;
+  - `rate_limited` → `429` with the root's outcome and `Retry-After`;
+  - `job` (with the profile it read) or `character` (fresh) → accepted.
+- On acceptance, `characters.ensure` writes the root row from the returned
+  profile (a no-op when the fresh path already has one). `ensure` is an
+  `INSERT … ON CONFLICT DO NOTHING`, so it never lowers a class or level the
+  snapshot wrote.
+- For each other character, in order: start its search; only when accepted,
+  write the `bot` link with `ON CONFLICT DO NOTHING`. A `429`, `not_found` or
+  `suppressed` target is recorded and **not** linked, so no link is left
+  pending forever. A link to an existing `applicant_sheet` or `dossier` row is
+  never relabelled.
+- Response:
+
+  ```jsonc
+  {
+    "root": { "region": "eu", "realm": "kazzak", "name": "raasta" },
+    "state": "collecting",
+    "snapshotId": null,
+    "lastCollectedAt": null,
+    "evidenceRunIds": [],
+    "outcomes": [
+      { "key": { … }, "outcome": "queued", "jobId": "…" },
+      { "key": { … }, "outcome": "existing" },
+      { "key": { … }, "outcome": "rate_limited" }
+    ],
+    "retryAfterSeconds": 17
+  }
+  ```
+
+  `outcome` is `queued | existing | rate_limited | suppressed | not_found`.
+  `retryAfterSeconds` is present only when some character was limited. The HTTP
+  status is `202` when anything was queued and `200` when every character was
+  `existing`; a partial create still returns `202` with the limited characters
+  named, so the bot can show "queued 3 of 10" and retry only the rest.
+
+- Replaying the create joins each active run (`existing`) and writes no link, so
+  no second discovery run is queued. A `429` at character 4 leaves the first
+  three queued and reports the rest truthfully; the retry is the same create
+  with `existing` outcomes for the first three.
 
 ### `GET .../status`
 
-Small body, no dossier assembly:
+Small body, DB-only, no provider calls:
 
-- `state`: `collecting` when there is no snapshot or any active evidence or
-  discovery run for the dossier's keys; `partial` when the latest completed
-  runs are partial; `ready` otherwise.
-- `snapshotId`: the current root snapshot, or the borrowed declaring snapshot.
-- `lastCollectedAt`: the oldest `completed_at` among the latest completed runs,
-  matching the summary's definition.
-- `evidenceRunIds`: the active runs, so the bot can see collection moving.
-- `etag`: hash of the body without the etag. `304` on `If-None-Match`.
-- A character that has never been searched is `404 character_not_found`.
-
-Status and summary reads reserve from the read bucket, never the search bucket.
+- `state`, `snapshotId`, `lastCollectedAt`, `evidenceRunIds` from the shared
+  state helper.
+- `etag`: SHA-256 of the body without the etag. `304` on `If-None-Match`.
+- `404 character_not_found` for an unknown or suppressed key.
+- Reserves the read bucket, never the search bucket.
 
 ### `GET /api/v1/dossiers/{region}/{realm}/{name}`
 
-Returns the summary. A dossier with no snapshot yet is **`200` with
-`state: "collecting"`** and empty lists, not an error. This avoids the
-`404`/`409` ambiguity in the consumer issue and means the bot only publishes
-when `state` is `ready` or `partial`.
+Returns the summary. Once the key is known, a dossier with no own snapshot yet
+is `200` with `state: "collecting"` and empty lists; an unknown or suppressed
+key is `404` (the same answer as status). This removes the earlier 404-versus-
+200 disagreement for one key.
 
-Summary shape, derived from the assembled stored dossier:
+Summary shape:
 
 ```jsonc
 {
   "root": { "region": "eu", "realm": "kazzak", "name": "raasta" },
   "state": "ready",                 // collecting | ready | partial
-  "snapshotId": "…",                 // null before the first snapshot
+  "snapshotId": "…",                 // null before the own snapshot exists
   "lastCollectedAt": "2026-10-22T09:45:52.977Z",
+  "cuttingEdgesRestored": true,      // false when stored evidence cannot say
   "characters": [
     { "key": { … }, "displayName": "raasta", "className": "Shaman",
       "guild": { "name": "Spilled Coffee", "region": "eu", "realm": "kazzak" },
@@ -139,14 +216,14 @@ Summary shape, derived from the assembled stored dossier:
   ],
   "guildHistory": [
     { "guild": { … }, "firstNight": "2026-01-18", "lastNight": "2026-10-11",
-      "raidNights": 7,
+      "raidNights": 7, "tiers": ["The Venomous Abyss"],
+      "characters": [ … ],
       "raids": [
         { "raidName": "The Venomous Abyss", "kills": 7,
           "firstKillAt": "2026-09-05T18:26:29.653Z",
           "lastKillAt": "2026-10-09T21:09:30.000Z",
-          "cuttingEdge": false, "characters": [ … ] }
-      ],
-      "characters": [ … ] }
+          "characters": [ … ] }
+      ] }
   ],
   "raids": [
     { "raidName": "The Venomous Abyss", "cuttingEdge": null,
@@ -166,34 +243,56 @@ Summary shape, derived from the assembled stored dossier:
 
 Projection rules:
 
-- Excluded characters are omitted, as they are from the dossier's evidence.
-- `guildHistory` is derived from every stored Mythic kill: a guild per entry,
-  UTC kill dates for nights, and one stint per raid with its first and last
-  kill, kill count, Cutting Edge flag and character keys. It is not the
-  existing `guildHistory` nights list, which does not carry raids.
-- `raids` keeps bosses whose state is `kill` or `wipe`, for raids with at least
-  one kill. `no_logs` and `incomplete` bosses are omitted: they are chat noise
-  and dominate the payload. A raid with no kills is omitted.
-- `characters` inside guild history and bosses are character keys, not prose.
-- `confidence` is always `null` (decision 1).
-- `bestWipePercent` is omitted: no stored evidence carries a wipe percentage,
-  and a field that is always null says less than its absence.
+- Suppressed and excluded characters are omitted, as they are from the
+  dossier's evidence.
+- `guildHistory` is built from `collectGuildRaidNights` and
+  `guildTimelineSpans` (`packages/domain/src/guild-history.ts`), the same rules
+  as the page: a UTC calendar day is a raid night, renames merge through
+  `guildIdentity`, a guild seen on a single night is dropped as a pug
+  (`MINIMUM_GUILD_NIGHTS = 2`), and a span splits only when a whole tier passes
+  between nights. Each entry is a **span**, not a guild. A character with kills
+  in two guilds appears in both; a night with kills in both counts for each.
+  The span's `tiers` are the span's tier names.
+- Each span's `raids` are the stored kills in that span and guild, grouped by
+  raid: kills, first/last kill, and character keys. There is no per-stint
+  `cuttingEdge`: stored Cutting Edge is account-wide and carries no guild or
+  raid, so attributing it to a stint would be invented.
+- Top-level `raids` keeps bosses whose state is `kill` or `wipe`, for raids with
+  at least one kill. `no_logs` and `incomplete` bosses are omitted. `cuttingEdge`
+  is `true | null`: `true` means stored evidence supports it, `null` means the
+  stored-only read did not restore it, **not** that the account lacks it. The
+  bot must not render `null` as false.
+- `cuttingEdgesRestored` is true only when every included subject has stored
+  evidence whose Cutting Edge was collected. When false, `cuttingEdges` is an
+  incomplete list, not a statement that none exist.
+- `bestWipePercent` is omitted: no stored evidence carries a wipe percentage.
 - `limitations` keeps `code`, `affects` and the character key; the prose
   `message` and recovery policy are web-only.
 - `ETag` is the SHA-256 of the serialized summary body. `304` on a match.
 
 The response must stay under 40 KB for the measured 2-, 5- and 8-character
 samples. The 1.7 MB demo dossier (`apps/web/src/app/demo/ryii-dossier.json`)
-gives a real 5-character projection to measure; an 8-character synthetic case
-is built from it in a unit test.
+gives a real 5-character projection. For the 8-character case, capture a real
+stored dossier during implementation if it is cheap; otherwise use a clearly
+labelled synthetic expansion and record which was used.
 
 ### `POST .../characters`
 
-- Validates the URL, then resolves the root dossier. An unknown root is `404`.
-- Writes the `bot` link first and starts the character's search. An existing
-  link returns `200 { kind: "linked" }` and queues nothing new.
-- A rate-limited search returns `429`; the link remains, and a retry is
-  idempotent.
+- Validates the URL and the root. An unknown or suppressed root is `404`.
+- If the link already exists:
+  - with completed evidence → `200 { kind: "linked" }`, no search;
+  - without completed evidence → start the search to resume it. `202
+{ kind: "linked", jobId }` when queued, `200` when fresh, `429` when
+    limited. The link is left in place. This is the retry path after a
+    rate-limited create.
+- If the link does not exist: start the search; only when accepted, write the
+  `bot` link. A `429`, `not_found` or `suppressed` target returns the matching
+  error and writes nothing.
+- `{ origin: "bot" }` is `ON CONFLICT DO NOTHING`, so an existing
+  `applicant_sheet` or `dossier` origin survives a second add. A test asserts
+  the existing origin and the public "From application" label.
+- A rate-limited search returns `429`; the retry resumes it, so the character
+  cannot stay pending with no run.
 
 ### `POST .../refresh`
 
@@ -207,88 +306,116 @@ New `packages/contracts/src/bot-dossier.ts`, strict zod throughout:
 
 - `botDossierStateSchema`
 - `botDossierStatusSchema`
-- `botDossierSummarySchema`
-- `botCreateDossierRequestSchema` (`characters` 1–50)
+- `botDossierSummarySchema` (including `cuttingEdgesRestored` and
+  `confidence: z.number().min(0).max(100).nullable()`)
+- `botCreateDossierRequestSchema` (`characters` 1–10)
+- `botCreateDossierResponseSchema` (with `outcomes`)
 - `botAddDossierCharacterRequestSchema`
-- `botCreateDossierResponseSchema`
 - `botAddDossierCharacterResponseSchema`
 
-Types are re-exported from `packages/contracts/src/index.ts`. Every response is
-validated with the same schema at the route boundary, as the public routes do.
+Types are re-exported from `packages/contracts/src/index.ts`; every route
+validates its response with the same schema.
 
-`tests/fixtures/contracts/bot-client-v1.json` is rewritten to describe only
-these implemented endpoints, and a contract test parses every fixture response
-against its schema. The stale `/api/v1/searches` and `/api/v1/characters`
-entries are removed.
+`tests/fixtures/contracts/bot-client-v1.json` is **rewritten**, not patched.
+The stale `/api/v1/searches`, `/api/v1/characters`, history and snapshot entries
+are removed; the fixture describes only the five implemented routes above. A
+contract test parses every fixture response against its schema.
 
 ## Storage and services
 
-- **Migration 0075** widens the `manual_dossier_connections.origin` check to
-  include `bot`. Additive, no backfill, no new table. Journal entry in
-  `packages/database/drizzle/meta/_journal.json`.
-- `ManualConnectionRepository.add` accepts
-  `{ origin: "applicant_sheet"; applicationId } | { origin: "bot" }`;
-  `ManualConnectionCharacter.origin` includes `bot`; `list` maps it.
-- `legacyResolveSubjects` maps both `applicant_sheet` and `bot` to
-  `origin: "application"` on the public dossier character.
-- New `characters.ensure` store: the same upsert as the snapshot writer's
-  `upsertCharacters`, extracted so both paths use one statement.
-- `SearchService.resolveCharacter(key)` exposes the root profile read the
-  search already performs, so create can ensure the row without a second
-  Raider.IO request.
+- **Migration 0075** (`0075_bot_dossier_connections.sql`) must
+  `ALTER TABLE manual_dossier_connections DROP CONSTRAINT
+manual_dossier_connections_origin_check` and add the widened check including
+  `'bot'`; the current check is inline on the column in `0074:45-49`. The
+  journal entry is `idx: 74`, `when: 1792184400000` (strictly greater than
+  `1792098000000`; recheck against `origin/main` before opening the PR). The
+  migrations test pins an explicit tail, so `slice(-42)` becomes `slice(-43)`
+  and the list gains `{ idx: 74, tag: "0075_bot_dossier_connections" }`.
+- Every origin enumeration changes together:
+  - `packages/database/src/repositories.ts:208` (`ManualConnectionCharacter.origin`);
+  - `packages/database/src/repositories.ts:227` (`add` options);
+  - `packages/database/src/small-stores.ts:170` (the cast);
+  - `packages/application/src/dossier-subjects.ts:163` (the public label — miss
+    this and bot links read "Manually added");
+  - `packages/database/src/schema.ts:377` (the comment);
+  - `tests/integration/repositories-dossier-connections.test.ts` and
+    `tests/integration/migrations.test.ts`.
+- New `characters.ensure`: `INSERT … ON CONFLICT (region, realm_slug,
+normalized_name) DO NOTHING`, returning the row id. It never overwrites a
+  snapshot's class, level, display name or URL, and a link written before the
+  first snapshot survives that snapshot. One test pins each.
+- `SearchService.create` returns the `RaiderIoCharacter` profile on the `job`
+  result (internal only; the public `startResultResponse` ignores it). The bot
+  create passes it to `characters.ensure` after acceptance, so the fresh path
+  adds no Raider.IO read and the stale path reads once.
 - `ApplicantDossierService` gains `readSummary(key, scope)` and
-  `readStatus(key, scope)`. `assembleDossier` gains a stored-only mode that
-  reads `evidence.getCompleted` per subject, uses stored Cutting Edge and stored
-  historic ranks, and never schedules or calls a provider. The public read path
-  is untouched.
+  `readStatus(key, scope)`. `assembleDossier` gains a stored-only mode that:
+  - reads `evidence.getCompleted` per subject with an explicit
+    `suppressions.isActive` check before each subject and alias;
+  - uses stored Cutting Edge and stored historic ranks only;
+  - never schedules, publishes, repairs or queues;
+  - returns the evidence metadata the shared state helper needs.
+    The public read path is untouched.
 
 ## Auth and limits
 
-A small `requireBot` helper wraps `classifyCaller`:
-
-- valid Bearer key → `{ callerClass: "bot", bucketHash }`
-- missing, malformed or wrong key → `401 unauthorized` (never
-  `trusted_client_ip_unavailable`, never anonymous)
+A `requireBot` helper wraps `classifyCaller`: a valid Bearer key returns the
+bot identity; a missing, malformed or wrong key returns `401 unauthorized`
+(never `trusted_client_ip_unavailable`, never anonymous).
 
 Creates, add-character and refresh reserve the bot search bucket once per
 character. Status and summary reserve the read bucket. `429` carries
-`Retry-After`, as the public routes already do.
+`Retry-After`.
 
 ## Failure semantics
 
 - Invalid URL: `400`, nothing queued.
-- Unknown root: `404`.
-- Suppressed character: linked but not collected (`404` from its search is not
-  an error for the create).
-- `429`: existing bucket semantics with `Retry-After`.
+- Unknown key: `404 character_not_found`.
+- Suppressed root/target at create or add: `404 suppressed_character`, nothing
+  written. Suppressed key at status/summary: `404 character_not_found`.
+- `429`: existing bucket semantics with `Retry-After`; a partial create returns
+  `202` with per-character outcomes and a `retryAfterSeconds`.
 - `research = partial` is a normal summary state; `limitations` explains it.
+  `cuttingEdge: null` and `cuttingEdgesRestored: false` mean the stored read
+  could not restore it.
 - Upstream failure: `503 upstream_unavailable`.
 
 ## Testing
 
 - **Unit:** contracts accept/reject; summary projection (collecting, ready,
-  partial, exclusions, empty); size guard on the demo dossier and an
-  8-character synthetic dossier; status/summary state agreement; ETag stability
-  and `304`; `requireBot` rejects missing, malformed and wrong keys.
-- **Integration:** create with three characters writes three rows with
-  `origin = 'bot'` and the public dossier labels each "From application";
-  invalid URL queues nothing; a replayed create queues no second discovery run;
-  add-character is idempotent; status and summary `304`; a stored-only summary
-  with throwing provider gateways succeeds; per-character search limits apply;
-  migration 0075 applies and preserves existing rows.
+  partial, exclusions, empty); `guildHistory` spans (one-night pug dropped,
+  rename merged, tier gap split, multi-guild character, no per-stint
+  `cuttingEdge`); `cuttingEdge`/`cuttingEdgesRestored` semantics; the 40 KB
+  guard on the demo and the 8-character case; the shared state helper across
+  no-snapshot, discovery-active, evidence-active, partial-run, privacy-hidden
+  and borrowed-snapshot fixtures; ETag stability and `304`; `requireBot` rejects
+  missing, malformed and wrong keys.
+- **Integration:** create links every accepted character with `origin = 'bot'`
+  and the public dossier labels each "From application"; a suppressed target is
+  skipped and reports `suppressed` with no row; an invalid URL queues nothing;
+  a fresh-root create makes no Raider.IO call; a stale/new root reads once and
+  ensures after acceptance; replay queues no second discovery run; a partial
+  `429` reports per-character outcomes; add-character resumes a link with no
+  evidence and queues exactly one search; an existing `applicant_sheet` link
+  keeps its origin; `ensure` after a snapshot does not lower class/level and a
+  link written before the snapshot survives; status and summary agree on
+  `state` and `snapshotId`; a suppressed subject is omitted from the
+  stored-only summary; migration 0075 applies and preserves existing origins.
 - **Gate:** the whole `format:check`, `lint`, `typecheck`, `test:unit`,
   `test:integration`, `build`, `test:e2e` sequence, with Docker running.
 
 ## Risks
 
-- **Summary size.** The 40 KB ceiling is a test, not a promise. If a real sample
-  exceeds it, the first lever is omitting old raids; the second is keys instead
-  of repeated names.
-- **Stored-only lag.** A summary read immediately after `ready` may omit a
-  Cutting Edge achievement or historic rank that a live public read would
-  restore. The bot can call `/refresh`; the alternative is spending provider
-  budget on reads, which the issue forbids.
-- **Linking before discovery.** `characters.ensure` must not race the worker's
-  snapshot upsert. The upsert is keyed and `ON CONFLICT DO UPDATE`, so the last
-  writer wins with the same profile data; the integration test covers a link
-  written before the first snapshot.
+- **Summary size.** The 40 KB ceiling is a test, not a promise. The first lever
+  is omitting old raids; the second is keys instead of repeated names.
+- **Stored-only lag.** `cuttingEdge: null` and `cuttingEdgesRestored: false`
+  are the honest signals; the bot can call `/refresh`. Spending provider budget
+  on reads is what the issue forbids.
+- **Status cost.** The shared state helper reads the same subject list as the
+  summary to guarantee agreement. It is DB-only but not a single query; if poll
+  volume ever makes it matter, cache or narrow the subject read without
+  changing the definition.
+- **Linking before discovery.** `characters.ensure` is `ON CONFLICT DO
+NOTHING`, so it cannot race the worker's snapshot upsert into lowering a
+  known class or level. The link survives the snapshot because snapshots do not
+  touch `manual_dossier_connections`.
