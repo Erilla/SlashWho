@@ -196,10 +196,19 @@ const dossiers = createApplicantDossierService({
     snapshots: {},
     evidence: {},
     manualConnections: {},
-    runs: {}
+    runs: {},
+    recentSearches: {},
+    suppressions: {},
+    characters: {}
   } as unknown as Pick<
     Repositories,
-    "snapshots" | "evidence" | "manualConnections" | "runs"
+    | "snapshots"
+    | "evidence"
+    | "manualConnections"
+    | "runs"
+    | "recentSearches"
+    | "suppressions"
+    | "characters"
   >,
   search,
   queue: {
