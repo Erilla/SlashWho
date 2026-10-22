@@ -98,6 +98,7 @@ function summary(overrides: Record<string, unknown> = {}) {
     ],
     guildHistory: [],
     raids: [],
+    raidsTruncated: false,
     cuttingEdges: [],
     limitations: [],
     ...overrides
@@ -109,16 +110,15 @@ describe("bot dossier contracts", () => {
     expect(botDossierSummarySchema.safeParse(summary()).success).toBe(true);
   });
 
-  it("allows a null cutting edge but not false", () => {
+  it("accepts region/realm/name identities in boss lists", () => {
     const raid = {
       raidName: "The Venomous Abyss",
-      cuttingEdge: null,
       bosses: [
         {
           bossName: "Nymrissa Wavecaller",
           state: "kill",
           firstKilledAt: "2026-09-05T18:26:29.653Z",
-          characters: ["Ryii"],
+          characters: ["eu/silvermoon/ryii"],
           worldRank: null,
           reportUrl: null
         }
@@ -127,11 +127,31 @@ describe("bot dossier contracts", () => {
     expect(
       botDossierSummarySchema.safeParse(summary({ raids: [raid] })).success
     ).toBe(true);
+  });
+
+  it("accepts the bot-only privacy_hidden limitation", () => {
     expect(
       botDossierSummarySchema.safeParse(
-        summary({ raids: [{ ...raid, cuttingEdge: false }] })
+        summary({
+          state: "partial",
+          limitations: [
+            {
+              code: "privacy_hidden",
+              affects: "linked_characters",
+              character: key
+            }
+          ]
+        })
       ).success
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("requires the truncation marker", () => {
+    const { raidsTruncated: _dropped, ...withoutMarker } = summary();
+    void _dropped;
+    expect(botDossierSummarySchema.safeParse(withoutMarker).success).toBe(
+      false
+    );
   });
 
   it("rejects more than ten declared characters", () => {

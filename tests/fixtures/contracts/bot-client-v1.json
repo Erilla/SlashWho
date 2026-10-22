@@ -72,14 +72,14 @@
           "lastNight": "2026-10-09",
           "raidNights": 2,
           "tiers": ["The Venomous Abyss"],
-          "characters": ["Ryii"],
+          "characters": ["eu/silvermoon/ryii"],
           "raids": [
             {
               "raidName": "The Venomous Abyss",
               "kills": 2,
               "firstKillAt": "2026-09-05T18:26:29.653Z",
               "lastKillAt": "2026-10-09T21:09:30.000Z",
-              "characters": ["Ryii"]
+              "characters": ["eu/silvermoon/ryii"]
             }
           ]
         }
@@ -87,19 +87,19 @@
       "raids": [
         {
           "raidName": "The Venomous Abyss",
-          "cuttingEdge": true,
           "bosses": [
             {
               "bossName": "Nymrissa Wavecaller",
               "state": "kill",
               "firstKilledAt": "2026-09-05T18:26:29.653Z",
-              "characters": ["Ryii"],
+              "characters": ["eu/silvermoon/ryii"],
               "worldRank": 1724,
               "reportUrl": "https://www.warcraftlogs.com/reports/example"
             }
           ]
         }
       ],
+      "raidsTruncated": false,
       "cuttingEdges": [
         {
           "achievementName": "Cutting Edge: Midnight Falls",

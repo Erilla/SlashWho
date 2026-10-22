@@ -47,10 +47,11 @@ export const botDossierCharacterSchema = z
 export const botDossierGuildRaidSchema = z
   .object({
     raidName: z.string().min(1),
+    /** Distinct kill events, not character rows. */
     kills: z.number().int().positive(),
     firstKillAt: z.iso.datetime(),
     lastKillAt: z.iso.datetime(),
-    /** Display names; the top-level `characters` list carries the keys. */
+    /** `region/realm/name` identities; the top-level list carries the keys. */
     characters: z.array(z.string().min(1)).min(1)
   })
   .strict();
@@ -67,7 +68,7 @@ export const botDossierGuildHistorySchema = z
     lastNight: z.iso.date(),
     raidNights: z.number().int().positive(),
     tiers: z.array(z.string().min(1)),
-    /** Display names; the top-level `characters` list carries the keys. */
+    /** `region/realm/name` identities; the top-level list carries the keys. */
     characters: z.array(z.string().min(1)).min(1),
     raids: z.array(botDossierGuildRaidSchema)
   })
@@ -82,7 +83,7 @@ export const botDossierBossSchema = z
     bossName: z.string().min(1),
     state: z.enum(["kill", "wipe"]),
     firstKilledAt: z.iso.datetime().nullable(),
-    /** Display names; the top-level `characters` list carries the keys. */
+    /** `region/realm/name` identities; the top-level list carries the keys. */
     characters: z.array(z.string().min(1)).min(1),
     worldRank: z.number().int().positive().nullable(),
     reportUrl: z.url().nullable()
@@ -92,11 +93,6 @@ export const botDossierBossSchema = z
 export const botDossierRaidSchema = z
   .object({
     raidName: z.string().min(1),
-    /**
-     * `true` when stored evidence supports it; `null` means the stored-only
-     * read did not restore it, never that the account lacks it.
-     */
-    cuttingEdge: z.literal(true).nullable(),
     bosses: z.array(botDossierBossSchema).min(1)
   })
   .strict();
@@ -108,10 +104,20 @@ export const botDossierCuttingEdgeSchema = z
   })
   .strict();
 
+export const botDossierLimitationCodeSchema = z.union([
+  dossierLimitationCodeSchema,
+  z.literal("privacy_hidden")
+]);
+
+export const botDossierLimitationAffectsSchema = z.union([
+  dossierLimitationAffectsSchema,
+  z.literal("linked_characters")
+]);
+
 export const botDossierLimitationSchema = z
   .object({
-    code: dossierLimitationCodeSchema,
-    affects: dossierLimitationAffectsSchema,
+    code: botDossierLimitationCodeSchema,
+    affects: botDossierLimitationAffectsSchema,
     character: characterKeySchema.nullable()
   })
   .strict();
@@ -136,14 +142,18 @@ export const botDossierSummarySchema = z
     characters: z.array(botDossierCharacterSchema),
     guildHistory: z.array(botDossierGuildHistorySchema),
     raids: z.array(botDossierRaidSchema),
+    /** True when older raids with kills were dropped by the five-raid cap. */
+    raidsTruncated: z.boolean(),
     cuttingEdges: z.array(botDossierCuttingEdgeSchema),
     limitations: z.array(botDossierLimitationSchema)
   })
   .strict();
 
 /**
- * The cheap poll. `etag` hashes the other fields, so a 304 means nothing the
- * bot renders has changed.
+ * The cheap poll. `etag` hashes only the four status fields, not the summary:
+ * suppressing a non-oldest character can change the summary while the state,
+ * snapshot id and collection times stay the same. The summary's own ETag is
+ * the authority for its body, and `snapshotId` is the publish gate.
  */
 export const botDossierStatusSchema = z
   .object({

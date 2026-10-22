@@ -127,6 +127,8 @@ export {
   botDossierEvidenceStateSchema,
   botDossierGuildHistorySchema,
   botDossierGuildRaidSchema,
+  botDossierLimitationAffectsSchema,
+  botDossierLimitationCodeSchema,
   botDossierLimitationSchema,
   botDossierRaidSchema,
   botDossierStateSchema,
