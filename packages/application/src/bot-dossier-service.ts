@@ -53,6 +53,7 @@ export type BotRefreshResult =
       mode: "full" | "light";
       lastCollectedAt: Date | null;
     }
+  | { kind: "rate_limited"; retryAfterSeconds: number }
   | { kind: "not_found" };
 
 export interface BotDossierService {
@@ -83,6 +84,7 @@ export interface BotDossierService {
   ): Promise<StoredDossierRead>;
   refresh(
     key: CharacterKey,
+    input: { headers: Pick<Headers, "get"> },
     scope?: MeasurementScope
   ): Promise<BotRefreshResult>;
 }
@@ -165,7 +167,7 @@ export function createBotDossierService(options: {
     | "snapshots"
     | "runs"
   >;
-  search: Pick<SearchService, "create">;
+  search: Pick<SearchService, "create" | "authorizeSearchAllowance">;
   dossiers: Pick<
     ApplicantDossierService,
     "readStored" | "readStatus" | "refreshCharacter"
@@ -350,12 +352,25 @@ export function createBotDossierService(options: {
       return options.dossiers.readStored(key, scope);
     },
 
-    async refresh(key, scope) {
+    async refresh(key, input, scope) {
       const at = new Date();
       if (await options.repositories.suppressions.isActive(key, at)) {
         return { kind: "not_found" };
       }
       if (!(await options.repositories.characters.find(key))) {
+        return { kind: "not_found" };
+      }
+      const allowance = await options.search.authorizeSearchAllowance(
+        input.headers,
+        scope
+      );
+      if (!allowance.allowed) {
+        if ("retryAfterSeconds" in allowance) {
+          return {
+            kind: "rate_limited",
+            retryAfterSeconds: allowance.retryAfterSeconds
+          };
+        }
         return { kind: "not_found" };
       }
       const result = await options.dossiers.refreshCharacter(key, scope);

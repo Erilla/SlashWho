@@ -1650,18 +1650,6 @@ export function createApplicantDossierService(options: {
     return (await repositories.evidence.getCompleted(key)) !== null;
   }
 
-  function evidenceViews(
-    subjects: readonly DossierSubject[],
-    evidence: readonly IdentityEvidence[]
-  ): StoredDossierEvidence[] {
-    return subjects.map((subject, index) => ({
-      key: subject.key,
-      evidenceState: evidence[index]?.evidenceState ?? "waiting",
-      completedAt: evidence[index]?.collectedAt ?? null,
-      limitations: evidence[index]?.limitations ?? []
-    }));
-  }
-
   function earliestCollected(
     evidence: readonly IdentityEvidence[]
   ): Date | null {
@@ -1685,6 +1673,7 @@ export function createApplicantDossierService(options: {
     subjects: readonly DossierSubject[];
     skipped: readonly DossierSubject[];
     evidence: readonly IdentityEvidence[];
+    views: StoredDossierEvidence[];
     activeEvidenceRunIds: readonly string[];
     activeDiscovery: boolean;
   }> {
@@ -1724,10 +1713,28 @@ export function createApplicantDossierService(options: {
       repositories.evidence.activeRuns(keys),
       repositories.runs.findActiveMany(keys)
     ]);
+    const activeIds = new Set(
+      activeRuns.map((run) => canonicalCharacterId(run.key))
+    );
+    const views = subjects.map((subject, index) => {
+      const active = [subject.key, ...(subject.warcraftLogsAliases ?? [])].some(
+        (key) => activeIds.has(canonicalCharacterId(key))
+      );
+      const item = evidence[index];
+      return {
+        key: subject.key,
+        evidenceState: active
+          ? ("scanning" as const)
+          : (item?.evidenceState ?? "waiting"),
+        completedAt: item?.collectedAt ?? null,
+        limitations: item?.limitations ?? []
+      };
+    });
     return {
       subjects,
       skipped,
       evidence,
+      views,
       activeEvidenceRunIds: activeRuns.map((run) => run.id),
       activeDiscovery: activeDiscoveryRuns.length > 0
     };
@@ -1781,7 +1788,7 @@ export function createApplicantDossierService(options: {
         return { kind: "not_found" };
       }
       const state = await dossierEvidence(key, own, repositories, at);
-      const views = evidenceViews(state.subjects, state.evidence);
+      const views = state.views;
       if (!own) {
         return {
           kind: "collecting",
@@ -1840,7 +1847,7 @@ export function createApplicantDossierService(options: {
         snapshotId: own?.id ?? null,
         snapshotState: own?.state ?? null,
         lastCollectedAt: earliestCollected(state.evidence),
-        evidence: evidenceViews(state.subjects, state.evidence),
+        evidence: state.views,
         evidenceRunIds: state.activeEvidenceRunIds,
         activeDiscovery: state.activeDiscovery
       };

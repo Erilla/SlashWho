@@ -14,7 +14,8 @@ import {
   applicationConfigSchema,
   botDossierStatusOf,
   createApplicantDossierService,
-  createBotDossierService
+  createBotDossierService,
+  legacyResolveSubjects
 } from "../../packages/application/src";
 import { runMigrations } from "../../packages/database/src";
 import { startPostgres } from "./postgres";
@@ -123,7 +124,12 @@ describe("bot dossier reads", () => {
     });
     bot = createBotDossierService({
       repositories,
-      search: { create: vi.fn() },
+      search: {
+        create: vi.fn(),
+        authorizeSearchAllowance: vi.fn(async () => ({
+          allowed: true as const
+        }))
+      },
       dossiers,
       config
     });
@@ -266,5 +272,22 @@ describe("bot dossier reads", () => {
       (connection) => connection.key.name === alt.name
     );
     expect(link).toMatchObject({ origin: "bot", pending: true });
+  });
+
+  it("labels a bot link From application on the public dossier", async () => {
+    await repositories.characters.ensure({
+      key: root,
+      displayName: "Ryii",
+      className: "Mage",
+      level: 80,
+      raiderIoUrl: url(root)
+    });
+    await seedSnapshot(repositories, root);
+    await repositories.manualConnections.add(root, alt, { origin: "bot" });
+    const resolved = await legacyResolveSubjects(root, repositories, config);
+    const subject = resolved?.selected.find(
+      (character) => character.key.name === alt.name
+    );
+    expect(subject?.origin).toBe("application");
   });
 });

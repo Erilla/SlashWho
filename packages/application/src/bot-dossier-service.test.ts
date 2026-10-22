@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { applicationConfigSchema } from "./config";
 import { createBotDossierService } from "./bot-dossier-service";
 import type { StoredDossierStatus } from "./applicant-dossier-service";
-import type { CreateSearchResult } from "./search-service";
+import type {
+  CreateSearchResult,
+  PublicReadAuthorizationResult
+} from "./search-service";
 
 const root: CharacterKey = { region: "eu", realm: "silvermoon", name: "ryii" };
 const alt: CharacterKey = { region: "eu", realm: "silvermoon", name: "alt" };
@@ -68,6 +71,9 @@ function fixture(
 ) {
   const links = options.links?.map((entry) => ({ ...entry })) ?? [];
   const ensure = vi.fn(async () => "id");
+  const charge = vi.fn<() => Promise<PublicReadAuthorizationResult>>(
+    async () => ({ allowed: true })
+  );
   const create = vi.fn(async (input: { characterUrl: string }) =>
     (options.results ?? (() => job(root)))(keyOf(input.characterUrl))
   );
@@ -113,7 +119,10 @@ function fixture(
       snapshots: {} as never,
       runs: {} as never
     } as never,
-    search: { create },
+    search: {
+      create,
+      authorizeSearchAllowance: charge
+    },
     dossiers: {
       readStatus: vi.fn(async () => collecting),
       readStored: vi.fn(async () => ({ kind: "not_found" as const })),
@@ -125,7 +134,7 @@ function fixture(
     },
     config
   });
-  return { service, create, add, ensure, links };
+  return { service, create, add, ensure, links, charge };
 }
 
 const headers = new Headers();
@@ -233,6 +242,34 @@ describe("bot dossier create", () => {
     ).toBe(true);
     expect(create).toHaveBeenCalledTimes(2);
     expect(links).toEqual([{ key: alt, origin: "bot" }]);
+  });
+
+  it("rejects an invalid URL before any search or charge", async () => {
+    const { service, create, charge } = fixture();
+    const result = await service.create({
+      characters: ["not a character"],
+      headers
+    });
+    expect(result).toEqual({
+      kind: "invalid",
+      code: "invalid_character_url"
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(charge).not.toHaveBeenCalled();
+  });
+});
+
+describe("bot dossier refresh", () => {
+  it("refuses a refresh when the search bucket is empty", async () => {
+    const { service, charge } = fixture();
+    charge.mockResolvedValueOnce({
+      allowed: false,
+      retryAfterSeconds: 5
+    });
+    await expect(service.refresh(root, { headers })).resolves.toEqual({
+      kind: "rate_limited",
+      retryAfterSeconds: 5
+    });
   });
 });
 

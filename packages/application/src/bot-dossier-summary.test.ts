@@ -456,6 +456,37 @@ describe("botDossierSummaryOf", () => {
     );
   });
 
+  it("starts a new span after a whole tier passes between nights", () => {
+    const summary = botDossierSummaryOf(
+      read({
+        kills: [
+          kill(root, "2024-09-01T20:00:00.000Z", {
+            name: "Seriously Casual",
+            region: "eu",
+            realm: "silvermoon"
+          }),
+          kill(root, "2026-09-01T20:00:00.000Z", {
+            name: "Seriously Casual",
+            region: "eu",
+            realm: "silvermoon"
+          })
+        ]
+      })
+    );
+    expect(summary?.guildHistory).toHaveLength(2);
+  });
+
+  it("reports Cutting Edge as unrestored rather than absent", () => {
+    const summary = botDossierSummaryOf(
+      read({
+        cuttingEdgesRestored: false,
+        dossier: dossier({ cuttingEdges: [] })
+      })
+    );
+    expect(summary?.cuttingEdgesRestored).toBe(false);
+    expect(summary?.cuttingEdges).toEqual([]);
+  });
+
   it("projects the real five-character demo under 40 KB", () => {
     const summary = botDossierSummaryOf(demoRead(demoDossier));
     expect(summary).not.toBeNull();

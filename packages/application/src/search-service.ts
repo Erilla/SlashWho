@@ -113,6 +113,15 @@ export interface SearchService {
     headers: Pick<Headers, "get">,
     scope?: MeasurementScope
   ): Promise<PublicReadAuthorizationResult>;
+  /**
+   * Charges one search from the caller's search bucket without starting a
+   * search, for work that spends provider budget but is not a discovery run
+   * (a refresh, or adding a character whose snapshot is already fresh).
+   */
+  authorizeSearchAllowance(
+    headers: Pick<Headers, "get">,
+    scope?: MeasurementScope
+  ): Promise<PublicReadAuthorizationResult>;
   getRun(jobId: string): Promise<JobStatusResponse | null>;
   getCurrent(key: CharacterKey): Promise<CharacterResource | null>;
   getHistory(key: CharacterKey, cursor?: string): Promise<HistoryPage | null>;
@@ -465,6 +474,25 @@ export function createSearchService(options: {
         throw error;
       }
       const decision = await admissionLimiter(scope).reserveTierSearch(caller);
+      return decision.allowed
+        ? { allowed: true }
+        : {
+            allowed: false,
+            retryAfterSeconds: decision.retryAfterSeconds ?? 1
+          };
+    },
+
+    async authorizeSearchAllowance(headers, scope) {
+      let caller: CallerIdentity;
+      try {
+        caller = classifyCaller(headers, options.config);
+      } catch (error) {
+        if (error instanceof AuthenticationError) {
+          return { allowed: false, code: error.code };
+        }
+        throw error;
+      }
+      const decision = await admissionLimiter(scope).reserveSearch(caller);
       return decision.allowed
         ? { allowed: true }
         : {

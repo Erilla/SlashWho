@@ -37,18 +37,34 @@ export function createRateLimiter(options: {
     };
   }
 
+  function searchPolicy(caller: CallerIdentity): SearchReservationPolicy {
+    const at = now();
+    return {
+      bucketHash: `search:${caller.bucketHash}`,
+      limit:
+        caller.callerClass === "bot"
+          ? options.config.BOT_SEARCHES_PER_HOUR
+          : options.config.ANONYMOUS_SEARCHES_PER_HOUR,
+      expiresAt: new Date(at.getTime() + 60 * 60 * 1_000),
+      at
+    };
+  }
+
   return {
     searchReservation(caller: CallerIdentity): SearchReservationPolicy {
-      const at = now();
-      return {
-        bucketHash: `search:${caller.bucketHash}`,
-        limit:
-          caller.callerClass === "bot"
-            ? options.config.BOT_SEARCHES_PER_HOUR
-            : options.config.ANONYMOUS_SEARCHES_PER_HOUR,
-        expiresAt: new Date(at.getTime() + 60 * 60 * 1_000),
-        at
-      };
+      return searchPolicy(caller);
+    },
+
+    /** Charges one search without starting one, for a refresh or a free read. */
+    async reserveSearch(caller: CallerIdentity): Promise<RateLimitDecision> {
+      const policy = searchPolicy(caller);
+      const reservation = await options.repository.reserve(
+        policy.bucketHash,
+        policy.limit,
+        policy.expiresAt,
+        policy.at
+      );
+      return decision(reservation, policy.at);
     },
 
     async reservePublicRead(
