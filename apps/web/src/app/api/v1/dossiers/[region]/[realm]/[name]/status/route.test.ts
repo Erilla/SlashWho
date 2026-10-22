@@ -51,6 +51,7 @@ describe("GET /api/v1/dossiers/{key}/status", () => {
       kind: "ok",
       snapshotId: "13af3173-e97c-4c78-a6cb-a54b647b209f",
       snapshotState: "complete",
+      snapshotLimitationCode: null,
       lastCollectedAt: new Date("2026-10-22T09:45:52.977Z"),
       evidence: [
         {
@@ -60,6 +61,7 @@ describe("GET /api/v1/dossiers/{key}/status", () => {
           limitations: []
         }
       ],
+      limitations: [],
       evidenceRunIds: [],
       activeDiscovery: false
     });

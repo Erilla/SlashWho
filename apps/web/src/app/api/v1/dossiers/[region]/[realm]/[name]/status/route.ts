@@ -30,13 +30,15 @@ export async function GET(
     });
     if ("refusal" in character) return character.refusal;
     const { botDossiers, searches } = await getContainer();
+    // Existence first: an unknown or suppressed key is a 404 even when the
+    // read bucket is exhausted, and a retry costs no read token.
+    const read = await botDossiers.status(character.key, scope);
+    if (read.kind === "not_found") return apiError("character_not_found");
     const denied = publicReadAuthorizationResponse(
       await searches.authorizePublicRead(request.headers, scope)
     );
     if (denied) return denied;
-    const status = botDossierStatusOf(
-      await botDossiers.status(character.key, scope)
-    );
+    const status = botDossierStatusOf(read);
     if (!status) return apiError("character_not_found");
     const etag = etagOf(status);
     if (ifNoneMatch(request, etag)) return notModified(etag);

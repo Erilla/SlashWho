@@ -30,13 +30,13 @@ export async function GET(
     });
     if ("refusal" in character) return character.refusal;
     const { botDossiers, searches } = await getContainer();
+    const read = await botDossiers.summary(character.key, scope);
+    if (read.kind === "not_found") return apiError("character_not_found");
     const denied = publicReadAuthorizationResponse(
       await searches.authorizePublicRead(request.headers, scope)
     );
     if (denied) return denied;
-    const summary = botDossierSummaryOf(
-      await botDossiers.summary(character.key, scope)
-    );
+    const summary = botDossierSummaryOf(read);
     if (!summary) return apiError("character_not_found");
     const etag = etagOf(summary);
     if (ifNoneMatch(request, etag)) return notModified(etag);
