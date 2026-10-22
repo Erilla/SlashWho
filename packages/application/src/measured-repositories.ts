@@ -1,6 +1,17 @@
 import type { MeasurementScope } from "./measurement";
 
 /**
+ * Evidence reads that hydrate a completed publication, and so may load the
+ * Raider.IO roster. They accept a request-bound read-step observer as their
+ * last argument.
+ */
+const rosterReadMethods = new Set([
+  "getCompleted",
+  "hydrateCompletedEvidence",
+  "reserve"
+]);
+
+/**
  * Wraps a repositories object so every method call is timed under the `db`
  * prefix and labelled `group.method`, which is what lets the aggregate
  * `dbMs`/`dbMaxCallMs` totals be attributed to a particular query. Applied
@@ -41,7 +52,36 @@ export function measuredRepositories<T extends object>(
           return (...args: unknown[]) =>
             scope.time(
               "db",
-              async () => await call.apply(groupTarget, args),
+              async (exclude) => {
+                if (
+                  property === "evidence" &&
+                  rosterReadMethods.has(String(method)) &&
+                  // The observer is the only optional argument after the
+                  // repository's input, so a caller-supplied one already
+                  // occupies the slot the wrapper would fill.
+                  args[1] === undefined
+                ) {
+                  // The roster is a named read inside the enclosing call.
+                  // Exclude it from the parent's duration so dbMs charges it
+                  // once, but let it count as its own call: dbCalls gains one
+                  // per hydration that actually reads a roster, so it
+                  // measures timed read steps rather than only repository
+                  // calls (it was never a SQL statement count). The step can
+                  // win dbMaxCallName, which is how the baseline names the
+                  // roster queries. The label is static, as every logging
+                  // label must be.
+                  args.push(
+                    <R>(
+                      step: "evidence.raiderIoRoster",
+                      work: () => Promise<R>
+                    ) =>
+                      exclude(() =>
+                        scope.time("db", async () => await work(), step)
+                      )
+                  );
+                }
+                return await call.apply(groupTarget, args);
+              },
               label
             );
         }

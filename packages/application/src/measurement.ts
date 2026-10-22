@@ -12,11 +12,13 @@
  */
 /**
  * Runs `inner` inside an enclosing `time` frame without charging its duration
- * to that frame's bucket. The only legitimate use is a callback an upstream
- * client invokes mid-request (Blizzard's profile-request observer, which writes
- * to the database), where the nested work cannot be hoisted out of the call.
- * Kept as a per-frame parameter rather than ambient state so concurrent timed
- * calls cannot interfere with one another.
+ * to that frame's bucket. Two legitimate uses: a callback an upstream client
+ * invokes mid-request (Blizzard's profile-request observer, which writes to the
+ * database), where the nested work cannot be hoisted out of the call; and a
+ * named read step inside a repository call (the Raider.IO roster queries),
+ * which is timed under its own static label but must not be charged to the
+ * enclosing call a second time. Kept as a per-frame parameter rather than
+ * ambient state so concurrent timed calls cannot interfere with one another.
  */
 export type ExcludeFromBucket = <R>(inner: () => Promise<R>) => Promise<R>;
 

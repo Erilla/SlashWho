@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 
 import type {
   CharacterRaiderIoFirstKillInput,
+  EvidenceReadStepMeasurement,
   PublishedRaiderIoLoggedEncounter,
   RaiderIoLoggedEncounterAnswers,
   RaiderIoLoggedEncounterRole,
@@ -312,7 +313,8 @@ async function loadShownRaiderIoLoggedEncounters(
 /** One run's first kills, each with the stored encounter it names, as a dossier may show it. */
 export async function loadPublishedRaiderIoFirstKills(
   client: Queryable,
-  runId: string
+  runId: string,
+  measureReadStep?: EvidenceReadStepMeasurement
 ): Promise<StoredCharacterRaiderIoFirstKill[]> {
   const kills = await loadRunRaiderIoFirstKills(client, runId);
   const readIds = kills.flatMap((kill) =>
@@ -320,10 +322,19 @@ export async function loadPublishedRaiderIoFirstKills(
       ? [kill.loggedEncounterId]
       : []
   );
+  // The roster queries -- encounters, shown members and role counts -- are
+  // timed as their own read step. They still run on this client, in this
+  // transaction, so the rows and their ordering are exactly what an
+  // unobserved read returns. With no read encounters there is no roster and
+  // no queries, so no step is recorded: an empty name would otherwise count
+  // as a call and could win dbMaxCallName at zero milliseconds.
+  const loadRoster = () => loadShownRaiderIoLoggedEncounters(client, readIds);
+  const roster =
+    measureReadStep && readIds.length > 0
+      ? await measureReadStep("evidence.raiderIoRoster", loadRoster)
+      : await loadRoster();
   const encounters = new Map(
-    (await loadShownRaiderIoLoggedEncounters(client, readIds)).map(
-      (encounter) => [encounter.loggedEncounterId, encounter] as const
-    )
+    roster.map((encounter) => [encounter.loggedEncounterId, encounter] as const)
   );
   return kills.map((kill) => ({
     ...kill,

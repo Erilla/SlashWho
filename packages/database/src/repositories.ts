@@ -722,6 +722,20 @@ export type EvidenceSettlementKill = Pick<
   "raidId" | "killedAt" | "fightUrl"
 >;
 
+/**
+ * A request-scoped timer for one named read step inside a repository call.
+ *
+ * The label is a closed, static identifier: it reaches `dbMaxCallName`, which
+ * the logs allowlist, so it must never carry a character, realm or query. The
+ * caller-supplied work runs exactly where it would have run without an
+ * observer, on the same client, so rows, suppression filtering and ordering
+ * are unchanged.
+ */
+export type EvidenceReadStepMeasurement = <T>(
+  label: "evidence.raiderIoRoster",
+  work: () => Promise<T>
+) => Promise<T>;
+
 /** Reads needed to choose light/full policy without loading display evidence. */
 export type EvidenceSchedulingReads = Pick<
   EvidenceRepository,
@@ -1100,7 +1114,8 @@ export interface EvidenceRepository {
     prepareNewRun?: EvidenceRunPreparation
   ): Promise<EvidenceReservationResult<CompletedEvidenceSelection>>;
   hydrateCompletedEvidence?(
-    selection: CompletedEvidenceSelection
+    selection: CompletedEvidenceSelection,
+    measureReadStep?: EvidenceReadStepMeasurement
   ): Promise<CompletedCharacterEvidence>;
   completedSettlementKills?(
     selection: CompletedEvidenceSelection
@@ -1116,44 +1131,47 @@ export interface EvidenceRepository {
     key: CharacterKey,
     alias: CharacterKey
   ): Promise<"removed" | "missing">;
-  reserve(input: {
-    key: CharacterKey;
-    /**
-     * Why this caller wants the character collected. Recorded on a run this
-     * call creates; a run it joins keeps the origin it was reserved with.
-     */
-    origin: EvidenceRunRequestOrigin;
-    /**
-     * The dossier root this collection serves, recorded like `origin`: on a
-     * run this call creates, never on one it joins. Absent or null is a
-     * caller with no root.
-     */
-    root?: CharacterKey | null;
-    freshnessCutoff: Date;
-    at: Date;
-    /** The ordered collection plan fixed when a new run is reserved. */
-    phasePlan?: readonly string[];
-    /**
-     * Records a newly reserved run as a light refresh. A run already in
-     * flight is joined as it is.
-     */
-    lightRefresh?: boolean;
-    credentials?:
-      | {
-          wclClientIdEncrypted: string;
-          wclClientSecretEncrypted: string;
-          accountId?: never;
-          credentialVersion?: never;
-        }
-      | {
-          accountId: string;
-          credentialVersion: number;
-          wclClientIdEncrypted?: never;
-          wclClientSecretEncrypted?: never;
-        }
-      | null
-      | undefined;
-  }): Promise<EvidenceReservationResult>;
+  reserve(
+    input: {
+      key: CharacterKey;
+      /**
+       * Why this caller wants the character collected. Recorded on a run this
+       * call creates; a run it joins keeps the origin it was reserved with.
+       */
+      origin: EvidenceRunRequestOrigin;
+      /**
+       * The dossier root this collection serves, recorded like `origin`: on a
+       * run this call creates, never on one it joins. Absent or null is a
+       * caller with no root.
+       */
+      root?: CharacterKey | null;
+      freshnessCutoff: Date;
+      at: Date;
+      /** The ordered collection plan fixed when a new run is reserved. */
+      phasePlan?: readonly string[];
+      /**
+       * Records a newly reserved run as a light refresh. A run already in
+       * flight is joined as it is.
+       */
+      lightRefresh?: boolean;
+      credentials?:
+        | {
+            wclClientIdEncrypted: string;
+            wclClientSecretEncrypted: string;
+            accountId?: never;
+            credentialVersion?: never;
+          }
+        | {
+            accountId: string;
+            credentialVersion: number;
+            wclClientIdEncrypted?: never;
+            wclClientSecretEncrypted?: never;
+          }
+        | null
+        | undefined;
+    },
+    measureReadStep?: EvidenceReadStepMeasurement
+  ): Promise<EvidenceReservationResult>;
   /**
    * Reserves a tier search, under the same per-character lock as `reserve`.
    * This reserves a new explicit search; `reserve` can separately continue a
@@ -1319,7 +1337,10 @@ export interface EvidenceRepository {
    * job never reached a publication. Returns the number of rows removed.
    */
   clearSettledCollectionStages(): Promise<number>;
-  getCompleted(key: CharacterKey): Promise<CompletedCharacterEvidence | null>;
+  getCompleted(
+    key: CharacterKey,
+    measureReadStep?: EvidenceReadStepMeasurement
+  ): Promise<CompletedCharacterEvidence | null>;
   /** Records a successful legacy rank fallback on the published kill itself. */
   recordHistoricRankLookup(
     killId: string,

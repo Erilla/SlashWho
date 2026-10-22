@@ -251,6 +251,27 @@ it("allows the slowest-call name, which is a static method identifier", () => {
   expect(serialized).not.toHaveProperty("characterName");
 });
 
+it("keeps the measured roster read step as a named call on http_request", () => {
+  // Break caught: the read-step label reaches dbMaxCallName, which is
+  // allowlisted, but a new prefix or field around it would be dropped
+  // silently. The label is a closed static identifier from
+  // `measuredRepositories`, never a character, realm or query.
+  const lines: string[] = [];
+  const logger = createWebLogger({
+    write: (line: string) => lines.push(line)
+  });
+
+  logger.info({
+    event: "http_request",
+    dbMaxCallMs: 312,
+    dbMaxCallName: "evidence.raiderIoRoster"
+  });
+
+  const serialized = JSON.parse(lines[0]!) as Record<string, unknown>;
+  expect(serialized).toHaveProperty("dbMaxCallMs", 312);
+  expect(serialized).toHaveProperty("dbMaxCallName", "evidence.raiderIoRoster");
+});
+
 // Job handlers run only in the worker and log through the worker logger, so
 // nothing they measure can reach an `http_request` record. Excluded by file,
 // not by field name, so a new worker counter never tempts anyone into

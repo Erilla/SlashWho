@@ -135,6 +135,86 @@ describe("measuredRepositories", () => {
     expect(scope.totals()).toMatchObject({ dbMs: 9, dbCalls: 1 });
   });
 
+  it("names the roster substep and excludes it from its parent's duration", async () => {
+    let now = 0;
+    const scope = createMeasurementScope(() => now);
+    const measured = measuredRepositories(
+      {
+        evidence: {
+          async hydrateCompletedEvidence(
+            _selection: unknown,
+            measureReadStep?: <T>(
+              label: "evidence.raiderIoRoster",
+              work: () => Promise<T>
+            ) => Promise<T>
+          ) {
+            now += 3;
+            return measureReadStep
+              ? measureReadStep("evidence.raiderIoRoster", async () => {
+                  now += 7;
+                  return "roster";
+                })
+              : "unmeasured";
+          }
+        }
+      },
+      scope
+    );
+
+    await expect(
+      measured.evidence.hydrateCompletedEvidence({ id: "opaque" })
+    ).resolves.toBe("roster");
+
+    // The parent still counts as a call, but its 3 ms excludes the 7 ms
+    // roster step; the total stays the 10 ms the request actually spent, and
+    // the roster is the slowest named call.
+    expect(scope.totals()).toMatchObject({
+      dbMs: 10,
+      dbCalls: 2,
+      dbMaxCallMs: 7,
+      dbMaxCallName: "evidence.raiderIoRoster"
+    });
+  });
+
+  it("offers the roster observer to each evidence read that hydrates", async () => {
+    const scope = createMeasurementScope(clock([0, 0, 0, 0, 0, 0]));
+    let rosterSteps = 0;
+    type Measure = <T>(
+      label: "evidence.raiderIoRoster",
+      work: () => Promise<T>
+    ) => Promise<T>;
+    const observe = async (measureReadStep?: Measure) => {
+      await measureReadStep?.("evidence.raiderIoRoster", async () => {
+        rosterSteps += 1;
+      });
+    };
+    const repositories = {
+      evidence: {
+        reserve: (_input: unknown, measureReadStep?: Measure) =>
+          observe(measureReadStep),
+        getCompleted: (_key: unknown, measureReadStep?: Measure) =>
+          observe(measureReadStep),
+        hydrateCompletedEvidence: (
+          _selection: unknown,
+          measureReadStep?: Measure
+        ) => observe(measureReadStep)
+      }
+    };
+
+    const measured = measuredRepositories(repositories, scope);
+
+    // Called without an observer: the wrapper supplies one for each method.
+    await measured.evidence.reserve({});
+    await measured.evidence.getCompleted({});
+    await measured.evidence.hydrateCompletedEvidence({});
+
+    expect(rosterSteps).toBe(3);
+    expect(scope.totals()).toMatchObject({
+      dbCalls: 6,
+      dbMaxCallName: "evidence.raiderIoRoster"
+    });
+  });
+
   it("leaves non-function and absent properties alone", () => {
     const measured = measuredRepositories(
       { snapshots: { label: "snapshots" } },
