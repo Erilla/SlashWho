@@ -56,8 +56,10 @@ const collecting: StoredDossierStatus = {
   kind: "ok",
   snapshotId: null,
   snapshotState: null,
+  snapshotLimitationCode: null,
   lastCollectedAt: null,
   evidence: [],
+  limitations: [],
   evidenceRunIds: [],
   activeDiscovery: true
 };
@@ -126,11 +128,33 @@ function fixture(
     dossiers: {
       readStatus: vi.fn(async () => collecting),
       readStored: vi.fn(async () => ({ kind: "not_found" as const })),
-      refreshCharacter: vi.fn(async () => ({
-        mode: "full" as const,
-        lastCollectedAt: null,
-        clearedTiers: 0
-      }))
+      refreshCharacter: vi.fn(
+        async (
+          _key: CharacterKey,
+          _scope: unknown,
+          _overrides: unknown,
+          beforeReserve?: () => Promise<
+            { allowed: true } | { allowed: false; retryAfterSeconds: number }
+          >
+        ) => {
+          const gate = beforeReserve ? await beforeReserve() : null;
+          if (gate && !gate.allowed) {
+            return {
+              mode: "full" as const,
+              lastCollectedAt: null,
+              clearedTiers: 0,
+              queued: false,
+              rateLimited: gate
+            };
+          }
+          return {
+            mode: "full" as const,
+            lastCollectedAt: null,
+            clearedTiers: 0,
+            queued: true
+          };
+        }
+      )
     },
     config
   });
@@ -257,6 +281,72 @@ describe("bot dossier create", () => {
     expect(create).not.toHaveBeenCalled();
     expect(charge).not.toHaveBeenCalled();
   });
+
+  it("ensures the root from the profile the search read", async () => {
+    const { service, ensure } = fixture();
+    await service.create({
+      characters: ["https://raider.io/characters/eu/silvermoon/ryii"],
+      headers
+    });
+    expect(ensure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: root,
+        displayName: "ryii",
+        className: "Mage",
+        level: 80
+      })
+    );
+  });
+
+  it("does not ensure a fresh root, which already has a row", async () => {
+    const { service, ensure } = fixture({
+      results: () => ({ kind: "character", character: {} as never })
+    });
+    const result = await service.create({
+      characters: ["https://raider.io/characters/eu/silvermoon/ryii"],
+      headers
+    });
+    expect(result.kind).toBe("created");
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it("returns 202 when a declared character was not found", async () => {
+    const { service } = fixture({
+      results: (key) =>
+        key.name === alt.name
+          ? { kind: "not_found", code: "character_not_found" }
+          : job(root, true)
+    });
+    const result = await service.create({
+      characters: [
+        "https://raider.io/characters/eu/silvermoon/ryii",
+        "https://raider.io/characters/eu/silvermoon/alt"
+      ],
+      headers
+    });
+    if (result.kind !== "created") throw new Error("expected created");
+    expect(result.status).toBe(202);
+    expect(result.body.outcomes[1]).toMatchObject({ outcome: "not_found" });
+  });
+
+  it("returns 503 when a declared character failed upstream", async () => {
+    const { service } = fixture({
+      results: (key) =>
+        key.name === alt.name
+          ? { kind: "failed", code: "upstream_unavailable" }
+          : job(root, true)
+    });
+    const result = await service.create({
+      characters: [
+        "https://raider.io/characters/eu/silvermoon/ryii",
+        "https://raider.io/characters/eu/silvermoon/alt"
+      ],
+      headers
+    });
+    if (result.kind !== "created") throw new Error("expected created");
+    expect(result.status).toBe(503);
+    expect(result.body.outcomes[1]).toMatchObject({ outcome: "failed" });
+  });
 });
 
 describe("bot dossier refresh", () => {
@@ -312,5 +402,17 @@ describe("bot dossier add-character", () => {
       code: "invalid_character_url"
     });
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("does not write a new link when the search is rate limited", async () => {
+    const { service, add } = fixture({
+      results: () => ({ kind: "rate_limited", retryAfterSeconds: 9 })
+    });
+    const result = await service.addCharacter(root, {
+      characterUrl: "https://raider.io/characters/eu/silvermoon/alt",
+      headers
+    });
+    expect(result).toEqual({ kind: "rate_limited", retryAfterSeconds: 9 });
+    expect(add).not.toHaveBeenCalled();
   });
 });

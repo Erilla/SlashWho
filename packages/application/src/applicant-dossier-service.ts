@@ -102,11 +102,18 @@ export type ReadDossierResult =
   { kind: "ready"; dossier: ContractApplicantDossier } | { kind: "not_ready" };
 
 /** What a stored-only read tells the bot about one character's evidence. */
+export type StoredDossierLimitation = {
+  code: ContractApplicantDossier["limitations"][number]["code"];
+  affects: ContractApplicantDossier["limitations"][number]["affects"];
+  character: CharacterKey | null;
+  recovery: "automatic" | "none";
+};
+
 export type StoredDossierEvidence = Readonly<{
   key: CharacterKey;
   evidenceState: DossierEvidenceState;
   completedAt: Date | null;
-  limitations: readonly DossierLimitation[];
+  limitations: readonly StoredDossierLimitation[];
 }>;
 
 export type StoredDossierSnapshotState = "complete" | "partial" | null;
@@ -122,17 +129,20 @@ export type StoredDossierRead =
       kind: "collecting";
       subjects: readonly DossierSubject[];
       evidence: readonly StoredDossierEvidence[];
+      limitations: readonly { recovery: "automatic" | "none" }[];
     }
   | {
       kind: "ready";
       dossier: ContractApplicantDossier;
       snapshotId: string;
       snapshotState: Exclude<StoredDossierSnapshotState, null>;
+      snapshotLimitationCode: string | null;
       lastCollectedAt: Date | null;
       kills: readonly DossierKillEvidence[];
       subjects: readonly DossierSubject[];
       pendingKeys: readonly CharacterKey[];
       evidence: readonly StoredDossierEvidence[];
+      limitations: readonly { recovery: "automatic" | "none" }[];
       cuttingEdgesRestored: boolean;
       evidenceRunIds: readonly string[];
       activeDiscovery: boolean;
@@ -144,8 +154,10 @@ export type StoredDossierStatus =
       kind: "ok";
       snapshotId: string | null;
       snapshotState: StoredDossierSnapshotState;
+      snapshotLimitationCode: string | null;
       lastCollectedAt: Date | null;
       evidence: readonly StoredDossierEvidence[];
+      limitations: readonly { recovery: "automatic" | "none" }[];
       evidenceRunIds: readonly string[];
       activeDiscovery: boolean;
     };
@@ -223,7 +235,10 @@ export interface ApplicantDossierService {
   refreshCharacter(
     key: CharacterKey,
     scope?: MeasurementScope,
-    overrides?: DossierGatewayOverrides
+    overrides?: DossierGatewayOverrides,
+    beforeReserve?: () => Promise<
+      { allowed: true } | { allowed: false; retryAfterSeconds: number }
+    >
   ): Promise<RefreshCharacterResult>;
   /**
    * Forgets every terminal mark for one character, so its history is collected
@@ -897,6 +912,26 @@ async function readStoredEvidence(
         if (!(await repositories.suppressions.isActive(key, at)))
           keys.push(key);
       }
+      if (keys.length === 0) {
+        // A suppression can land between the subject filter and this read. A
+        // vanished alias is waiting, not a 500.
+        return {
+          limitations: [],
+          collectedAt: null,
+          kills: [],
+          wipes: [],
+          tierBests: [],
+          raiderIoFirstKills: [],
+          cuttingEdges: null,
+          cuttingEdgesCollected: false,
+          warcraftLogsComplete: false,
+          gathering: false,
+          activeRunIds: [],
+          collectionProgress: [],
+          resumesAt: null,
+          evidenceState: "waiting"
+        };
+      }
       return mergeIdentityEvidence(
         await Promise.all(
           keys.map((key) => storedEvidenceFor(key, repositories, character.key))
@@ -1547,7 +1582,7 @@ export function createApplicantDossierService(options: {
     scope: MeasurementScope | undefined,
     request: Pick<
       Parameters<typeof refreshCharacter>[0],
-      "rebuild" | "credentials"
+      "rebuild" | "credentials" | "beforeReserve"
     > & { origin: "refresh" | "rebuild" }
   ): Promise<RefreshCharacterResult> {
     return refreshCharacter({
@@ -1615,14 +1650,19 @@ export function createApplicantDossierService(options: {
     repositories: typeof options.repositories,
     at: Date
   ): Promise<DossierSubject[]> {
-    const subjects: DossierSubject[] = [rootOnlySubject(root)];
+    const subjects: DossierSubject[] = [
+      {
+        ...rootOnlySubject(root),
+        displayName: formatCharacterDisplayName(root.name)
+      }
+    ];
     for (const connection of await repositories.manualConnections.list(root)) {
       if (connection.excluded) continue;
       if (await repositories.suppressions.isActive(connection.key, at))
         continue;
       subjects.push({
         key: connection.key,
-        displayName: connection.displayName,
+        displayName: formatCharacterDisplayName(connection.displayName),
         className: connection.className,
         guild: null,
         raiderIoUrl: connection.raiderIoUrl,
@@ -1674,6 +1714,7 @@ export function createApplicantDossierService(options: {
     skipped: readonly DossierSubject[];
     evidence: readonly IdentityEvidence[];
     views: StoredDossierEvidence[];
+    limitations: readonly { recovery: "automatic" | "none" }[];
     activeEvidenceRunIds: readonly string[];
     activeDiscovery: boolean;
   }> {
@@ -1727,14 +1768,31 @@ export function createApplicantDossierService(options: {
           ? ("scanning" as const)
           : (item?.evidenceState ?? "waiting"),
         completedAt: item?.collectedAt ?? null,
-        limitations: item?.limitations ?? []
+        limitations: (item?.limitations ?? []).map((limitation) => {
+          const contract = contractLimitation(limitation);
+          return {
+            code: contract.code,
+            affects: contract.affects,
+            character: contract.character,
+            recovery: contract.recovery ?? "none"
+          };
+        })
       };
     });
+    const limitations = [
+      ...views.flatMap((view) =>
+        view.limitations.map((item) => ({ recovery: item.recovery }))
+      ),
+      // A character past the ceiling is not researched; its cap is still a
+      // shortfall the payload carries, so the state cannot call itself ready.
+      ...skipped.map(() => ({ recovery: "none" as const }))
+    ];
     return {
       subjects,
       skipped,
       evidence,
       views,
+      limitations,
       activeEvidenceRunIds: activeRuns.map((run) => run.id),
       activeDiscovery: activeDiscoveryRuns.length > 0
     };
@@ -1793,7 +1851,8 @@ export function createApplicantDossierService(options: {
         return {
           kind: "collecting",
           subjects: state.subjects,
-          evidence: views
+          evidence: views,
+          limitations: state.limitations
         };
       }
       const assembled = await assembleDossier({
@@ -1815,6 +1874,7 @@ export function createApplicantDossierService(options: {
         dossier: assembled.dossier,
         snapshotId: own.id,
         snapshotState: own.state,
+        snapshotLimitationCode: own.limitationCode,
         lastCollectedAt: earliestCollected(state.evidence),
         kills: assembled.rankedKills,
         subjects: state.subjects,
@@ -1826,6 +1886,9 @@ export function createApplicantDossierService(options: {
           )
           .map((subject) => subject.key),
         evidence: views,
+        limitations: assembled.dossier.limitations.map((limitation) => ({
+          recovery: limitation.recovery ?? "none"
+        })),
         cuttingEdgesRestored: state.subjects.every(
           (_subject, index) =>
             state.evidence[index]?.cuttingEdgesCollected === true
@@ -1846,8 +1909,10 @@ export function createApplicantDossierService(options: {
         kind: "ok",
         snapshotId: own?.id ?? null,
         snapshotState: own?.state ?? null,
+        snapshotLimitationCode: own?.limitationCode ?? null,
         lastCollectedAt: earliestCollected(state.evidence),
         evidence: state.views,
+        limitations: state.limitations,
         evidenceRunIds: state.activeEvidenceRunIds,
         activeDiscovery: state.activeDiscovery
       };
@@ -1948,13 +2013,14 @@ export function createApplicantDossierService(options: {
       return result === "removed" ? { kind: "removed" } : { kind: "missing" };
     },
 
-    async refreshCharacter(key, scope, overrides) {
+    async refreshCharacter(key, scope, overrides, beforeReserve) {
       // Deliberately takes no mode. The reader-facing control is `full` outside
       // the cooldown and `light` inside it, one run either way, and there is no
       // argument a caller could pass to turn it into a rebuild.
       return requestCollection(key, scope, {
         origin: "refresh",
-        credentials: overrides?.wclCredentialRef
+        credentials: overrides?.wclCredentialRef,
+        ...(beforeReserve ? { beforeReserve } : {})
       });
     },
 

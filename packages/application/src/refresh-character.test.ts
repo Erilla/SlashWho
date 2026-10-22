@@ -7,7 +7,13 @@ const key = { region: "eu" as const, realm: "silvermoon", name: "ryii" };
 const at = new Date("2026-09-16T12:00:00.000Z");
 const cooldownMs = 15 * 60 * 1000;
 
-function harness(lastCompletedAt: Date | null, rebuild = false) {
+function harness(
+  lastCompletedAt: Date | null,
+  rebuild = false,
+  beforeReserve?: () => Promise<
+    { allowed: true } | { allowed: false; retryAfterSeconds: number }
+  >
+) {
   const reserve = vi.fn().mockResolvedValue({
     kind: "reserved",
     run: { id: "run-1", key, status: "queued" }
@@ -66,6 +72,7 @@ function harness(lastCompletedAt: Date | null, rebuild = false) {
         at,
         cooldownMs,
         ...(rebuild ? { rebuild: true } : {}),
+        ...(beforeReserve ? { beforeReserve } : {}),
         repositories: {
           evidence: {
             reserve,
@@ -147,6 +154,57 @@ describe("refreshCharacter", () => {
 
     expect(h.reserve).not.toHaveBeenCalled();
     expect(h.enqueueCharacterEvidence).not.toHaveBeenCalled();
+  });
+
+  it("does not charge a light collection it skips", async () => {
+    const beforeReserve = vi.fn().mockResolvedValue({ allowed: true as const });
+    const h = harness(
+      new Date("2026-09-16T11:55:00.000Z"),
+      false,
+      beforeReserve
+    );
+    h.getCompleted.mockResolvedValue({
+      run: {
+        id: "run-0",
+        key,
+        completedAt: new Date("2026-09-16T11:55:00.000Z"),
+        limitationCode: null,
+        parseLimitationCode: null
+      },
+      kills: [
+        {
+          raidId: "42",
+          raidName: "The Tidebound Grotto",
+          killedAt: "2026-09-16T10:00:00.000Z",
+          fightUrl: "https://www.warcraftlogs.com/reports/example#fight=9"
+        }
+      ]
+    });
+
+    await expect(h.run()).resolves.toMatchObject({
+      mode: "light",
+      queued: false
+    });
+    expect(beforeReserve).not.toHaveBeenCalled();
+    expect(h.reserve).not.toHaveBeenCalled();
+  });
+
+  it("refuses before reserving when the charge gate says no", async () => {
+    const beforeReserve = vi.fn().mockResolvedValue({
+      allowed: false as const,
+      retryAfterSeconds: 7
+    });
+    const h = harness(
+      new Date("2026-09-16T11:00:00.000Z"),
+      false,
+      beforeReserve
+    );
+
+    await expect(h.run()).resolves.toMatchObject({
+      queued: false,
+      rateLimited: { retryAfterSeconds: 7 }
+    });
+    expect(h.reserve).not.toHaveBeenCalled();
   });
 
   it("logs only a static reason when it skips a light collection", async () => {

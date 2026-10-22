@@ -71,6 +71,7 @@ function read(
     dossier: d,
     snapshotId,
     snapshotState: "complete",
+    snapshotLimitationCode: null,
     lastCollectedAt: new Date("2026-10-22T09:45:52.977Z"),
     kills: [],
     subjects: d.characters.map((character) => ({
@@ -83,6 +84,7 @@ function read(
     })),
     pendingKeys: [],
     evidence: d.characters.map((character) => evidence(character.key)),
+    limitations: [],
     cuttingEdgesRestored: true,
     evidenceRunIds: [],
     activeDiscovery: false,
@@ -113,6 +115,36 @@ function kill(
       healing: { state: "unavailable" },
       bossDamage: { state: "unavailable" }
     }
+  };
+}
+
+function raidOf(
+  name: string,
+  killedAt: string
+): ApplicantDossier["raids"][number] {
+  return {
+    raidId: name.toLowerCase().replace(/\s+/g, "-"),
+    raidName: name,
+    imageUrl: null,
+    cuttingEdge: null,
+    bosses: [
+      {
+        bossId: "boss",
+        bossName: "Boss",
+        bossOrder: 1,
+        imageUrl: null,
+        state: "kill",
+        firstKill: {
+          killedAt,
+          guild: null,
+          historicWorldRank: null,
+          reportUrl: "https://www.warcraftlogs.com/reports/example",
+          characters: [root],
+          parses: []
+        },
+        bestParses: []
+      }
+    ]
   };
 }
 
@@ -179,11 +211,13 @@ function demoRead(
     dossier: demo,
     snapshotId,
     snapshotState: "complete",
+    snapshotLimitationCode: null,
     lastCollectedAt: new Date("2026-10-22T09:45:52.977Z"),
     kills: killsOf(demo, characterKeys),
     subjects,
     pendingKeys: [],
     evidence: subjects.map((subject) => evidence(subject.key)),
+    limitations: [],
     cuttingEdgesRestored: true,
     evidenceRunIds: [],
     activeDiscovery: false
@@ -293,10 +327,12 @@ describe("botDossierStatusOf", () => {
       kind: "ok",
       snapshotId: null,
       snapshotState: null,
+      snapshotLimitationCode: null,
       lastCollectedAt: null,
       evidence: [
         evidence(root, { evidenceState: "waiting", completedAt: null })
       ],
+      limitations: [],
       evidenceRunIds: [],
       activeDiscovery: true
     });
@@ -430,8 +466,32 @@ describe("botDossierSummaryOf", () => {
       summary?.guildHistory.map((entry) => entry.guild.name).sort()
     ).toEqual(["Guild One", "Guild Two"]);
     expect(
-      summary?.guildHistory.every((entry) => entry.characters.includes("Ryii"))
+      summary?.guildHistory.every((entry) =>
+        entry.characters.includes("eu/silvermoon/ryii")
+      )
     ).toBe(true);
+  });
+
+  it("counts distinct kill events, not character rows", () => {
+    const guild = {
+      name: "Seriously Casual",
+      region: "eu" as const,
+      realm: "silvermoon"
+    };
+    const summary = botDossierSummaryOf(
+      read({
+        kills: [
+          kill(root, "2026-09-01T20:00:00.000Z", guild),
+          kill(alt, "2026-09-01T20:00:00.000Z", guild),
+          kill(root, "2026-09-08T20:00:00.000Z", guild),
+          kill(alt, "2026-09-08T20:00:00.000Z", guild)
+        ]
+      })
+    );
+    expect(summary?.guildHistory[0]?.raids[0]).toMatchObject({
+      kills: 2,
+      characters: ["eu/silvermoon/alt", "eu/silvermoon/ryii"]
+    });
   });
 
   it("never invents a false cutting edge on a guild stint", () => {
@@ -454,6 +514,97 @@ describe("botDossierSummaryOf", () => {
     expect(summary?.guildHistory[0]?.raids[0]).not.toHaveProperty(
       "cuttingEdge"
     );
+  });
+
+  it("keeps same-named characters on different realms distinct", () => {
+    const otherRealm = {
+      region: "eu" as const,
+      realm: "kazzak",
+      name: "ryii"
+    };
+    const summary = botDossierSummaryOf(
+      read({
+        kills: [
+          kill(root, "2026-09-01T20:00:00.000Z", {
+            name: "Seriously Casual",
+            region: "eu",
+            realm: "silvermoon"
+          }),
+          kill(otherRealm, "2026-09-08T20:00:00.000Z", {
+            name: "Seriously Casual",
+            region: "eu",
+            realm: "silvermoon"
+          })
+        ]
+      })
+    );
+    expect(summary?.guildHistory[0]?.characters).toEqual([
+      "eu/kazzak/ryii",
+      "eu/silvermoon/ryii"
+    ]);
+  });
+
+  it("agrees with status for the same read", () => {
+    const stored = read();
+    if (stored.kind !== "ready") throw new Error("expected ready");
+    const summary = botDossierSummaryOf(stored);
+    const status = botDossierStatusOf({
+      kind: "ok",
+      snapshotId: stored.snapshotId,
+      snapshotState: stored.snapshotState,
+      snapshotLimitationCode: stored.snapshotLimitationCode,
+      lastCollectedAt: stored.lastCollectedAt,
+      evidence: stored.evidence,
+      limitations: stored.limitations,
+      evidenceRunIds: stored.evidenceRunIds,
+      activeDiscovery: stored.activeDiscovery
+    });
+    expect(status?.state).toBe(summary?.state);
+  });
+
+  it("keeps the five most recent raids and marks the truncation", () => {
+    const raids = [
+      raidOf("Oldest", "2024-09-01T20:00:00.000Z"),
+      raidOf("Older", "2025-03-01T20:00:00.000Z"),
+      raidOf("Middle", "2025-09-01T20:00:00.000Z"),
+      raidOf("Recent", "2026-03-01T20:00:00.000Z"),
+      raidOf("Newer", "2026-06-01T20:00:00.000Z"),
+      raidOf("Newest", "2026-09-01T20:00:00.000Z")
+    ];
+    const summary = botDossierSummaryOf(read({ dossier: dossier({ raids }) }));
+    expect(summary?.raids.map((raid) => raid.raidName)).toEqual([
+      "Newest",
+      "Newer",
+      "Recent",
+      "Middle",
+      "Older"
+    ]);
+    expect(summary?.raidsTruncated).toBe(true);
+  });
+
+  it("explains a privacy-hidden partial snapshot", () => {
+    const summary = botDossierSummaryOf(
+      read({
+        dossier: dossier({
+          research: { state: "partial", message: "Privacy hidden." }
+        }),
+        snapshotState: "partial",
+        snapshotLimitationCode: "privacy_hidden"
+      })
+    );
+    expect(summary?.state).toBe("partial");
+    expect(summary?.limitations).toContainEqual({
+      code: "privacy_hidden",
+      affects: "linked_characters",
+      character: root
+    });
+  });
+
+  it("is partial when the payload carries a limitation", () => {
+    const summary = botDossierSummaryOf(
+      read({ limitations: [{ recovery: "none" }] })
+    );
+    expect(summary?.state).toBe("partial");
   });
 
   it("starts a new span after a whole tier passes between nights", () => {

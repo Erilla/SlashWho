@@ -13,6 +13,7 @@ import {
 import {
   applicationConfigSchema,
   botDossierStatusOf,
+  botDossierSummaryOf,
   createApplicantDossierService,
   createBotDossierService,
   legacyResolveSubjects
@@ -204,6 +205,7 @@ describe("bot dossier reads", () => {
     expect(
       summary.evidence.every((item) => item.evidenceState === "complete")
     ).toBe(true);
+    expect(botDossierSummaryOf(summary)?.state).toBe(status.state);
   });
 
   it("omits a suppressed declared character and refuses a suppressed root", async () => {

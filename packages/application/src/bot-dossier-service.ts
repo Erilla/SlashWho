@@ -25,7 +25,7 @@ import type { CreateSearchResult, SearchService } from "./search-service";
 export type CreateBotDossierResult =
   | {
       kind: "created";
-      status: 200 | 202;
+      status: 200 | 202 | 503;
       body: BotCreateDossierResponse;
     }
   | { kind: "invalid"; code: "invalid_character_url" }
@@ -224,7 +224,6 @@ export function createBotDossierService(options: {
       }
 
       const outcomes: BotCreateDossierOutcome[] = [rootOutcome];
-      let anyQueued = rootOutcome.outcome === "queued";
       let retryAfterSeconds: number | undefined;
 
       for (const key of others) {
@@ -246,7 +245,6 @@ export function createBotDossierService(options: {
           await options.repositories.manualConnections.add(root, key, {
             origin: "bot"
           });
-          if (outcome.outcome === "queued") anyQueued = true;
         } else if (outcome.outcome === "rate_limited") {
           const retry =
             result.kind === "rate_limited" ? result.retryAfterSeconds : 1;
@@ -259,9 +257,15 @@ export function createBotDossierService(options: {
         await options.dossiers.readStatus(root, scope)
       );
       const state: BotDossierState = status?.state ?? "collecting";
+      const everyExisting = outcomes.every(
+        (outcome) => outcome.outcome === "existing"
+      );
+      const anyFailed = outcomes.some(
+        (outcome) => outcome.outcome === "failed"
+      );
       return {
         kind: "created",
-        status: anyQueued || retryAfterSeconds !== undefined ? 202 : 200,
+        status: everyExisting ? 200 : anyFailed ? 503 : 202,
         body: {
           root,
           state,
@@ -360,20 +364,31 @@ export function createBotDossierService(options: {
       if (!(await options.repositories.characters.find(key))) {
         return { kind: "not_found" };
       }
-      const allowance = await options.search.authorizeSearchAllowance(
-        input.headers,
-        scope
+      const result = await options.dossiers.refreshCharacter(
+        key,
+        scope,
+        undefined,
+        () =>
+          options.search
+            .authorizeSearchAllowance(input.headers, scope)
+            .then((allowance) =>
+              allowance.allowed
+                ? { allowed: true as const }
+                : {
+                    allowed: false as const,
+                    retryAfterSeconds:
+                      "retryAfterSeconds" in allowance
+                        ? allowance.retryAfterSeconds
+                        : 1
+                  }
+            )
       );
-      if (!allowance.allowed) {
-        if ("retryAfterSeconds" in allowance) {
-          return {
-            kind: "rate_limited",
-            retryAfterSeconds: allowance.retryAfterSeconds
-          };
-        }
-        return { kind: "not_found" };
+      if (result.rateLimited) {
+        return {
+          kind: "rate_limited",
+          retryAfterSeconds: result.rateLimited.retryAfterSeconds
+        };
       }
-      const result = await options.dossiers.refreshCharacter(key, scope);
       return {
         kind: "refreshed",
         mode: result.mode === "light" ? "light" : "full",

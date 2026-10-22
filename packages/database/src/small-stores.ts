@@ -315,8 +315,11 @@ export function createSmallStoreRepositories(
           throw new RangeError("rate_limit_expiry_out_of_range");
         }
         return withTransaction(pool, async (client) => {
+          // The same key and seed the search reservation uses for its bucket
+          // (`bucket:<hash>`, seed 0), so a create and a refresh charging the
+          // same bucket cannot both read 59 of 60 and insert.
           await client.query(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1, 1))",
+            "SELECT pg_advisory_xact_lock(hashtextextended('bucket:' || $1, 0))",
             [callerBucketHash]
           );
           const usage = await client.query<{

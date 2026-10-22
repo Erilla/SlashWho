@@ -2,6 +2,7 @@ import type {
   BotDossierBoss,
   BotDossierCharacter,
   BotDossierGuildHistory,
+  BotDossierLimitation,
   BotDossierRaid,
   BotDossierState,
   BotDossierStatus,
@@ -29,6 +30,8 @@ export type BotDossierStateInput = Readonly<{
   activeDiscovery: boolean;
   evidenceRunIds: readonly string[];
   evidence: readonly StoredDossierEvidence[];
+  /** Limitations the payload will carry, including the skipped-subject cap. */
+  limitations?: readonly { recovery: "automatic" | "none" }[];
 }>;
 
 export type BotDossierStateResult = Readonly<{
@@ -68,7 +71,8 @@ export function botDossierState(
   if (
     input.snapshotState === "partial" ||
     input.evidence.some((item) => item.evidenceState === "partial") ||
-    input.evidence.some((item) => item.limitations.length > 0)
+    input.evidence.some((item) => item.limitations.length > 0) ||
+    (input.limitations?.length ?? 0) > 0
   ) {
     return { state: "partial", lastCollectedAt };
   }
@@ -118,10 +122,6 @@ function characterOf(
   };
 }
 
-function uniqueNames(names: readonly string[]): string[] {
-  return [...new Set(names)];
-}
-
 /** The bot's own view stops at five tiers, so five raids is parity, not loss. */
 const BOT_RAID_LIMIT = 5;
 
@@ -129,14 +129,24 @@ function keyId(key: CharacterKey): string {
   return `${key.region}\0${key.realm}\0${key.name}`;
 }
 
+/** A compact, unambiguous identity: two realms can share a character name. */
+function identityOf(key: CharacterKey): string {
+  return `${key.region}/${key.realm}/${key.name}`;
+}
+
+function uniqueIdentities(identities: readonly string[]): string[] {
+  return [...new Set(identities)].sort();
+}
+
 /**
  * Spans the same way the page draws them: one-night guilds are pugs, renames
  * merge, and a whole-tier gap starts a new span. Each span's raids are the
- * stored kills inside the span, grouped by raid.
+ * distinct kill events inside the span, grouped by raid. One event can name
+ * several characters, so counting rows would inflate the kill count.
  */
 function guildHistoryOf(
   kills: readonly DossierKillEvidence[],
-  nameOf: (key: CharacterKey) => string
+  identity: (key: CharacterKey) => string
 ): BotDossierGuildHistory[] {
   const history = collectGuildRaidNights(
     kills.map((kill) => ({
@@ -147,33 +157,28 @@ function guildHistoryOf(
   );
   return guildTimelineSpans(history, { tiers: raidTiers() }).map((span) => {
     const nights = new Set<string>();
-    const byRaid = new Map<
-      string,
-      {
-        raidName: string;
-        kills: number;
-        firstKillAt: string;
-        lastKillAt: string;
-        characters: CharacterKey[];
-      }
-    >();
+    type KillEvent = { killedAt: string; characters: Set<string> };
+    type RaidEvents = { raidName: string; events: Map<string, KillEvent> };
+    const byRaid = new Map<string, RaidEvents>();
     for (const kill of kills) {
       if (!kill.guild) continue;
       if (guildIdentity(kill.guild) !== span.guildId) continue;
       const date = kill.killedAt.slice(0, 10);
       if (date < span.firstNight || date > span.lastNight) continue;
       nights.add(date);
-      const raid = byRaid.get(kill.raidId) ?? {
+      const raid: RaidEvents = byRaid.get(kill.raidId) ?? {
         raidName: kill.raidName,
-        kills: 0,
-        firstKillAt: kill.killedAt,
-        lastKillAt: kill.killedAt,
-        characters: []
+        events: new Map<string, KillEvent>()
       };
-      raid.kills += 1;
-      if (kill.killedAt < raid.firstKillAt) raid.firstKillAt = kill.killedAt;
-      if (kill.killedAt > raid.lastKillAt) raid.lastKillAt = kill.killedAt;
-      raid.characters.push(kill.character);
+      // A kill event is one boss at one moment; the characters present are
+      // rows on the same event, not separate kills.
+      const eventKey = `${kill.bossId}\0${kill.killedAt}`;
+      const event = raid.events.get(eventKey) ?? {
+        killedAt: kill.killedAt,
+        characters: new Set<string>()
+      };
+      event.characters.add(identity(kill.character));
+      raid.events.set(eventKey, event);
       byRaid.set(kill.raidId, raid);
     }
     return {
@@ -182,42 +187,67 @@ function guildHistoryOf(
       lastNight: span.lastNight,
       raidNights: nights.size,
       tiers: [...span.tiers],
-      characters: span.characters.map(nameOf),
+      characters: span.characters.map(identity),
       raids: [...byRaid.values()]
-        .map((raid) => ({
-          ...raid,
-          characters: uniqueNames(raid.characters.map(nameOf))
-        }))
+        .map((raid) => {
+          const events = [...raid.events.values()];
+          const times = events.map((event) => event.killedAt);
+          return {
+            raidName: raid.raidName,
+            kills: events.length,
+            firstKillAt: times.reduce((left, right) =>
+              left < right ? left : right
+            ),
+            lastKillAt: times.reduce((left, right) =>
+              left > right ? left : right
+            ),
+            characters: uniqueIdentities(
+              events.flatMap((event) => [...event.characters])
+            )
+          };
+        })
         .sort((left, right) => (left.firstKillAt < right.firstKillAt ? 1 : -1))
     };
   });
 }
 
+type RaidWithActivity = Readonly<{
+  raid: BotDossierRaid;
+  lastActivityAt: string;
+}>;
+
 function raidsOf(
   dossier: Extract<StoredDossierRead, { kind: "ready" }>["dossier"],
-  nameOf: (key: CharacterKey) => string
-): BotDossierRaid[] {
-  const raids: BotDossierRaid[] = [];
+  identity: (key: CharacterKey) => string
+): RaidWithActivity[] {
+  const raids: RaidWithActivity[] = [];
   for (const raid of dossier.raids) {
     const bosses: BotDossierBoss[] = [];
     let hasKill = false;
+    let lastActivityAt = "";
     for (const boss of raid.bosses) {
       if (boss.state === "kill" && boss.firstKill.characters.length > 0) {
         hasKill = true;
+        if (boss.firstKill.killedAt > lastActivityAt) {
+          lastActivityAt = boss.firstKill.killedAt;
+        }
         bosses.push({
           bossName: boss.bossName,
           state: "kill",
           firstKilledAt: boss.firstKill.killedAt,
-          characters: boss.firstKill.characters.map(nameOf),
+          characters: boss.firstKill.characters.map(identity),
           worldRank: boss.firstKill.historicWorldRank,
           reportUrl: boss.firstKill.reportUrl
         });
       } else if (boss.state === "wipe" && boss.wipe.characters.length > 0) {
+        if (boss.wipe.attemptedAt > lastActivityAt) {
+          lastActivityAt = boss.wipe.attemptedAt;
+        }
         bosses.push({
           bossName: boss.bossName,
           state: "wipe",
           firstKilledAt: null,
-          characters: boss.wipe.characters.map(nameOf),
+          characters: boss.wipe.characters.map(identity),
           worldRank: null,
           reportUrl: boss.wipe.reportUrl
         });
@@ -225,13 +255,14 @@ function raidsOf(
     }
     if (hasKill && bosses.length > 0) {
       raids.push({
-        raidName: raid.raidName,
-        cuttingEdge: raid.cuttingEdge,
-        bosses
+        raid: { raidName: raid.raidName, bosses },
+        lastActivityAt
       });
     }
   }
-  return raids;
+  return raids.sort((left, right) =>
+    left.lastActivityAt < right.lastActivityAt ? 1 : -1
+  );
 }
 
 export function botDossierStatusOf(
@@ -243,7 +274,8 @@ export function botDossierStatusOf(
     snapshotState: read.snapshotState,
     activeDiscovery: read.activeDiscovery,
     evidenceRunIds: read.evidenceRunIds,
-    evidence: read.evidence
+    evidence: read.evidence,
+    limitations: read.limitations
   });
   return {
     state,
@@ -251,6 +283,21 @@ export function botDossierStatusOf(
     lastCollectedAt: lastCollectedAt?.toISOString() ?? null,
     evidenceRunIds: [...read.evidenceRunIds]
   };
+}
+
+function limitationsOf(
+  limitations: readonly BotDossierLimitation[]
+): BotDossierLimitation[] {
+  return [
+    ...new Map(
+      limitations.map((limitation) => [
+        `${limitation.code}\0${limitation.affects}\0${
+          limitation.character ? keyId(limitation.character) : ""
+        }`,
+        limitation
+      ])
+    ).values()
+  ];
 }
 
 export function botDossierSummaryOf(
@@ -269,26 +316,47 @@ export function botDossierSummaryOf(
       ),
       guildHistory: [],
       raids: [],
+      raidsTruncated: false,
       cuttingEdges: [],
-      limitations: []
+      limitations: limitationsOf(
+        read.evidence.flatMap((item) =>
+          item.limitations.map((limitation) => ({
+            code: limitation.code,
+            affects: limitation.affects,
+            character: limitation.character
+          }))
+        )
+      )
     };
   }
+  const limitations = limitationsOf([
+    ...read.dossier.limitations.map((limitation) => ({
+      code: limitation.code,
+      affects: limitation.affects,
+      character: limitation.character
+    })),
+    // `privacy_hidden` is a snapshot flag, not a public limitation. The bot
+    // summary says why it is partial rather than publishing an empty list.
+    ...(read.snapshotLimitationCode === "privacy_hidden"
+      ? [
+          {
+            code: "privacy_hidden" as const,
+            affects: "linked_characters" as const,
+            character: read.dossier.root
+          }
+        ]
+      : [])
+  ]);
   const { state, lastCollectedAt } = botDossierState({
     snapshotId: read.snapshotId,
     snapshotState: read.snapshotState,
     activeDiscovery: read.activeDiscovery,
     evidenceRunIds: read.evidenceRunIds,
-    evidence: read.evidence
+    evidence: read.evidence,
+    limitations: read.limitations
   });
   const pending = new Set(read.pendingKeys.map((key) => keyId(key)));
-  const names = new Map(
-    read.dossier.characters.map((character) => [
-      keyId(character.key),
-      character.displayName
-    ])
-  );
-  const nameOf = (key: CharacterKey): string =>
-    names.get(keyId(key)) ?? key.name;
+  const allRaids = raidsOf(read.dossier, identityOf);
   return {
     root: read.dossier.root,
     state,
@@ -307,18 +375,14 @@ export function botDossierSummaryOf(
             source: character.source
           },
           read.evidence.find(
-            (item) =>
-              item.key.region === character.key.region &&
-              item.key.realm === character.key.realm &&
-              item.key.name === character.key.name
+            (item) => keyId(item.key) === keyId(character.key)
           ),
-          pending.has(
-            `${character.key.region}\0${character.key.realm}\0${character.key.name}`
-          )
+          pending.has(keyId(character.key))
         )
       ),
-    guildHistory: guildHistoryOf(read.kills, nameOf),
-    raids: raidsOf(read.dossier, nameOf).slice(0, BOT_RAID_LIMIT),
+    guildHistory: guildHistoryOf(read.kills, identityOf),
+    raids: allRaids.slice(0, BOT_RAID_LIMIT).map((entry) => entry.raid),
+    raidsTruncated: allRaids.length > BOT_RAID_LIMIT,
     cuttingEdges: [
       ...new Map(
         read.dossier.cuttingEdges.map((edge) => [
@@ -330,21 +394,6 @@ export function botDossierSummaryOf(
         ])
       ).values()
     ],
-    limitations: [
-      ...new Map(
-        read.dossier.limitations.map((limitation) => [
-          `${limitation.code}\0${limitation.affects}\0${
-            limitation.character
-              ? `${limitation.character.region}\0${limitation.character.realm}\0${limitation.character.name}`
-              : ""
-          }`,
-          {
-            code: limitation.code,
-            affects: limitation.affects,
-            character: limitation.character
-          }
-        ])
-      ).values()
-    ]
+    limitations
   };
 }
