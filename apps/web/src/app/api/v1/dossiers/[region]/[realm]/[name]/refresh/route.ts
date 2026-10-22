@@ -25,8 +25,17 @@ export async function POST(
     });
     if ("refusal" in character) return character.refusal;
     const { botDossiers } = await getContainer();
-    const result = await botDossiers.refresh(character.key, scope);
+    const result = await botDossiers.refresh(
+      character.key,
+      { headers: request.headers },
+      scope
+    );
     if (result.kind === "not_found") return apiError("character_not_found");
+    if (result.kind === "rate_limited") {
+      return apiError("rate_limited", {
+        retryAfterSeconds: result.retryAfterSeconds
+      });
+    }
     return jsonNoStore(dossierRefreshResponseSchema, {
       mode: result.mode,
       lastCollectedAt: result.lastCollectedAt?.toISOString() ?? null
