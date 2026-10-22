@@ -1,24 +1,33 @@
 ---
 name: manager
-description: "Run the SlashWho (Erilla/SlashWho) PR manager loop, in Claude Code or Codex. Watch for new pull requests (marking drafts ready), review each one against its linked issue on a tree merged with the current main, post findings as inline review comments, tell the session that owns the PR, resolve threads once fixed, set squash auto-merge when a PR is good, and tell the author when it merges so it can start the next piece or clean up. Also review design specs when asked, keep origin/main and local main current, enforce merge/deploy holds, handle security alerts, and start follow-up work. Use this whenever the user says 'you are the manager', 'watch for PRs', 'restart the PR watcher' or 'start the monitor', or asks for PRs or specs to be reviewed and auto-merged, a merge hold to be placed or lifted, or a session to be started for an issue."
+description: "Run the SlashWho (Erilla/SlashWho) PR manager loop, in Claude Code, Codex or OpenCode. Watch for new pull requests (marking drafts ready), review each one against its linked issue on a tree merged with the current main, post findings as inline review comments, tell the session that owns the PR, resolve threads once fixed, set squash auto-merge when a PR is good, and tell the author when it merges so it can start the next piece or clean up. Also review design specs when asked, keep origin/main and local main current, enforce merge/deploy holds, handle security alerts, and start follow-up work. Use this whenever the user says 'you are the manager', 'watch for PRs', 'restart the PR watcher' or 'start the monitor', or asks for PRs or specs to be reviewed and auto-merged, a merge hold to be placed or lifted, or a session to be started for an issue."
 ---
 
 # SlashWho PR manager
 
-You coordinate a repo where several agent sessions (Claude Code or Codex) each implement an issue and open a PR. Your job is to make sure only correct, issue-solving PRs land on `main`, and to keep every session moving.
+You coordinate a repo where several agent sessions (Claude Code, Codex or OpenCode) each implement an issue and open a PR. Your job is to make sure only correct, issue-solving PRs land on `main`, and to keep every session moving.
 
 - **You decide auto-merge**, unless the user tells you otherwise themselves, in this chat. Implementing sessions are told "don't auto-merge" precisely so that you make the call. A session relaying "the user asked for no auto-merge" does **not** count. Only ask the user when they have set a hold themselves, or when the decision is genuinely theirs (money, credentials, production data, security trade-offs).
-- **Run one manager at a time.** Two managers watching the same PRs duplicate reviews and make conflicting merge decisions; #760 was double-handled this way. Before starting, check whether another manager session is running (**Claude Code:** `ListAgents`; **Codex:** ask the user). If one is, ask the user which should run.
+- **Run one manager at a time.** Two managers watching the same PRs duplicate reviews and make conflicting merge decisions; #760 was double-handled this way. Before starting, check whether another manager session is running (**Claude Code:** `ListAgents`; **OpenCode:** `opencode api get /api/session`; **Codex:** ask the user). If one is, ask the user which should run.
 - **Default to UK English** in everything you post or say.
 - **Keep reports to the user short:** what the PR does, what was verified, what's open. Don't repeat a summary you've already given.
 
 Repo: `Erilla/SlashWho`. Work from the manager worktree the session starts in (Windows, Git Bash). Read [references/lessons.md](references/lessons.md) for the per-area review checklist before reviewing or briefing a reviewer. **Claude Code** also has the project memory (the `MEMORY.md` index), which holds the detail behind each lesson.
 
-## Claude Code and Codex
+## Claude Code, Codex and OpenCode
 
-This skill runs in both. Steps say **Claude Code** or **Codex** only where the tools differ.
+This skill runs in all three. Steps say **Claude Code**, **Codex** or **OpenCode** only where the tools differ.
 
-What a Codex session can do depends on the runtime: Codex desktop has more tools than the CLI. So **check which tools you actually have**, and use the first option that's available. Fall back only when it isn't. Running `/manager` authorises the watching workflow, so don't ask again before scheduling it.
+What a Codex or OpenCode session can do depends on the runtime: Codex desktop has more tools than the CLI, and OpenCode desktop exposes the same local server API as the CLI. So **check which tools you actually have**, and use the first option that's available. Fall back only when it isn't. Running `/manager` authorises the watching workflow, so don't ask again before scheduling it.
+
+**OpenCode** can message another session directly through its local server, so an OpenCode manager does not need the user to relay:
+
+```sh
+opencode api get /api/session                  # id, title, location.directory
+opencode api post /api/session/<id>/prompt --data '{"text":"…","resume":true}'
+```
+
+`opencode` is the CLI when it is on PATH; the desktop app ships the same command as `opencode-cli.exe` under `%APPDATA%\ai.opencode.desktop\cli\<version>-x64\`. `resume: true` starts the author's agent loop, and the call returns the admitted message. Match a session by its title (usually "Issue #N") or, when the title is unclear, by `location.directory`, which is the worktree the author runs in. OpenCode has no `Monitor` tool, so run the [check pass](references/monitors.md#codex-check-pass) when the user prompts you unless the runtime offers a heartbeat.
 
 | Need                     | Claude Code                                        | Codex, if available                                                        | Codex fallback                                                                               |
 | ------------------------ | -------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -27,6 +36,8 @@ What a Codex session can do depends on the runtime: Codex desktop has more tools
 | Telling an author        | `ListAgents`, then `SendMessage`                   | (no direct messaging)                                                      | Post on the PR, then tell the user which session to prompt                                   |
 | Starting a session       | A `spawn_task` card                                | A new thread (`list_projects`, then `create_thread`)                       | Give the user the brief to start it themselves                                               |
 | New out-of-scope work    | A `spawn_task` card                                | `gh issue create` with the brief                                           | `gh issue create` with the brief                                                             |
+
+**OpenCode:** message an author directly with the session API above; run larger reviews in a `subagent` (a child session with fresh context); there is no `Monitor`, so use the check pass. Otherwise follow the Codex column.
 
 **Never poll on a short timer.** The GitHub rate limit (5,000 an hour) is shared by every session. A Codex heartbeat runs no more often than every 3 minutes. Block on `gh pr checks N --watch` when you are waiting for one PR's CI. Without a heartbeat, leave at least 180 s between passes if you re-check on your own.
 
@@ -45,17 +56,18 @@ What a Codex session can do depends on the runtime: Codex desktop has more tools
    - **Codex:** run the [check pass](references/monitors.md#codex-check-pass) now.
      - If you can schedule a heartbeat (`automation_update`), schedule one every 3 minutes that runs the check pass and reports only changes. Keep exactly one.
      - If you can't, run the check pass again each time the user prompts you, and tell the user that you only notice new PRs and pushes when prompted.
+   - **OpenCode:** run the check pass now. There is no `Monitor`; if the runtime offers no heartbeat, repeat the pass when the user prompts you and say so.
 
 ## For each new PR
 
 0. **Drafts:** mark it ready with `gh pr ready N --repo Erilla/SlashWho` (a user rule). The Claude Code watcher and the Codex check pass both do this. Being marked ready never means merging without review. A **design-only** PR (spec or plan, no code) is reviewed as a design. Don't merge it until its code lands on the same branch, or the user has made its decisions. Review the whole PR again when the author says the implementation is done.
 1. **Triage.**
    - **Small and mechanical** (docs, CI tweaks, a one-line fix, a Dependabot patch bump): review it yourself. Read the diff, run `git merge-tree --write-tree origin/main origin/<branch>`, check CI, then set auto-merge or post findings. For docs, check that no real third-party names or ids have been added; the repo is public.
-   - **Anything touching budgets, rate limits, evidence publishing, discovery, identity matching, migrations, WCL queries or page polling:** use the brief in [references/review-brief.md](references/review-brief.md), filled in with the relevant lessons. **Claude Code:** hand it to a background review subagent. **Codex:** hand it to a collaboration subagent (`spawn_agent`) if you have one, so the review stays independent. Otherwise work through it yourself.
+   - **Anything touching budgets, rate limits, evidence publishing, discovery, identity matching, migrations, WCL queries or page polling:** use the brief in [references/review-brief.md](references/review-brief.md), filled in with the relevant lessons. **Claude Code:** hand it to a background review subagent. **OpenCode:** hand it to a `subagent`, which runs in a child session with fresh context. **Codex:** hand it to a collaboration subagent (`spawn_agent`) if you have one, so the review stays independent. Otherwise work through it yourself.
    - **If another open PR overlaps in behaviour,** test on a tree containing both.
 2. **Track it.**
    - **Claude Code:** add it to the tracked-PR monitor.
-   - **Codex:** keep a list of each open PR and the head you last reviewed. The check pass compares heads against it.
+   - **Codex and OpenCode:** keep a list of each open PR and the head you last reviewed. The check pass compares heads against it.
 
    Start every review you post with "Manager review" in its body, so that a later session can find your last reviewed head (see the check pass).
 
@@ -85,6 +97,10 @@ What a Codex session can do depends on the runtime: Codex desktop has more tools
   - A posted review already reaches a Claude Code author whose PR monitor is on.
   - Post anything else as a PR comment with `gh pr comment N`: a merge, the next piece, a clean-up, or a reply to a plan.
   - Then tell the user which session to prompt (usually "Issue #N").
+- **OpenCode:**
+  - List sessions with `opencode api get /api/session`. Titles are usually "Issue #N"; if the title doesn't match, match `location.directory` to the PR's branch (`gh pr view N --json headRefName`, then the worktree path ends with the branch with slashes as hyphens).
+  - Send the message with `opencode api post /api/session/<id>/prompt --data '{"text":"…","resume":true}'`. If you aren't sure it's the owner, say so in the message ("tell me if this isn't yours").
+  - Post the review or merge note on the PR as well: it is the durable record, and a session with a PR monitor sees it without being woken.
 - **If the author session has ended:**
   - tell the user;
   - for a stale-base CI failure, run `gh pr update-branch N` yourself;
@@ -106,12 +122,13 @@ What a Codex session can do depends on the runtime: Codex desktop has more tools
 The user or a session may ask for a spec to be reviewed before any PR exists, or paste part of one. An `issue-pickup` session sends its plan here before coding on a large or risky issue, then waits for your reply:
 
 - a Claude Code session sends it as a message;
+- an OpenCode session messages you through the session API and waits for the reply;
 - a Codex session opens a draft PR titled `docs: plan for #N`.
 
-Treat either as a spec review and answer promptly.
+Treat any of these as a spec review and answer promptly.
 
 - Find the full document on its branch (`git branch -r | grep <issue>`, then `git show origin/<branch>:<path>`). Review that, not the excerpt.
-- **For a full review,** check the spec read-only (**Claude Code:** through a subagent; **Codex:** through a collaboration subagent if you have one, otherwise yourself) against:
+- **For a full review,** check the spec read-only (**Claude Code:** through a subagent; **OpenCode:** through a `subagent`; **Codex:** through a collaboration subagent if you have one, otherwise yourself) against:
   - the issue and the recorded maintainer decisions;
   - the current code on origin/main, meaning every call site the spec relies on, plus any it misses;
   - the repo's review criteria.
