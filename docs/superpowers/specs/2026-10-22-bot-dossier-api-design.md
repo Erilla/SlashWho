@@ -382,8 +382,9 @@ normalized_name) DO NOTHING`, followed by a `SELECT` for the existing id when
   result (internal only; the public `startResultResponse` ignores it). The bot
   create passes it to `characters.ensure` after acceptance, so the fresh path
   adds no Raider.IO read and the stale path reads once.
-- `ApplicantDossierService` gains `readSummary(key, scope)` and
-  `readStatus(key, scope)`. `assembleDossier` gains a stored-only mode that:
+- `ApplicantDossierService` gains `readStored(key, scope)` and
+  `readStatus(key, scope)`. `readStored` returns the stored dossier and its
+  evidence; `botDossierSummaryOf` projects it to the bot contract. `assembleDossier` gains a stored-only mode that:
   - reads `evidence.getCompleted` per subject with an explicit
     `suppressions.isActive` check before each subject and alias;
   - uses stored Cutting Edge and stored historic ranks only;
