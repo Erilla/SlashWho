@@ -87,10 +87,14 @@ null` means "not restored by this read", never "not earned". If no stored
 Both routes call one helper with these inputs:
 
 - the **own** root snapshot (`snapshots.getCurrent`), or null;
-- whether a discovery run is active (`runs.findActive(root)`);
+- whether a discovery run is active for **any** included subject
+  (`runs.findActiveMany`, not `runs.findActive(root)`: the root's run alone is
+  not enough);
 - the active evidence-run ids for the dossier's subjects;
 - each included subject's latest terminal run (`complete` or `partial`) and its
-  `completed_at`;
+  `completed_at`. A **pending manual connection** — a declared character with
+  no snapshot and no terminal run — is an included subject whose terminal run
+  is absent, so it keeps the dossier `collecting` until it settles;
 - the stored limitations.
 
 Rules, in order:
@@ -150,10 +154,16 @@ that a suppressed character exists.
   `INSERT … ON CONFLICT DO NOTHING`, so it never lowers a class or level the
   snapshot wrote.
 - For each other character, in order: start its search; only when accepted,
-  write the `bot` link with `ON CONFLICT DO NOTHING`. A `429`, `not_found` or
-  `suppressed` target is recorded and **not** linked, so no link is left
-  pending forever. A link to an existing `applicant_sheet` or `dossier` row is
-  never relabelled.
+  write the `bot` link with `ON CONFLICT DO NOTHING`. The link is written on
+  **every** accepted character, including a replay whose search joined an
+  existing run: if the process died between the enqueue and the link write, the
+  retry sees `existing` and must still write it, or the character never joins
+  the dossier. A `429`, `not_found` or `suppressed` target is recorded and
+  **not** linked, so no link is left pending forever. A link to an existing
+  `applicant_sheet` or `dossier` row is never relabelled.
+- **Duplicate URLs are deduplicated** by canonical key, preserving first
+  position, and charged once. A duplicate of the root is not linked: there is
+  never a self-link. The response has one outcome per unique character.
 - Response:
 
   ```jsonc
@@ -212,7 +222,8 @@ Summary shape:
   "characters": [
     { "key": { … }, "displayName": "raasta", "className": "Shaman",
       "guild": { "name": "Spilled Coffee", "region": "eu", "realm": "kazzak" },
-      "source": "submitted", "confidence": null, "evidenceState": "complete" }
+      "source": "submitted", "confidence": null, "evidenceState": "complete",
+      "pending": false }
   ],
   "guildHistory": [
     { "guild": { … }, "firstNight": "2026-01-18", "lastNight": "2026-10-11",
@@ -245,6 +256,13 @@ Projection rules:
 
 - Suppressed and excluded characters are omitted, as they are from the
   dossier's evidence.
+- `characters[].evidenceState` uses the public enum
+  `waiting | scanning | complete | partial`. A **pending** manual connection —
+  a declared character with no snapshot and no terminal run — is `waiting`,
+  with `className` and `guild` null, `displayName` the normalized key name,
+  `source: "manually_added"`, `confidence: null` and `pending: true`. A
+  character with a snapshot but no evidence is also `waiting`, with
+  `pending: false`. `scanning` means an evidence run is active for it.
 - `guildHistory` is built from `collectGuildRaidNights` and
   `guildTimelineSpans` (`packages/domain/src/guild-history.ts`), the same rules
   as the page: a UTC calendar day is a raid night, renames merge through
@@ -341,9 +359,10 @@ manual_dossier_connections_origin_check` and add the widened check including
   - `tests/integration/repositories-dossier-connections.test.ts` and
     `tests/integration/migrations.test.ts`.
 - New `characters.ensure`: `INSERT … ON CONFLICT (region, realm_slug,
-normalized_name) DO NOTHING`, returning the row id. It never overwrites a
-  snapshot's class, level, display name or URL, and a link written before the
-  first snapshot survives that snapshot. One test pins each.
+normalized_name) DO NOTHING`, followed by a `SELECT` for the existing id when
+  the insert returns no row (the conflict path has no `RETURNING` value). It
+  never overwrites a snapshot's class, level, display name or URL, and a link
+  written before the first snapshot survives that snapshot. One test pins each.
 - `SearchService.create` returns the `RaiderIoCharacter` profile on the `job`
   result (internal only; the public `startResultResponse` ignores it). The bot
   create passes it to `characters.ensure` after acceptance, so the fresh path
@@ -394,13 +413,16 @@ character. Status and summary reserve the read bucket. `429` carries
   and the public dossier labels each "From application"; a suppressed target is
   skipped and reports `suppressed` with no row; an invalid URL queues nothing;
   a fresh-root create makes no Raider.IO call; a stale/new root reads once and
-  ensures after acceptance; replay queues no second discovery run; a partial
-  `429` reports per-character outcomes; add-character resumes a link with no
-  evidence and queues exactly one search; an existing `applicant_sheet` link
-  keeps its origin; `ensure` after a snapshot does not lower class/level and a
-  link written before the snapshot survives; status and summary agree on
-  `state` and `snapshotId`; a suppressed subject is omitted from the
-  stored-only summary; migration 0075 applies and preserves existing origins.
+  ensures after acceptance; replay queues no second discovery run and still
+  writes a missing link; a partial `429` reports per-character outcomes;
+  add-character resumes a link with no evidence and queues exactly one search;
+  an existing `applicant_sheet` link keeps its origin; `ensure` after a
+  snapshot does not lower class/level and a link written before the snapshot
+  survives; **create three characters, publish only the root's snapshot, and
+  assert the dossier stays `collecting` because the two pending links have no
+  terminal run**; status and summary agree on `state` and `snapshotId`; a
+  suppressed subject is omitted from the stored-only summary; migration 0075
+  applies and preserves existing origins.
 - **Gate:** the whole `format:check`, `lint`, `typecheck`, `test:unit`,
   `test:integration`, `build`, `test:e2e` sequence, with Docker running.
 
