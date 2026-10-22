@@ -397,9 +397,12 @@ A `requireBot` helper wraps `classifyCaller`: a valid Bearer key returns the
 bot identity; a missing, malformed or wrong key returns `401 unauthorized`
 (never `trusted_client_ip_unavailable`, never anonymous).
 
-Creates, add-character and refresh reserve the bot search bucket once per
-character. Status and summary reserve the read bucket. `429` carries
-`Retry-After`.
+Creates and add-character are charged by the search they start: one search per
+character that queues or joins a run. A path that settles on an already-fresh
+snapshot, or on an existing link with completed evidence, spends no provider
+work and is not charged. Refresh is charged one search explicitly before it
+reserves an evidence run. Status and summary reserve the read bucket. `429`
+carries `Retry-After`.
 
 ## Failure semantics
 
