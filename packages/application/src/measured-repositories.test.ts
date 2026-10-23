@@ -167,18 +167,23 @@ describe("measuredRepositories", () => {
 
     // The parent still counts as a call, but its 3 ms excludes the 7 ms
     // roster step; the total stays the 10 ms the request actually spent, and
-    // the roster is the slowest named call.
+    // the roster is named both as the slowest db call and in its own family.
     expect(scope.totals()).toMatchObject({
       dbMs: 10,
       dbCalls: 2,
       dbMaxCallMs: 7,
-      dbMaxCallName: "evidence.raiderIoRoster"
+      dbMaxCallName: "evidence.raiderIoRoster",
+      dbRosterMs: 7,
+      dbRosterCalls: 1,
+      dbRosterMaxCallMs: 7,
+      dbRosterMaxCallName: "evidence.raiderIoRoster"
     });
   });
 
   it("offers the roster observer to each evidence read that hydrates", async () => {
-    const scope = createMeasurementScope(clock([0, 0, 0, 0, 0, 0]));
+    const scope = createMeasurementScope(clock([0, 0, 0, 0, 0, 0, 0, 0]));
     let rosterSteps = 0;
+    let prepareCalls = 0;
     type Measure = <T>(
       label: "evidence.raiderIoRoster",
       work: () => Promise<T>
@@ -192,6 +197,17 @@ describe("measuredRepositories", () => {
       evidence: {
         reserve: (_input: unknown, measureReadStep?: Measure) =>
           observe(measureReadStep),
+        reserveForScheduling: async (
+          _input: unknown,
+          prepareNewRun?: () => Promise<boolean>,
+          measureReadStep?: Measure
+        ) => {
+          if (prepareNewRun) {
+            prepareCalls += 1;
+            await prepareNewRun();
+          }
+          await observe(measureReadStep);
+        },
         getCompleted: (_key: unknown, measureReadStep?: Measure) =>
           observe(measureReadStep),
         hydrateCompletedEvidence: (
@@ -205,13 +221,19 @@ describe("measuredRepositories", () => {
 
     // Called without an observer: the wrapper supplies one for each method.
     await measured.evidence.reserve({});
+    await measured.evidence.reserveForScheduling({}, async () => true);
     await measured.evidence.getCompleted({});
     await measured.evidence.hydrateCompletedEvidence({});
 
-    expect(rosterSteps).toBe(3);
+    // The scheduling callback keeps its second position; the observer is
+    // supplied in the explicitly declared third position.
+    expect(prepareCalls).toBe(1);
+    expect(rosterSteps).toBe(4);
     expect(scope.totals()).toMatchObject({
-      dbCalls: 6,
-      dbMaxCallName: "evidence.raiderIoRoster"
+      dbCalls: 8,
+      dbMaxCallName: "evidence.raiderIoRoster",
+      dbRosterCalls: 4,
+      dbRosterMaxCallName: "evidence.raiderIoRoster"
     });
   });
 

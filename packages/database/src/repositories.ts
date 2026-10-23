@@ -769,6 +769,8 @@ export type EvidenceRunPreparation = (input: {
   completed: CompletedEvidenceSelection | null;
   completedVersionCurrent: boolean;
   reads: EvidenceSchedulingReads;
+  /** Times any roster read this callback performs, at its declared position. */
+  measureReadStep?: EvidenceReadStepMeasurement;
 }) => Promise<boolean>;
 
 export type EvidenceReservationResult<Completed = CompletedCharacterEvidence> =
@@ -1111,7 +1113,8 @@ export interface EvidenceRepository {
   /** Optional for stores whose reservation already returns hydrated evidence. */
   reserveForScheduling?(
     input: Parameters<EvidenceRepository["reserve"]>[0],
-    prepareNewRun?: EvidenceRunPreparation
+    prepareNewRun?: EvidenceRunPreparation,
+    measureReadStep?: EvidenceReadStepMeasurement
   ): Promise<EvidenceReservationResult<CompletedEvidenceSelection>>;
   hydrateCompletedEvidence?(
     selection: CompletedEvidenceSelection,

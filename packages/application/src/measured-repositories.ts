@@ -1,14 +1,16 @@
 import type { MeasurementScope } from "./measurement";
 
 /**
- * Evidence reads that hydrate a completed publication, and so may load the
- * Raider.IO roster. They accept a request-bound read-step observer as their
- * last argument.
+ * The argument position of each evidence read's request-bound read-step
+ * observer. Positions are explicit because `reserveForScheduling` already uses
+ * its second argument for the scheduling callback; inferring "the last
+ * optional argument" would silently skip it.
  */
-const rosterReadMethods = new Set([
-  "getCompleted",
-  "hydrateCompletedEvidence",
-  "reserve"
+const rosterReadObserverIndex = new Map<string, number>([
+  ["getCompleted", 1],
+  ["hydrateCompletedEvidence", 1],
+  ["reserve", 1],
+  ["reserveForScheduling", 2]
 ]);
 
 /**
@@ -53,32 +55,34 @@ export function measuredRepositories<T extends object>(
             scope.time(
               "db",
               async (exclude) => {
+                const observerIndex =
+                  property === "evidence"
+                    ? rosterReadObserverIndex.get(String(method))
+                    : undefined;
                 if (
-                  property === "evidence" &&
-                  rosterReadMethods.has(String(method)) &&
-                  // The observer is the only optional argument after the
-                  // repository's input, so a caller-supplied one already
-                  // occupies the slot the wrapper would fill.
-                  args[1] === undefined
+                  observerIndex !== undefined &&
+                  args[observerIndex] === undefined
                 ) {
-                  // The roster is a named read inside the enclosing call.
-                  // Exclude it from the parent's duration so dbMs charges it
-                  // once, but let it count as its own call: dbCalls gains one
-                  // per hydration that actually reads a roster, so it
-                  // measures timed read steps rather than only repository
-                  // calls (it was never a SQL statement count). The step can
-                  // win dbMaxCallName, which is how the baseline names the
-                  // roster queries. The label is static, as every logging
-                  // label must be.
-                  args.push(
-                    <R>(
-                      step: "evidence.raiderIoRoster",
-                      work: () => Promise<R>
-                    ) =>
-                      exclude(() =>
-                        scope.time("db", async () => await work(), step)
+                  // The observer is supplied at the method's declared
+                  // position, never by counting the arguments it was given.
+                  while (args.length < observerIndex) args.push(undefined);
+                  args[observerIndex] = <R>(
+                    step: "evidence.raiderIoRoster",
+                    work: () => Promise<R>
+                  ) =>
+                    exclude(() =>
+                      // Two prefixes, one execution. `db` keeps the step in
+                      // dbCalls/dbMs/dbMaxCallName; `dbRoster` is a dedicated
+                      // family so the roster remains reportable when a larger
+                      // call, such as the scheduling reserve, owns
+                      // dbMaxCallName. The enclosing repository call excludes
+                      // the outer frame, so dbMs still charges the work once.
+                      scope.time(
+                        "db",
+                        () => scope.time("dbRoster", work, step),
+                        step
                       )
-                  );
+                    );
                 }
                 return await call.apply(groupTarget, args);
               },

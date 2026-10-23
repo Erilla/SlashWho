@@ -396,7 +396,7 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
     ).toHaveLength(2);
   });
 
-  it("times the roster load as its own read step through each evidence read", async () => {
+  it("times the roster load through the scheduling reserve and hydration dossier path", async () => {
     await save(
       { encounters: [encounter], unavailable: [] },
       "2026-09-28T12:00:00.000Z"
@@ -433,12 +433,21 @@ describe("PostgreSQL repositories: Raider.IO first kills", () => {
     expect(reserved.completed).toEqual(plain);
 
     labels.length = 0;
-    const scheduling = await repositories.evidence.reserveForScheduling!({
-      origin: "dossier_read",
-      key: rootKey,
-      freshnessCutoff: new Date("2026-09-28T12:00:00.000Z"),
-      at: new Date("2026-09-28T12:10:00.000Z")
-    });
+    const scheduling = await repositories.evidence.reserveForScheduling!(
+      {
+        origin: "dossier_read",
+        key: rootKey,
+        freshnessCutoff: new Date("2026-09-28T12:00:00.000Z"),
+        at: new Date("2026-09-28T12:10:00.000Z")
+      },
+      undefined,
+      observe
+    );
+    // Post-#906 this reserve selects scheduling metadata only, so it accepts
+    // the observer at its declared third position but has no roster step. The
+    // dossier read hydrates immediately after this, which is where the
+    // roster queries run and the step is named.
+    expect(labels).toEqual([]);
     if (!scheduling.completed) throw new Error("evidence_not_selected");
     const hydrated = await repositories.evidence.hydrateCompletedEvidence!(
       scheduling.completed,

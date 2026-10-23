@@ -433,7 +433,7 @@ export function createEvidenceRepositories(
           undefined,
           measureReadStep
         ),
-      reserveForScheduling: (input, prepareNewRun) =>
+      reserveForScheduling: (input, prepareNewRun, measureReadStep) =>
         reserveEvidence(
           input,
           loadCompletedEvidenceSelection,
@@ -444,9 +444,11 @@ export function createEvidenceRepositories(
                   reads: createSchedulingReads(client, completed),
                   completedVersionCurrent:
                     completed?.evidenceVersion !== undefined &&
-                    completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
+                    completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION,
+                  ...(measureReadStep ? { measureReadStep } : {})
                 })
-            : undefined
+            : undefined,
+          measureReadStep
         ),
       hydrateCompletedEvidence: (selection, measureReadStep) =>
         hydrateCompletedEvidence(pool, selection, measureReadStep),

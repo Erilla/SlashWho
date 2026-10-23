@@ -65,6 +65,10 @@ const expectedPerformanceFields = [
   "dbCalls",
   "dbMaxCallMs",
   "dbMaxCallName",
+  "dbRosterMs",
+  "dbRosterCalls",
+  "dbRosterMaxCallMs",
+  "dbRosterMaxCallName",
   "limiterWaitMs",
   "assembleMs",
   "assembleCalls",
@@ -181,7 +185,11 @@ it("keeps every allowlisted performance field, with its exact value, through ser
   }
 
   const booleanFields = new Set(["runJoined"]);
-  const stringFields = new Set(["provider", "dbMaxCallName"]);
+  const stringFields = new Set([
+    "provider",
+    "dbMaxCallName",
+    "dbRosterMaxCallName"
+  ]);
   const record: Record<string, unknown> = {
     event: "http_request",
     correlationId: "c1",
@@ -264,12 +272,25 @@ it("keeps the measured roster read step as a named call on http_request", () => 
   logger.info({
     event: "http_request",
     dbMaxCallMs: 312,
-    dbMaxCallName: "evidence.raiderIoRoster"
+    dbMaxCallName: "evidence.reserveForScheduling",
+    dbRosterMs: 287,
+    dbRosterCalls: 1,
+    dbRosterMaxCallMs: 287,
+    dbRosterMaxCallName: "evidence.raiderIoRoster"
   });
 
   const serialized = JSON.parse(lines[0]!) as Record<string, unknown>;
-  expect(serialized).toHaveProperty("dbMaxCallMs", 312);
-  expect(serialized).toHaveProperty("dbMaxCallName", "evidence.raiderIoRoster");
+  expect(serialized).toHaveProperty(
+    "dbMaxCallName",
+    "evidence.reserveForScheduling"
+  );
+  expect(serialized).toHaveProperty("dbRosterMs", 287);
+  expect(serialized).toHaveProperty("dbRosterCalls", 1);
+  expect(serialized).toHaveProperty("dbRosterMaxCallMs", 287);
+  expect(serialized).toHaveProperty(
+    "dbRosterMaxCallName",
+    "evidence.raiderIoRoster"
+  );
 });
 
 // Job handlers run only in the worker and log through the worker logger, so
