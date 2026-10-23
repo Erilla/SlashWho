@@ -13,6 +13,7 @@ import type {
   CompletedCharacterEvidence,
   EvidenceRepository,
   EvidenceMonitorPhase,
+  EvidenceReadStepMeasurement,
   EvidenceReservationResult,
   EvidenceRunMode,
   EvidenceRunPhase,
@@ -122,11 +123,16 @@ export function createEvidenceRepositories(
     T extends Pick<CompletedCharacterEvidence, "run" | "evidenceVersion">
   >(
     input: Parameters<EvidenceRepository["reserve"]>[0],
-    loadCompleted: (client: PoolClient, key: CharacterKey) => Promise<T | null>,
+    loadCompleted: (
+      client: PoolClient,
+      key: CharacterKey,
+      measureReadStep?: EvidenceReadStepMeasurement
+    ) => Promise<T | null>,
     prepareNewRun?: (
       completed: T | null,
       client: PoolClient
-    ) => Promise<boolean>
+    ) => Promise<boolean>,
+    measureReadStep?: EvidenceReadStepMeasurement
   ): Promise<EvidenceReservationResult<T>> {
     const {
       key,
@@ -150,7 +156,7 @@ export function createEvidenceRepositories(
         [key.region, key.realm, key.name]
       );
       const aliasRecollectionPending = aliasRecollection.rowCount === 1;
-      const completed = await loadCompleted(client, key);
+      const completed = await loadCompleted(client, key, measureReadStep);
       // Asked before the freshness check, not after it. A refresh forces a
       // run past the freshness window, so a caller reading fresh evidence
       // can be looking at a character that is being re-collected right now
@@ -420,8 +426,14 @@ export function createEvidenceRepositories(
           return result.rowCount === 1 ? "removed" : "missing";
         });
       },
-      reserve: (input) => reserveEvidence(input, loadCompletedEvidence),
-      reserveForScheduling: (input, prepareNewRun) =>
+      reserve: (input, measureReadStep) =>
+        reserveEvidence(
+          input,
+          loadCompletedEvidence,
+          undefined,
+          measureReadStep
+        ),
+      reserveForScheduling: (input, prepareNewRun, measureReadStep) =>
         reserveEvidence(
           input,
           loadCompletedEvidenceSelection,
@@ -432,12 +444,14 @@ export function createEvidenceRepositories(
                   reads: createSchedulingReads(client, completed),
                   completedVersionCurrent:
                     completed?.evidenceVersion !== undefined &&
-                    completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION
+                    completed.evidenceVersion >= CURRENT_EVIDENCE_VERSION,
+                  ...(measureReadStep ? { measureReadStep } : {})
                 })
-            : undefined
+            : undefined,
+          measureReadStep
         ),
-      hydrateCompletedEvidence: (selection) =>
-        hydrateCompletedEvidence(pool, selection),
+      hydrateCompletedEvidence: (selection, measureReadStep) =>
+        hydrateCompletedEvidence(pool, selection, measureReadStep),
       completedSettlementKills: (selection) =>
         loadCompletedSettlementKills(pool, selection),
 
@@ -1269,8 +1283,8 @@ export function createEvidenceRepositories(
         });
       },
 
-      async getCompleted(key) {
-        return loadCompletedEvidence(pool, key);
+      async getCompleted(key, measureReadStep) {
+        return loadCompletedEvidence(pool, key, measureReadStep);
       },
 
       async saveRaiderIoLoggedEncounters(answers, readAt) {

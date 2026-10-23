@@ -65,6 +65,10 @@ const expectedPerformanceFields = [
   "dbCalls",
   "dbMaxCallMs",
   "dbMaxCallName",
+  "dbRosterMs",
+  "dbRosterCalls",
+  "dbRosterMaxCallMs",
+  "dbRosterMaxCallName",
   "limiterWaitMs",
   "assembleMs",
   "assembleCalls",
@@ -181,7 +185,11 @@ it("keeps every allowlisted performance field, with its exact value, through ser
   }
 
   const booleanFields = new Set(["runJoined"]);
-  const stringFields = new Set(["provider", "dbMaxCallName"]);
+  const stringFields = new Set([
+    "provider",
+    "dbMaxCallName",
+    "dbRosterMaxCallName"
+  ]);
   const record: Record<string, unknown> = {
     event: "http_request",
     correlationId: "c1",
@@ -249,6 +257,40 @@ it("allows the slowest-call name, which is a static method identifier", () => {
     "applicantSnapshots.getByCharacterKey"
   );
   expect(serialized).not.toHaveProperty("characterName");
+});
+
+it("keeps the measured roster read step as a named call on http_request", () => {
+  // Break caught: the read-step label reaches dbMaxCallName, which is
+  // allowlisted, but a new prefix or field around it would be dropped
+  // silently. The label is a closed static identifier from
+  // `measuredRepositories`, never a character, realm or query.
+  const lines: string[] = [];
+  const logger = createWebLogger({
+    write: (line: string) => lines.push(line)
+  });
+
+  logger.info({
+    event: "http_request",
+    dbMaxCallMs: 312,
+    dbMaxCallName: "evidence.reserveForScheduling",
+    dbRosterMs: 287,
+    dbRosterCalls: 1,
+    dbRosterMaxCallMs: 287,
+    dbRosterMaxCallName: "evidence.raiderIoRoster"
+  });
+
+  const serialized = JSON.parse(lines[0]!) as Record<string, unknown>;
+  expect(serialized).toHaveProperty(
+    "dbMaxCallName",
+    "evidence.reserveForScheduling"
+  );
+  expect(serialized).toHaveProperty("dbRosterMs", 287);
+  expect(serialized).toHaveProperty("dbRosterCalls", 1);
+  expect(serialized).toHaveProperty("dbRosterMaxCallMs", 287);
+  expect(serialized).toHaveProperty(
+    "dbRosterMaxCallName",
+    "evidence.raiderIoRoster"
+  );
 });
 
 // Job handlers run only in the worker and log through the worker logger, so
