@@ -16,6 +16,6 @@
     "@slashwho/upstream-http": "workspace:*",
     "@slashwho/warcraftlogs": "workspace:*",
     "pino": "^10.1.0",
-    "zod": "^4.3.5"
+    "zod": "^4.6.6"
   }
 }
