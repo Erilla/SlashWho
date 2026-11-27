@@ -473,6 +473,33 @@ export const dossierGuildHistoryEntrySchema = z
   })
   .strict();
 
+/**
+ * One UTC night of Raider.IO-logged Mythic kills that no Warcraft Logs kill of
+ * the same character, boss and day accounts for (#921). A "killed with" mark,
+ * never membership: guild history is unchanged by it. A null guild is one
+ * Raider.IO did not name. `log` is whether Raider.IO's own log of the kill was
+ * read, is still to be read, or does not exist.
+ */
+export const dossierKilledWithMarkSchema = z
+  .object({
+    date: z.iso.date(),
+    kills: z
+      .array(
+        z
+          .object({
+            raidName: z.string().min(1),
+            bossName: z.string().min(1),
+            killedAt: z.iso.datetime(),
+            guild: dossierGuildSchema.nullable(),
+            characters: z.array(characterKeySchema).min(1),
+            log: z.enum(["read", "not_read", "none"])
+          })
+          .strict()
+      )
+      .min(1)
+  })
+  .strict();
+
 export const applicantDossierSchema = z
   .object({
     root: characterKeySchema,
@@ -486,6 +513,11 @@ export const applicantDossierSchema = z
      * before this field existed, including the frozen demo snapshot.
      */
     guildHistory: z.array(dossierGuildHistoryEntrySchema).optional(),
+    /**
+     * Raider.IO kills drawn beside the guild history, oldest night first.
+     * Absent on payloads written before this field existed.
+     */
+    killedWith: z.array(dossierKilledWithMarkSchema).optional(),
     /**
      * When this dossier's evidence was last collected, as the oldest of its
      * characters' completed runs — so it reads as "everything is at least this
