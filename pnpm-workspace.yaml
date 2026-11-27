@@ -16,3 +16,9 @@ overrides:
   # lift only the vulnerable ranges to the first patched releases.
   "undici@>=8.0.0 <8.12.2": 8.12.2
   "vite@>=8.2.0 <8.2.4": 8.2.4
+  # glob 10 arrives only through archiver-utils, under testcontainers'
+  # archiver ^7.0.1, and needs vulnerable minimatch 9.0.9. glob 14 moves to
+  # minimatch 11; archiver-utils calls only glob.sync(pattern, options),
+  # which glob 14 keeps. A minimatch override would break glob 10, which
+  # expects RegExp portions where minimatch 11 returns Matcher objects.
+  "archiver-utils>glob": 14.0.6
