@@ -1151,6 +1151,25 @@ describe("applicant dossier service", () => {
         roster: { state: "unavailable", reason: "private" }
       }
     });
+    // No Warcraft Logs kill accounts for it, so guild history marks it as a
+    // "killed with" night and leaves the guild bars alone (#921).
+    expect(result.dossier.guildHistory).toEqual([]);
+    expect(result.dossier.killedWith).toEqual([
+      {
+        date: "2026-07-20",
+        kills: [
+          {
+            raidName: "March on Quel'Danas",
+            bossName: "Midnight Falls",
+            killedAt: "2026-07-20T17:25:57.301Z",
+            guild: killGuild,
+            characters: expect.arrayContaining([root]),
+            loggedNights: [],
+            log: "read"
+          }
+        ]
+      }
+    ]);
   });
 
   it("queues no collection for an initial read nobody searched for", async () => {

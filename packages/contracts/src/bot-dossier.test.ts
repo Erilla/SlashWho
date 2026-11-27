@@ -12,7 +12,12 @@ import {
   safeApiErrorSchema
 } from "./index";
 
-type FixtureEntry = { endpoint?: string; response: unknown };
+type FixtureEntry = {
+  endpoint?: string;
+  /** Web dossier fields this route leaves out on purpose, and why. */
+  omits?: Record<string, string>;
+  response: unknown;
+};
 
 const fixture = JSON.parse(
   readFileSync(
@@ -72,6 +77,36 @@ describe("bot client v1 fixture", () => {
     expect(safeApiErrorSchema.safeParse(fixture.error.response).success).toBe(
       true
     );
+  });
+
+  it("leaves the Raider.IO killed-with marks out of the summary (#921)", () => {
+    // A decision, not an oversight: exposing them is an additive change that
+    // updates this fixture and the schema together.
+    expect(Object.keys(fixture.summary.omits ?? {})).toEqual(["killedWith"]);
+    const response = fixture.summary.response as Record<string, unknown>;
+    expect(response).not.toHaveProperty("killedWith");
+    expect(
+      botDossierSummarySchema.safeParse({
+        ...response,
+        killedWith: [
+          {
+            date: "2026-07-20",
+            kills: [
+              {
+                raidName: "March on Quel'Danas",
+                bossName: "Midnight Falls",
+                killedAt: "2026-07-20T17:25:57.000Z",
+                guild: null,
+                characters: [
+                  { region: "eu", realm: "silvermoon", name: "ryii" }
+                ],
+                log: "none"
+              }
+            ]
+          }
+        ]
+      }).success
+    ).toBe(false);
   });
 });
 

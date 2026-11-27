@@ -39,6 +39,9 @@
   },
   "summary": {
     "endpoint": "GET /api/v1/dossiers/eu/silvermoon/ryii",
+    "omits": {
+      "killedWith": "The web dossier's Raider.IO \"killed with\" marks (#921) are left out of v1. Adding them later is an additive field."
+    },
     "response": {
       "root": { "region": "eu", "realm": "silvermoon", "name": "ryii" },
       "state": "ready",
