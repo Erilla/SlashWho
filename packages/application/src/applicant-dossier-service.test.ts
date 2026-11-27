@@ -1164,6 +1164,7 @@ describe("applicant dossier service", () => {
             killedAt: "2026-07-20T17:25:57.301Z",
             guild: killGuild,
             characters: expect.arrayContaining([root]),
+            loggedNights: [],
             log: "read"
           }
         ]

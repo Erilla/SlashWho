@@ -799,6 +799,7 @@ const killedWith: NonNullable<ApplicantDossier["killedWith"]> = [
         killedAt: "2025-07-20T17:25:57.000Z",
         guild: method,
         characters: [ryii],
+        loggedNights: [],
         log: "read"
       },
       {
@@ -807,11 +808,16 @@ const killedWith: NonNullable<ApplicantDossier["killedWith"]> = [
         killedAt: "2025-07-20T19:00:00.000Z",
         guild: casual,
         characters: [ryii, ryun],
+        loggedNights: [],
         log: "read"
       }
     ]
   }
 ];
+
+type KilledWithKill = NonNullable<
+  ApplicantDossier["killedWith"]
+>[number]["kills"][number];
 
 function skulls() {
   return screen.queryAllByRole("img", { name: /^Raider\.IO kill/ });
@@ -880,7 +886,7 @@ it("stacks a night's kills in one skull, naming each boss and guild", () => {
   expect(marks).toHaveLength(1);
   expect(marks[0]).toHaveAttribute(
     "aria-label",
-    "Raider.IO kills on 20 Jul 2025. Midnight Falls with Method: Ryii. Vaelgor & Ezzorak with SeriouslyCasual: Ryii, Ryun. No Warcraft Logs kill matches, so it is not a raid night"
+    "Raider.IO kills on 20 Jul 2025. Midnight Falls with Method: Ryii. Vaelgor & Ezzorak with SeriouslyCasual: Ryii, Ryun. The guild bars don't show this kill for these characters"
   );
 });
 
@@ -969,7 +975,123 @@ it("leaves out a hidden character's Raider.IO kills", () => {
   );
   expect(skulls()[0]).toHaveAttribute(
     "aria-label",
-    "Raider.IO kill on 20 Jul 2025. Vaelgor & Ezzorak with SeriouslyCasual: Ryun. No Warcraft Logs kill matches, so it is not a raid night"
+    "Raider.IO kill on 20 Jul 2025. Vaelgor & Ezzorak with SeriouslyCasual: Ryun. The guild bars don't show this kill for these characters"
+  );
+});
+
+// Rancour's bar runs 26 Jan to 11 Sept 2025 with Ryii; Pure Chaos has one
+// night, 15 Mar 2024, and draws no bar.
+function killOn(
+  date: string,
+  loggedNights: KilledWithKill["loggedNights"],
+  who: readonly CharacterKey[] = [ryii]
+): NonNullable<ApplicantDossier["killedWith"]> {
+  return [
+    {
+      date,
+      kills: [
+        {
+          ...killedWith[0]!.kills[0]!,
+          killedAt: `${date}T20:00:00.000Z`,
+          characters: [...who],
+          loggedNights
+        }
+      ]
+    }
+  ];
+}
+
+it("draws no skull where a drawn guild bar already holds the character's night", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn("2025-05-04", [{ character: ryii, guild: rancour }])}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toEqual([]);
+  expect(screen.queryByText(/A skull on the bottom row/)).toBeNull();
+});
+
+it("keeps the skull when the matched guild was seen on one night and draws no bar", () => {
+  const pureChaos = guildHistory[1]!.guild;
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn("2024-03-15", [{ character: ryii, guild: pureChaos }])}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toHaveLength(1);
+});
+
+it("keeps the skull when the matched log names no guild", () => {
+  // A Warcraft Logs kill naming no guild places the night in no guild, so
+  // the domain lists no logged night for it.
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn("2025-05-04", [])}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toHaveLength(1);
+});
+
+it("keeps the skull when hiding characters takes the matched guild's bar away", () => {
+  // SeriouslyCasual's bar is Ryun's alone; Ryii's one night there is not
+  // enough for a bar of its own once Ryun is hidden.
+  const history: NonNullable<ApplicantDossier["guildHistory"]> = [
+    {
+      guild: casual,
+      nights: [
+        { date: "2023-03-08", characters: [ryii, ryun] },
+        { date: "2023-06-14", characters: [ryun] }
+      ]
+    },
+    guildHistory[2]!
+  ];
+  const marks = killOn("2023-03-08", [{ character: ryii, guild: casual }]);
+  const { rerender } = render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={history}
+      killedWith={marks}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toEqual([]);
+  rerender(
+    <DossierGuildHistory
+      characters={characters}
+      filter={evidenceFilter(characters, new Set(["eu/silvermoon/ryun"]))}
+      guildHistory={history}
+      killedWith={marks}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toHaveLength(1);
+});
+
+it("names only the characters no bar holds on a shared kill", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn(
+        "2025-05-04",
+        [{ character: ryii, guild: rancour }],
+        [ryii, ryun]
+      )}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()[0]).toHaveAttribute(
+    "aria-label",
+    "Raider.IO kill on 4 May 2025. Midnight Falls with Method: Ryun. The guild bars don't show this kill for these characters"
   );
 });
 

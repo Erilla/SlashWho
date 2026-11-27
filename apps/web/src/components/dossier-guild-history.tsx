@@ -1,5 +1,6 @@
 import type { ApplicantDossier } from "@slashwho/contracts";
 import {
+  canonicalCharacterId,
   formatCharacterDisplayName,
   guildIdentity,
   guildTimelineSpans,
@@ -155,6 +156,11 @@ const KILLED_WITH_LOG: Readonly<Record<KilledWithKill["log"], string | null>> =
     none: "Raider.IO has no log of it"
   };
 
+// What the skull says about the bars, and no more: matching is per
+// character, so another dossier character may have a bar on that night.
+const KILLED_WITH_NOTE =
+  "The guild bars don't show this kill for these characters";
+
 function killedWithLabel(mark: KilledWithMark): string {
   return [
     `Raider.IO ${mark.kills.length === 1 ? "kill" : "kills"} on ${formatDay(mark.date)}`,
@@ -166,7 +172,7 @@ function killedWithLabel(mark: KilledWithMark): string {
         ...(KILLED_WITH_LOG[kill.log] ? [KILLED_WITH_LOG[kill.log]] : [])
       ].join(", ")
     ),
-    "No Warcraft Logs kill matches, so it is not a raid night"
+    KILLED_WITH_NOTE
   ].join(". ");
 }
 
@@ -180,7 +186,7 @@ function killedWithTooltipLines(mark: KilledWithMark): ReactNode[] {
         {KILLED_WITH_LOG[kill.log] ? ` (${KILLED_WITH_LOG[kill.log]})` : null}
       </>
     )),
-    "No Warcraft Logs kill matches, so it is not a raid night"
+    KILLED_WITH_NOTE
   ];
 }
 
@@ -300,21 +306,6 @@ export function DossierGuildHistory({
   // The width the timeline has to fill, so a short history stretches across
   // the section instead of stopping part-way along it.
   const [fitWidth, setFitWidth] = useState(0);
-  // A hidden character's kills are left out as its nights are; a kill or a
-  // night left with nobody visible is not drawn.
-  const marks = useMemo(
-    () =>
-      killedWith.flatMap((mark) => {
-        const kills = mark.kills.flatMap((kill) => {
-          const shown = filter
-            ? kill.characters.filter(filter.isCharacterVisible)
-            : kill.characters;
-          return shown.length === 0 ? [] : [{ ...kill, characters: shown }];
-        });
-        return kills.length === 0 ? [] : [{ ...mark, kills }];
-      }),
-    [killedWith, filter]
-  );
   const spans = useMemo(
     () =>
       guildTimelineSpans(guildHistory, {
@@ -323,6 +314,45 @@ export function DossierGuildHistory({
       }),
     [guildHistory, tiers, filter]
   );
+  // A character's kill needs no skull only where a drawn bar already holds
+  // its night: a guild seen once, a log naming no guild, or a guild whose
+  // other nights are hidden draws none, so the skull stays. A hidden
+  // character's kills are left out as its nights are, and a kill or a night
+  // left with nobody to show is not drawn.
+  const marks = useMemo(() => {
+    const onBar = (
+      date: string,
+      night: KilledWithKill["loggedNights"][number]
+    ) => {
+      const guildId = guildIdentity(night.guild);
+      const character = canonicalCharacterId(night.character);
+      return spans.some(
+        (span) =>
+          span.guildId === guildId &&
+          span.firstNight <= date &&
+          date <= span.lastNight &&
+          span.characters.some(
+            (shown) => canonicalCharacterId(shown) === character
+          )
+      );
+    };
+    return killedWith.flatMap((mark) => {
+      const kills = mark.kills.flatMap((kill) => {
+        const barred = new Set(
+          kill.loggedNights
+            .filter((night) => onBar(mark.date, night))
+            .map((night) => canonicalCharacterId(night.character))
+        );
+        const shown = kill.characters.filter(
+          (character) =>
+            !barred.has(canonicalCharacterId(character)) &&
+            (!filter || filter.isCharacterVisible(character))
+        );
+        return shown.length === 0 ? [] : [{ ...kill, characters: shown }];
+      });
+      return kills.length === 0 ? [] : [{ ...mark, kills }];
+    });
+  }, [killedWith, filter, spans]);
   const layout = useMemo(
     () =>
       spans.length === 0 && marks.length === 0
@@ -510,7 +540,7 @@ export function DossierGuildHistory({
         where a whole tier passed without one. Click a bar or ring for the guild
         on Raider.IO and Warcraft Logs.
         {marks.length > 0
-          ? " A skull on the bottom row is a kill Raider.IO logged that no Warcraft Logs kill matches: who the characters killed with, not a raid night in a guild."
+          ? " A skull on the bottom row is a kill Raider.IO logged that the guild bars don't show for those characters: who they killed with, not guild membership."
           : null}
       </p>
       {spans.length === 0 ? (

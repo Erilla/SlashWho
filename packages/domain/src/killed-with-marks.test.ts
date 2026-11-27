@@ -42,22 +42,44 @@ function warcraftLogs(
     killedAt: "2026-07-20T17:26:10.000Z",
     raidName: "March on Quel'Danas",
     bossName: "Midnight Falls",
+    guild: method,
     ...overrides
   };
 }
 
+/** The characters each kill lists as already on a guild's night. */
+function loggedNights(
+  warcraftLogsKills: readonly KilledWithWarcraftLogsKill[],
+  raiderIoKills: readonly KilledWithRaiderIoKill[] = [raiderIo()]
+) {
+  return collectKilledWithMarks(warcraftLogsKills, raiderIoKills).flatMap(
+    (mark) => mark.kills.map((kill) => kill.loggedNights)
+  );
+}
+
 describe("collectKilledWithMarks", () => {
-  it("draws nothing for a Raider.IO kill a Warcraft Logs kill matches", () => {
-    expect(collectKilledWithMarks([warcraftLogs()], [raiderIo()])).toEqual([]);
+  it("records the guild night a matching Warcraft Logs kill places it in", () => {
+    expect(loggedNights([warcraftLogs()])).toEqual([
+      [{ character: eundariel, guild: method }]
+    ]);
+  });
+
+  it("keeps a matched kill, so the timeline decides if its night has a bar", () => {
+    // One Warcraft Logs night in Method draws no bar, so the mark must still
+    // be there for the timeline to draw (#924 review).
+    const marks = collectKilledWithMarks([warcraftLogs()], [raiderIo()]);
+    expect(marks.map((mark) => mark.date)).toEqual(["2026-07-20"]);
+    expect(marks[0]!.kills[0]!.characters).toEqual([eundariel]);
+  });
+
+  it("places no night for a matching Warcraft Logs kill naming no guild", () => {
+    expect(loggedNights([warcraftLogs({ guild: null })])).toEqual([[]]);
   });
 
   it("matches across the Warcraft Logs combined Midnight zone", () => {
-    expect(
-      collectKilledWithMarks(
-        [warcraftLogs({ raidName: "VS / DR / MQD" })],
-        [raiderIo()]
-      )
-    ).toEqual([]);
+    expect(loggedNights([warcraftLogs({ raidName: "VS / DR / MQD" })])).toEqual(
+      [[{ character: eundariel, guild: method }]]
+    );
   });
 
   it("matches a fight logged under a former name, attributed to the character", () => {
@@ -67,17 +89,29 @@ describe("collectKilledWithMarks", () => {
       ...warcraftLogs(),
       loggedAs: { ...eundariel, name: "eun" }
     };
-    expect(collectKilledWithMarks([alias], [raiderIo()])).toEqual([]);
+    expect(loggedNights([alias])).toHaveLength(1);
+    expect(loggedNights([alias])[0]).toHaveLength(1);
   });
 
   it("matches the character's canonical id, ignoring case", () => {
     expect(
-      collectKilledWithMarks(
-        [warcraftLogs({ character: { ...eundariel, name: "Eundariel" } })],
-        [raiderIo()]
-      )
-    ).toEqual([]);
+      loggedNights([
+        warcraftLogs({ character: { ...eundariel, name: "Eundariel" } })
+      ])[0]
+    ).toHaveLength(1);
   });
+
+  it.each([
+    ["another realm", { ...eundariel, realm: "draenor" }],
+    ["another region", { ...eundariel, region: "us" as const }]
+  ])(
+    "does not match a same-named character on %s",
+    (_where, elsewhere: CharacterKey) => {
+      expect(loggedNights([warcraftLogs({ character: elsewhere })])).toEqual([
+        []
+      ]);
+    }
+  );
 
   it("marks an unmatched Raider.IO kill on its UTC night", () => {
     expect(collectKilledWithMarks([], [raiderIo()])).toEqual([
@@ -90,6 +124,7 @@ describe("collectKilledWithMarks", () => {
             killedAt: "2026-07-20T17:25:57.000Z",
             guild: method,
             characters: [eundariel],
+            loggedNights: [],
             log: "read"
           }
         ]
@@ -97,35 +132,28 @@ describe("collectKilledWithMarks", () => {
     ]);
   });
 
-  it("marks a kill whose Warcraft Logs copy is on another UTC day", () => {
+  it("does not match a Warcraft Logs kill on another UTC day", () => {
     const marks = collectKilledWithMarks(
       [warcraftLogs({ killedAt: "2026-07-21T00:05:00.000Z" })],
       [raiderIo({ killedAt: "2026-07-20T23:55:00.000Z" })]
     );
     expect(marks.map((mark) => mark.date)).toEqual(["2026-07-20"]);
+    expect(marks[0]!.kills[0]!.loggedNights).toEqual([]);
   });
 
-  it("marks a kill a different character's Warcraft Logs kill shares", () => {
-    const marks = collectKilledWithMarks(
-      [warcraftLogs({ character: ryii })],
-      [raiderIo()]
-    );
-    expect(marks).toHaveLength(1);
-    expect(marks[0]!.kills[0]!.characters).toEqual([eundariel]);
+  it("does not match a different character's Warcraft Logs kill", () => {
+    expect(loggedNights([warcraftLogs({ character: ryii })])).toEqual([[]]);
   });
 
-  it("marks a kill whose Warcraft Logs kill is another boss", () => {
+  it("does not match a Warcraft Logs kill of another boss", () => {
     expect(
-      collectKilledWithMarks(
-        [
-          warcraftLogs({
-            raidName: "The Voidspire",
-            bossName: "Vaelgor & Ezzorak"
-          })
-        ],
-        [raiderIo()]
-      )
-    ).toHaveLength(1);
+      loggedNights([
+        warcraftLogs({
+          raidName: "The Voidspire",
+          bossName: "Vaelgor & Ezzorak"
+        })
+      ])
+    ).toEqual([[]]);
   });
 
   it("keeps a kill Raider.IO names no guild for, with a null guild", () => {
@@ -183,6 +211,7 @@ describe("collectKilledWithMarks", () => {
         killedAt: "2026-07-20T19:00:00.000Z",
         guild: casual,
         characters: [eundariel],
+        loggedNights: [],
         log: "not_read"
       },
       {
@@ -191,36 +220,40 @@ describe("collectKilledWithMarks", () => {
         killedAt: "2026-07-20T20:59:00.000Z",
         guild: method,
         characters: [eundariel, ryii],
+        loggedNights: [],
         log: "read"
       }
     ]);
   });
 
-  it("keeps one boss credited to two guilds on one night apart", () => {
-    const marks = collectKilledWithMarks(
-      [],
-      [
-        raiderIo(),
-        raiderIo({
-          character: ryii,
-          guild: casual,
-          encounter: { state: "read", encounter: { guild: casual } }
-        })
-      ]
-    );
-    expect(marks).toHaveLength(1);
-    expect(marks[0]!.kills.map((kill) => kill.guild?.name).sort()).toEqual([
-      "Method",
-      "Seriously Casual"
+  it("keeps one boss credited to two guilds on one night apart, in a fixed order", () => {
+    const kills = [
+      raiderIo(),
+      raiderIo({
+        character: ryii,
+        guild: casual,
+        encounter: { state: "read", encounter: { guild: casual } }
+      })
+    ];
+    const forward = collectKilledWithMarks([], kills);
+    expect(forward).toHaveLength(1);
+    // Same time and boss, so ordered by guild identity: region, then realm.
+    expect(forward[0]!.kills.map((kill) => kill.guild?.name)).toEqual([
+      "Seriously Casual",
+      "Method"
     ]);
+    expect(collectKilledWithMarks([], [...kills].reverse())).toEqual(forward);
   });
 
-  it("matches each character on its own within a shared night", () => {
+  it("records each character's logged night on its own within a shared kill", () => {
     const marks = collectKilledWithMarks(
       [warcraftLogs()],
       [raiderIo(), raiderIo({ character: ryii })]
     );
-    expect(marks[0]!.kills[0]!.characters).toEqual([ryii]);
+    expect(marks[0]!.kills[0]).toMatchObject({
+      characters: [eundariel, ryii],
+      loggedNights: [{ character: eundariel, guild: method }]
+    });
   });
 
   it("leaves out a boss the catalogue cannot place, and invalid times", () => {

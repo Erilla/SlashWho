@@ -46,6 +46,7 @@ export type {
 export { collectKilledWithMarks } from "./killed-with-marks";
 export type {
   DossierKilledWithKill,
+  DossierKilledWithLoggedNight,
   DossierKilledWithMark,
   KilledWithRaiderIoKill,
   KilledWithWarcraftLogsKill

@@ -474,11 +474,13 @@ export const dossierGuildHistoryEntrySchema = z
   .strict();
 
 /**
- * One UTC night of Raider.IO-logged Mythic kills that no Warcraft Logs kill of
- * the same character, boss and day accounts for (#921). A "killed with" mark,
+ * One UTC night of Raider.IO-logged Mythic kills (#921). A "killed with" mark,
  * never membership: guild history is unchanged by it. A null guild is one
- * Raider.IO did not name. `log` is whether Raider.IO's own log of the kill was
- * read, is still to be read, or does not exist.
+ * Raider.IO did not name. `loggedNights` lists the characters whose Warcraft
+ * Logs kill of the same boss on the same UTC day names a guild; the timeline
+ * draws no skull for them only where that guild's bar is drawn. `log` is
+ * whether Raider.IO's own log of the kill was read, is still to be read, or
+ * does not exist.
  */
 export const dossierKilledWithMarkSchema = z
   .object({
@@ -492,6 +494,14 @@ export const dossierKilledWithMarkSchema = z
             killedAt: z.iso.datetime(),
             guild: dossierGuildSchema.nullable(),
             characters: z.array(characterKeySchema).min(1),
+            loggedNights: z.array(
+              z
+                .object({
+                  character: characterKeySchema,
+                  guild: dossierGuildSchema
+                })
+                .strict()
+            ),
             log: z.enum(["read", "not_read", "none"])
           })
           .strict()
