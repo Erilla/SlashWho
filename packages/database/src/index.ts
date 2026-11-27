@@ -62,6 +62,7 @@ export type {
   CharacterRaiderIoFirstKillInput,
   CompletedCharacterEvidence,
   CompletedEvidenceSelection,
+  EvidenceReadStepMeasurement,
   EvidenceSettlementKill,
   EvidenceRunPreparation,
   EvidenceSchedulingReads,

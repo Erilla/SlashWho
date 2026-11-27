@@ -145,6 +145,10 @@ describe("worker logger", () => {
       dbCalls: 2,
       dbMaxCallMs: 6,
       dbMaxCallName: "applicantRuns.claimNext",
+      dbRosterMs: 5,
+      dbRosterCalls: 1,
+      dbRosterMaxCallMs: 5,
+      dbRosterMaxCallName: "evidence.raiderIoRoster",
       origin: "dossier_initial",
       outcome: "complete",
       limitationCode: null,
@@ -157,6 +161,14 @@ describe("worker logger", () => {
     // What queued the run is the point of #708; dropping it would leave the
     // queue as unexplained as before.
     expect(record.origin).toBe("dossier_initial");
+    // The worker allowlist admits the dedicated roster family by pattern, in
+    // the same way as the other measurement prefixes.
+    expect(record).toMatchObject({
+      dbRosterMs: 5,
+      dbRosterCalls: 1,
+      dbRosterMaxCallMs: 5,
+      dbRosterMaxCallName: "evidence.raiderIoRoster"
+    });
     for (const [key, value] of Object.entries(record)) {
       expect(value, `${key} was redacted`).not.toBe("[Redacted]");
     }

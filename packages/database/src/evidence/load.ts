@@ -21,6 +21,7 @@ import type {
   CharacterTierBestParseInput,
   CompletedCharacterEvidence,
   CompletedEvidenceSelection,
+  EvidenceReadStepMeasurement,
   EvidenceSettlementKill,
   StoredCharacterMythicKill,
   StoredCharacterMythicWipe
@@ -30,10 +31,13 @@ import { loadPublishedRaiderIoFirstKills } from "./raiderio-first-kills";
 
 export async function loadCompletedEvidence(
   client: Queryable,
-  key: CharacterKey
+  key: CharacterKey,
+  measureReadStep?: EvidenceReadStepMeasurement
 ): Promise<CompletedCharacterEvidence | null> {
   const selection = await loadCompletedEvidenceSelection(client, key);
-  return selection ? hydrateCompletedEvidence(client, selection) : null;
+  return selection
+    ? hydrateCompletedEvidence(client, selection, measureReadStep)
+    : null;
 }
 
 export async function loadCompletedEvidenceSelection(
@@ -97,7 +101,8 @@ export async function loadCompletedSettlementKills(
 
 export async function hydrateCompletedEvidence(
   client: Queryable,
-  selection: CompletedEvidenceSelection
+  selection: CompletedEvidenceSelection,
+  measureReadStep?: EvidenceReadStepMeasurement
 ): Promise<CompletedCharacterEvidence> {
   const killsResult = await client.query<CharacterMythicKillRow>(
     `SELECT id, raid_id, raid_name, boss_id, boss_name, journal_boss_id,
@@ -151,7 +156,8 @@ export async function hydrateCompletedEvidence(
     // the newest publication shows, read with today's suppressions.
     raiderIoFirstKills: await loadPublishedRaiderIoFirstKills(
       client,
-      selection.snapshotRunId
+      selection.snapshotRunId,
+      measureReadStep
     ),
     cuttingEdges: cuttingEdgesResult.rows.map((row) => ({
       achievementId: row.achievement_id,
