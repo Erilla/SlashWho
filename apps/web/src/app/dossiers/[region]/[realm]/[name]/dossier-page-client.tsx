@@ -1144,6 +1144,9 @@ function DossierPageState({
                   characters={dossier.characters}
                   filter={filter}
                   guildHistory={dossier.guildHistory}
+                  {...(dossier.killedWith
+                    ? { killedWith: dossier.killedWith }
+                    : {})}
                 />
               ) : null}
               <DossierRaidList

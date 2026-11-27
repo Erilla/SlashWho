@@ -1168,6 +1168,32 @@ a {
   stroke-width: 2.5;
 }
 
+/* A Raider.IO "killed with" mark (#921): in the page's text colour rather
+   than any guild's, since it is no guild's night. */
+.dossier-guild-timeline-killed-with {
+  outline: none;
+}
+
+.dossier-guild-timeline-skull {
+  fill: var(--muted);
+}
+
+.dossier-guild-timeline-killed-with:hover .dossier-guild-timeline-skull,
+.dossier-guild-timeline-killed-with:focus-visible
+  .dossier-guild-timeline-skull {
+  fill: var(--text);
+}
+
+.dossier-guild-timeline-killed-with:focus-visible
+  .dossier-guild-timeline-skull {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.dossier-guild-timeline-skull-eye {
+  fill: var(--page);
+}
+
 .dossier-guild-timeline-label {
   fill: var(--page);
   font-weight: 600;

@@ -31,6 +31,8 @@ import {
 
 type DossierGuildHistoryProps = Readonly<{
   guildHistory: NonNullable<ApplicantDossier["guildHistory"]>;
+  /** Raider.IO kills no Warcraft Logs kill accounts for (#921). */
+  killedWith?: KilledWithMarks;
   characters: ApplicantDossier["characters"];
   filter?: EvidenceFilter | null;
   /** Today, `YYYY-MM-DD`; injectable so tests do not depend on the clock. */
@@ -66,8 +68,41 @@ const GUILD_COLOURS = [
   "#5fa33a"
 ];
 
+// One shared empty list, so a dossier without marks keeps memoised work.
+const NO_MARKS: NonNullable<ApplicantDossier["killedWith"]> = [];
+
 function formatDay(date: string): string {
   return formatUtcDate(`${date}T00:00:00.000Z`);
+}
+
+function nextDay(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) + 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/** A skull centred on (x, y), about 12px across. */
+function SkullIcon({ x, y }: Readonly<{ x: number; y: number }>) {
+  return (
+    <g aria-hidden="true" transform={`translate(${x - 6} ${y - 7})`}>
+      <path
+        className="dossier-guild-timeline-skull"
+        d="M6 0C2.7 0 0 2.5 0 5.6c0 1.9 1 3.5 2.4 4.5V13h7.2v-2.9C11 9.1 12 7.5 12 5.6 12 2.5 9.3 0 6 0Z"
+      />
+      <circle
+        className="dossier-guild-timeline-skull-eye"
+        cx={3.9}
+        cy={6}
+        r={1.5}
+      />
+      <circle
+        className="dossier-guild-timeline-skull-eye"
+        cx={8.1}
+        cy={6}
+        r={1.5}
+      />
+    </g>
+  );
 }
 
 function plural(count: number, one: string, many = `${one}s`): string {
@@ -101,6 +136,54 @@ function barTooltipLines(bar: GuildTimelineBar): ReactNode[] {
   ];
 }
 
+type KilledWithMarks = NonNullable<ApplicantDossier["killedWith"]>;
+type KilledWithMark = KilledWithMarks[number];
+type KilledWithKill = KilledWithMark["kills"][number];
+
+// Raider.IO names a guild for most kills; where it names none, the tooltip
+// says exactly that, never that the characters were guildless.
+function killedWithHeadline(kill: KilledWithKill): string {
+  return kill.guild
+    ? `${kill.bossName} with ${kill.guild.name}`
+    : `${kill.bossName}, Raider.IO names no guild`;
+}
+
+const KILLED_WITH_LOG: Readonly<Record<KilledWithKill["log"], string | null>> =
+  {
+    read: null,
+    not_read: "Raider.IO's log of it is not read yet",
+    none: "Raider.IO has no log of it"
+  };
+
+function killedWithLabel(mark: KilledWithMark): string {
+  return [
+    `Raider.IO ${mark.kills.length === 1 ? "kill" : "kills"} on ${formatDay(mark.date)}`,
+    ...mark.kills.map((kill) =>
+      [
+        `${killedWithHeadline(kill)}: ${kill.characters
+          .map((character) => formatCharacterDisplayName(character.name))
+          .join(", ")}`,
+        ...(KILLED_WITH_LOG[kill.log] ? [KILLED_WITH_LOG[kill.log]] : [])
+      ].join(", ")
+    ),
+    "No Warcraft Logs kill matches, so it is not a raid night"
+  ].join(". ");
+}
+
+function killedWithTooltipLines(mark: KilledWithMark): ReactNode[] {
+  return [
+    `Raider.IO ${mark.kills.length === 1 ? "kill" : "kills"} on ${formatDay(mark.date)}`,
+    ...mark.kills.map((kill) => (
+      <>
+        {killedWithHeadline(kill)}:{" "}
+        <DossierCharacterLabels characters={kill.characters} />
+        {KILLED_WITH_LOG[kill.log] ? ` (${KILLED_WITH_LOG[kill.log]})` : null}
+      </>
+    )),
+    "No Warcraft Logs kill matches, so it is not a raid night"
+  ];
+}
+
 type Tooltip = Readonly<{
   lines: readonly ReactNode[];
   /** Where it points, in pixels from the timeline's left edge. */
@@ -128,6 +211,7 @@ type GuildMenu = Readonly<{
 
 export function DossierGuildHistory({
   guildHistory,
+  killedWith = NO_MARKS,
   characters,
   filter = null,
   today = new Date().toISOString().slice(0, 10)
@@ -216,20 +300,42 @@ export function DossierGuildHistory({
   // The width the timeline has to fill, so a short history stretches across
   // the section instead of stopping part-way along it.
   const [fitWidth, setFitWidth] = useState(0);
-  const layout = useMemo(() => {
-    const spans = guildTimelineSpans(guildHistory, {
-      tiers,
-      ...(filter ? { isCharacterVisible: filter.isCharacterVisible } : {})
-    });
-    return spans.length === 0
-      ? null
-      : layoutGuildTimeline(spans, {
-          today,
-          minimumPixelsPerYear: MINIMUM_PIXELS_PER_YEAR,
-          fitWidth,
-          labelWidth: (text) => text.length * CHARACTER_WIDTH
+  // A hidden character's kills are left out as its nights are; a kill or a
+  // night left with nobody visible is not drawn.
+  const marks = useMemo(
+    () =>
+      killedWith.flatMap((mark) => {
+        const kills = mark.kills.flatMap((kill) => {
+          const shown = filter
+            ? kill.characters.filter(filter.isCharacterVisible)
+            : kill.characters;
+          return shown.length === 0 ? [] : [{ ...kill, characters: shown }];
         });
-  }, [guildHistory, tiers, filter, today, fitWidth]);
+        return kills.length === 0 ? [] : [{ ...mark, kills }];
+      }),
+    [killedWith, filter]
+  );
+  const spans = useMemo(
+    () =>
+      guildTimelineSpans(guildHistory, {
+        tiers,
+        ...(filter ? { isCharacterVisible: filter.isCharacterVisible } : {})
+      }),
+    [guildHistory, tiers, filter]
+  );
+  const layout = useMemo(
+    () =>
+      spans.length === 0 && marks.length === 0
+        ? null
+        : layoutGuildTimeline(spans, {
+            today,
+            minimumPixelsPerYear: MINIMUM_PIXELS_PER_YEAR,
+            fitWidth,
+            labelWidth: (text) => text.length * CHARACTER_WIDTH,
+            markDates: marks.map((mark) => mark.date)
+          }),
+    [spans, marks, today, fitWidth]
+  );
   const hasLayout = layout !== null;
   useEffect(() => {
     const scroll = scrollRef.current;
@@ -287,8 +393,14 @@ export function DossierGuildHistory({
       }
     ];
   });
+  // The "killed with" marks take a row of their own under every guild's, so
+  // none of them reads as a night in the guild whose row it sits on.
+  const skullLane =
+    layout && marks.length > 0 ? layout.lanes + extraLanes : null;
   const height = layout
-    ? TOP + (layout.lanes + extraLanes) * LANE_HEIGHT + AXIS_HEIGHT
+    ? TOP +
+      (layout.lanes + extraLanes + (skullLane === null ? 0 : 1)) * LANE_HEIGHT +
+      AXIS_HEIGHT
     : 0;
   const laneY = (lane: number) => TOP + lane * LANE_HEIGHT;
   // Every year that opens on the axis, the current one included.
@@ -397,12 +509,16 @@ export function DossierGuildHistory({
         Raid nights on guild logs, from every character shown. A bar breaks
         where a whole tier passed without one. Click a bar or ring for the guild
         on Raider.IO and Warcraft Logs.
+        {marks.length > 0
+          ? " A skull on the bottom row is a kill Raider.IO logged that no Warcraft Logs kill matches: who the characters killed with, not a raid night in a guild."
+          : null}
       </p>
-      {!layout ? (
+      {spans.length === 0 ? (
         <p className="empty-state">
           No guild has more than one raid night in the stored evidence.
         </p>
-      ) : (
+      ) : null}
+      {!layout ? null : (
         <div className="dossier-guild-timeline-frame" ref={frameRef}>
           <div
             aria-label="Guild history timeline, scrolls horizontally"
@@ -592,6 +708,34 @@ export function DossierGuildHistory({
                     </g>
                   );
                 })}
+                {skullLane === null
+                  ? null
+                  : marks.map((mark) => {
+                      // Centred on its night, as a bar covers its nights.
+                      const x =
+                        (layout.x(mark.date) + layout.x(nextDay(mark.date))) /
+                        2;
+                      const cy = laneY(skullLane) + LANE_HEIGHT / 2;
+                      const lines = killedWithTooltipLines(mark);
+                      return (
+                        <g
+                          aria-label={killedWithLabel(mark)}
+                          className="dossier-guild-timeline-killed-with"
+                          key={mark.date}
+                          onBlur={() => setTooltip(null)}
+                          onFocus={() =>
+                            showTooltip(lines, x - 8, cy + 12, true)
+                          }
+                          onMouseEnter={() =>
+                            showTooltip(lines, x - 8, cy + 12)
+                          }
+                          role="img"
+                          tabIndex={0}
+                        >
+                          <SkullIcon x={x} y={cy} />
+                        </g>
+                      );
+                    })}
               </svg>
             </div>
           </div>

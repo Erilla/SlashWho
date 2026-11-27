@@ -32,6 +32,12 @@ export type GuildTimelineLayoutOptions = Readonly<{
   /** The width a guild's name takes when drawn. */
   labelWidth: (text: string) => number;
   padding?: number;
+  /**
+   * Days drawn beside the bars without one of their own, such as the
+   * Raider.IO "killed with" marks (#921); the axis starts early enough to
+   * show them.
+   */
+  markDates?: readonly string[];
 }>;
 
 export type GuildTimelineTierBand = Readonly<{
@@ -113,6 +119,7 @@ export function layoutGuildTimeline(
   const padding = options.padding ?? 8;
   const firstYear = Math.min(
     ...spans.map((span) => Number(span.firstNight.slice(0, 4))),
+    ...(options.markDates ?? []).map((date) => Number(date.slice(0, 4))),
     Number(options.today.slice(0, 4))
   );
   const startsOn = `${firstYear}-01-01`;
