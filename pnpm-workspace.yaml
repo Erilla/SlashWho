@@ -10,3 +10,15 @@ overrides:
   # sharp arrives only as next's optional dependency, whose ^0.35.4 range
   # still admits vulnerable 0.35.4. 0.35.5 fixes its high-severity advisory.
   sharp: 0.35.5
+  # undici arrives only through jsdom and testcontainers (^8.10.2, ^8.5.0),
+  # and vite only through vitest and @vitejs/plugin-react (^8.0.0). The
+  # lockfile held vulnerable undici 8.11.2 and vite 8.2.0; these selectors
+  # lift only the vulnerable ranges to the first patched releases.
+  "undici@>=8.0.0 <8.12.2": 8.12.2
+  "vite@>=8.2.0 <8.2.4": 8.2.4
+  # glob 10 arrives only through archiver-utils, under testcontainers'
+  # archiver ^7.0.1, and needs vulnerable minimatch 9.0.9. glob 14 moves to
+  # minimatch 11; archiver-utils calls only glob.sync(pattern, options),
+  # which glob 14 keeps. A minimatch override would break glob 10, which
+  # expects RegExp portions where minimatch 11 returns Matcher objects.
+  "archiver-utils>glob": 14.0.6

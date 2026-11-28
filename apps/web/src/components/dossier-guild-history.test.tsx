@@ -786,3 +786,335 @@ it("says so when no guild has more than one raid night", () => {
     )
   ).toBeInTheDocument();
 });
+
+const method = { name: "Method", region: "eu", realm: "tarren-mill" } as const;
+
+const killedWith: NonNullable<ApplicantDossier["killedWith"]> = [
+  {
+    date: "2025-07-20",
+    kills: [
+      {
+        raidName: "March on Quel'Danas",
+        bossName: "Midnight Falls",
+        killedAt: "2025-07-20T17:25:57.000Z",
+        guild: method,
+        characters: [ryii],
+        loggedNights: [],
+        log: "read"
+      },
+      {
+        raidName: "The Voidspire",
+        bossName: "Vaelgor & Ezzorak",
+        killedAt: "2025-07-20T19:00:00.000Z",
+        guild: casual,
+        characters: [ryii, ryun],
+        loggedNights: [],
+        log: "read"
+      }
+    ]
+  }
+];
+
+type KilledWithKill = NonNullable<
+  ApplicantDossier["killedWith"]
+>[number]["kills"][number];
+
+function skulls() {
+  return screen.queryAllByRole("img", { name: /^Raider\.IO kill/ });
+}
+
+function translateY(element: Element | null | undefined): number {
+  const transform = element?.getAttribute("transform") ?? "";
+  return Number(/translate\(\S+ (\S+)\)/.exec(transform)?.[1]);
+}
+
+it("draws a Raider.IO kill as a skull on its own row, under every guild's", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killedWith}
+      today="2026-09-26"
+    />
+  );
+  const [skull] = skulls();
+  expect(skull).toBeDefined();
+  const skullY = translateY(skull!.querySelector("g"));
+  const rowTops = [
+    ...document.querySelectorAll(
+      ".dossier-guild-timeline-bar rect, .dossier-guild-timeline-current circle"
+    )
+  ].map((shape) => Number(shape.getAttribute("y") ?? shape.getAttribute("cy")));
+  expect(rowTops.length).toBeGreaterThan(0);
+  expect(Math.max(...rowTops)).toBeLessThan(skullY);
+});
+
+it("leaves the guild bars as they are beside a skull", () => {
+  const labels = () =>
+    screen
+      .getAllByRole("button", { name: /raid night/ })
+      .map((bar) => bar.getAttribute("aria-label"));
+  const { rerender } = render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      today="2026-09-26"
+    />
+  );
+  const before = labels();
+  rerender(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killedWith}
+      today="2026-09-26"
+    />
+  );
+  expect(labels()).toEqual(before);
+});
+
+it("stacks a night's kills in one skull, naming each boss and guild", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killedWith}
+      today="2026-09-26"
+    />
+  );
+  const marks = skulls();
+  expect(marks).toHaveLength(1);
+  expect(marks[0]).toHaveAttribute(
+    "aria-label",
+    "Raider.IO kills on 20 Jul 2025. Midnight Falls with Method: Ryii. Vaelgor & Ezzorak with SeriouslyCasual: Ryii, Ryun. The guild bars don't show this kill for these characters"
+  );
+});
+
+it("reaches a skull by keyboard and shows its tooltip on focus and hover", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killedWith}
+      today="2026-09-26"
+    />
+  );
+  const [skull] = skulls();
+  expect(skull).toHaveAttribute("tabindex", "0");
+  const tooltip = () =>
+    document.querySelector(".dossier-guild-timeline-tooltip");
+  fireEvent.focus(skull!);
+  expect(tooltip()?.querySelector("strong")?.textContent).toBe(
+    "Raider.IO kills on 20 Jul 2025"
+  );
+  expect(tooltip()?.textContent).toContain("Midnight Falls with Method: Ryii");
+  expect(tooltip()?.textContent).toContain(
+    "Vaelgor & Ezzorak with SeriouslyCasual: Ryii, Ryun"
+  );
+  fireEvent.blur(skull!);
+  expect(tooltip()).not.toBeInTheDocument();
+  fireEvent.mouseEnter(skull!);
+  expect(tooltip()?.textContent).toContain("Midnight Falls with Method");
+  fireEvent.mouseLeave(skull!.closest("svg")!);
+  expect(tooltip()).not.toBeInTheDocument();
+});
+
+it("says Raider.IO names no guild, and what is missing of its log", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={[
+        {
+          date: "2025-07-20",
+          kills: [
+            { ...killedWith[0]!.kills[0]!, guild: null, log: "not_read" },
+            { ...killedWith[0]!.kills[1]!, log: "none" }
+          ]
+        }
+      ]}
+      today="2026-09-26"
+    />
+  );
+  const label = skulls()[0]!.getAttribute("aria-label") ?? "";
+  expect(label).toContain(
+    "Midnight Falls, Raider.IO names no guild: Ryii, Raider.IO's log of it is not read yet"
+  );
+  expect(label).toContain(
+    "Vaelgor & Ezzorak with SeriouslyCasual: Ryii, Ryun, Raider.IO has no log of it"
+  );
+  // Raider.IO not naming a guild is never read as the characters having none.
+  expect(label).not.toMatch(/guildless|(?<!names )\bno guild\b/i);
+});
+
+it("draws no skull row without Raider.IO kills to mark", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={[]}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toEqual([]);
+  expect(
+    document.querySelector(".dossier-guild-timeline-killed-with")
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText(/A skull on the bottom row/)).toBeNull();
+});
+
+it("leaves out a hidden character's Raider.IO kills", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      filter={evidenceFilter(characters, new Set(["eu/silvermoon/ryii"]))}
+      guildHistory={guildHistory}
+      killedWith={killedWith}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()[0]).toHaveAttribute(
+    "aria-label",
+    "Raider.IO kill on 20 Jul 2025. Vaelgor & Ezzorak with SeriouslyCasual: Ryun. The guild bars don't show this kill for these characters"
+  );
+});
+
+// Rancour's bar runs 26 Jan to 11 Sept 2025 with Ryii; Pure Chaos has one
+// night, 15 Mar 2024, and draws no bar.
+function killOn(
+  date: string,
+  loggedNights: KilledWithKill["loggedNights"],
+  who: readonly CharacterKey[] = [ryii]
+): NonNullable<ApplicantDossier["killedWith"]> {
+  return [
+    {
+      date,
+      kills: [
+        {
+          ...killedWith[0]!.kills[0]!,
+          killedAt: `${date}T20:00:00.000Z`,
+          characters: [...who],
+          loggedNights
+        }
+      ]
+    }
+  ];
+}
+
+it("draws no skull where a drawn guild bar already holds the character's night", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn("2025-05-04", [{ character: ryii, guild: rancour }])}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toEqual([]);
+  expect(screen.queryByText(/A skull on the bottom row/)).toBeNull();
+});
+
+it("keeps the skull when the matched guild was seen on one night and draws no bar", () => {
+  const pureChaos = guildHistory[1]!.guild;
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn("2024-03-15", [{ character: ryii, guild: pureChaos }])}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toHaveLength(1);
+});
+
+it("keeps the skull when the matched log names no guild", () => {
+  // A Warcraft Logs kill naming no guild places the night in no guild, so
+  // the domain lists no logged night for it.
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn("2025-05-04", [])}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toHaveLength(1);
+});
+
+it("keeps the skull when hiding characters takes the matched guild's bar away", () => {
+  // SeriouslyCasual's bar is Ryun's alone; Ryii's one night there is not
+  // enough for a bar of its own once Ryun is hidden.
+  const history: NonNullable<ApplicantDossier["guildHistory"]> = [
+    {
+      guild: casual,
+      nights: [
+        { date: "2023-03-08", characters: [ryii, ryun] },
+        { date: "2023-06-14", characters: [ryun] }
+      ]
+    },
+    guildHistory[2]!
+  ];
+  const marks = killOn("2023-03-08", [{ character: ryii, guild: casual }]);
+  const { rerender } = render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={history}
+      killedWith={marks}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toEqual([]);
+  rerender(
+    <DossierGuildHistory
+      characters={characters}
+      filter={evidenceFilter(characters, new Set(["eu/silvermoon/ryun"]))}
+      guildHistory={history}
+      killedWith={marks}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()).toHaveLength(1);
+});
+
+it("names only the characters no bar holds on a shared kill", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={guildHistory}
+      killedWith={killOn(
+        "2025-05-04",
+        [{ character: ryii, guild: rancour }],
+        [ryii, ryun]
+      )}
+      today="2026-09-26"
+    />
+  );
+  expect(skulls()[0]).toHaveAttribute(
+    "aria-label",
+    "Raider.IO kill on 4 May 2025. Midnight Falls with Method: Ryun. The guild bars don't show this kill for these characters"
+  );
+});
+
+it("draws the skull row alone when no guild has more than one raid night", () => {
+  render(
+    <DossierGuildHistory
+      characters={characters}
+      guildHistory={[guildHistory[1]!]}
+      killedWith={[{ ...killedWith[0]!, date: "2021-07-20" }]}
+      today="2026-09-26"
+    />
+  );
+  expect(
+    screen.getByText(
+      "No guild has more than one raid night in the stored evidence."
+    )
+  ).toBeInTheDocument();
+  expect(skulls()).toHaveLength(1);
+  expect(screen.queryAllByRole("button", { name: /raid night/ })).toEqual([]);
+  // The axis starts in the skull's year.
+  expect(
+    [...document.querySelectorAll(".dossier-guild-timeline-year text")].map(
+      (text) => text.textContent
+    )[0]
+  ).toBe("2021");
+});

@@ -55,6 +55,12 @@ const allowlist = new Set([
   // the repository property keys in `measuredRepositories` -- never from a
   // query argument -- so no character name, realm, or URL can arrive here.
   "dbMaxCallName",
+  // The Raider.IO roster read step, kept as its own family so its cost is
+  // reportable even when a larger call owns dbMaxCallName. Static label only.
+  "dbRosterMs",
+  "dbRosterCalls",
+  "dbRosterMaxCallMs",
+  "dbRosterMaxCallName",
   "limiterWaitMs",
   // The request's own CPU work (#687): dossier assembly once the evidence is
   // in hand, and compaction, validation, serialisation and counting.

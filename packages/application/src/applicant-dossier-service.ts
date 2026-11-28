@@ -25,6 +25,7 @@ import { groupMemberFacts } from "@slashwho/domain";
 import {
   buildApplicantDossier,
   collectGuildRaidNights,
+  collectKilledWithMarks,
   formatCharacterDisplayName,
   canonicalCharacterId,
   groupPageMembers,
@@ -1398,6 +1399,12 @@ async function assembleDossier(options: {
       // Every stored kill, not only the first kills the raids lead with: a
       // guild's history is the nights it raided, which the raids do not keep.
       guildHistory: collectGuildRaidNights(ranked.kills),
+      // Raider.IO kills no stored Warcraft Logs kill accounts for, drawn as
+      // "killed with" marks rather than as nights in a guild (#921).
+      killedWith: collectKilledWithMarks(
+        ranked.kills,
+        evidence.flatMap((item) => item.raiderIoFirstKills)
+      ),
       lastCollectedAt:
         collectedTimes.length === 0
           ? null

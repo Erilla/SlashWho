@@ -738,7 +738,9 @@ const raiderIoBossSlug = boundedMemo((bossName: string): string =>
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[’']/g, "")
     .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "")
+    // Runs are already one dash, so trimming one each end is enough; `-+$`
+    // backtracks polynomially on a long run of dashes (CodeQL js/polynomial-redos).
+    .replace(/^-|-$/g, "")
     .toLocaleLowerCase("en-US")
 );
 

@@ -43,6 +43,14 @@ export type {
   GuildTimelineOptions,
   GuildTimelineSpan
 } from "./guild-history";
+export { collectKilledWithMarks } from "./killed-with-marks";
+export type {
+  DossierKilledWithKill,
+  DossierKilledWithLoggedNight,
+  DossierKilledWithMark,
+  KilledWithRaiderIoKill,
+  KilledWithWarcraftLogsKill
+} from "./killed-with-marks";
 export {
   buildApplicantDossier,
   summarizeLimitationEncounters

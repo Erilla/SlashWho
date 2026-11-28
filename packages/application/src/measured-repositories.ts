@@ -1,6 +1,19 @@
 import type { MeasurementScope } from "./measurement";
 
 /**
+ * The argument position of each evidence read's request-bound read-step
+ * observer. Positions are explicit because `reserveForScheduling` already uses
+ * its second argument for the scheduling callback; inferring "the last
+ * optional argument" would silently skip it.
+ */
+const rosterReadObserverIndex = new Map<string, number>([
+  ["getCompleted", 1],
+  ["hydrateCompletedEvidence", 1],
+  ["reserve", 1],
+  ["reserveForScheduling", 2]
+]);
+
+/**
  * Wraps a repositories object so every method call is timed under the `db`
  * prefix and labelled `group.method`, which is what lets the aggregate
  * `dbMs`/`dbMaxCallMs` totals be attributed to a particular query. Applied
@@ -41,7 +54,38 @@ export function measuredRepositories<T extends object>(
           return (...args: unknown[]) =>
             scope.time(
               "db",
-              async () => await call.apply(groupTarget, args),
+              async (exclude) => {
+                const observerIndex =
+                  property === "evidence"
+                    ? rosterReadObserverIndex.get(String(method))
+                    : undefined;
+                if (
+                  observerIndex !== undefined &&
+                  args[observerIndex] === undefined
+                ) {
+                  // The observer is supplied at the method's declared
+                  // position, never by counting the arguments it was given.
+                  while (args.length < observerIndex) args.push(undefined);
+                  args[observerIndex] = <R>(
+                    step: "evidence.raiderIoRoster",
+                    work: () => Promise<R>
+                  ) =>
+                    exclude(() =>
+                      // Two prefixes, one execution. `db` keeps the step in
+                      // dbCalls/dbMs/dbMaxCallName; `dbRoster` is a dedicated
+                      // family so the roster remains reportable when a larger
+                      // call, such as the scheduling reserve, owns
+                      // dbMaxCallName. The enclosing repository call excludes
+                      // the outer frame, so dbMs still charges the work once.
+                      scope.time(
+                        "db",
+                        () => scope.time("dbRoster", work, step),
+                        step
+                      )
+                    );
+                }
+                return await call.apply(groupTarget, args);
+              },
               label
             );
         }

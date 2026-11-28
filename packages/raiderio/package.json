@@ -10,6 +10,6 @@
   "dependencies": {
     "@slashwho/domain": "workspace:*",
     "@slashwho/upstream-http": "workspace:*",
-    "zod": "^4.3.5"
+    "zod": "^4.6.6"
   }
 }
