@@ -1,7 +1,13 @@
 import type { CharacterGuild, CharacterKey } from "./character-key";
 
-export type DiscoverySource =
-  "input" | "claimed" | "declared_main" | "profile_guess" | "fingerprint";
+export const DISCOVERY_SOURCES = [
+  "input",
+  "claimed",
+  "declared_main",
+  "profile_guess",
+  "fingerprint"
+] as const;
+export type DiscoverySource = (typeof DISCOVERY_SOURCES)[number];
 
 export interface DiscoveredCharacter {
   readonly key: CharacterKey;

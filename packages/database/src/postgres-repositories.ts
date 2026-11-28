@@ -9,9 +9,11 @@ import { createEvidenceRepositories } from "./evidence/repository";
 import { createSmallStoreRepositories } from "./small-stores";
 import { createCharacterConnectionRepositories } from "./character-connections";
 import { createFingerprintDeliveryRepository } from "./fingerprint-delivery";
+import { createGroupReadRepository } from "./group-reads";
 
 export function createPostgresRepositories(pool: Pool): Repositories {
   return {
+    groupReads: createGroupReadRepository(pool),
     fingerprintDeliveries: createFingerprintDeliveryRepository(pool),
     ...createAccountRepositories(pool),
     ...createOperatorRepositories(pool),

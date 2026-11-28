@@ -50,12 +50,13 @@ function command(name: string, authorization?: string) {
 }
 
 async function seedSnapshot(
+  pool: Pool,
   repositories: TestRepositories,
   key: CharacterKey,
   refreshedAt: Date
 ) {
   const run = await repositories.runs.createOrReuse(key, "anonymous");
-  return repositories.snapshots.create({
+  const snapshot = await repositories.snapshots.create({
     runId: run.id,
     rootKey: key,
     state: "complete",
@@ -73,6 +74,11 @@ async function seedSnapshot(
       }
     ]
   });
+  await pool.query(
+    "UPDATE discovery_runs SET completed_at = $2 WHERE id = $1",
+    [run.id, refreshedAt]
+  );
+  return snapshot;
 }
 
 async function holdRootLock(
@@ -191,7 +197,12 @@ describe("PostgreSQL search policy", () => {
       realm: "silvermoon",
       name: "published"
     } as const;
-    await seedSnapshot(repositories, key, new Date("2026-08-03T11:00:00.000Z"));
+    await seedSnapshot(
+      pool,
+      repositories,
+      key,
+      new Date("2026-08-03T11:00:00.000Z")
+    );
     const run = await repositories.runs.createOrReuse(key, "anonymous");
     await repositories.runs.markRunning(run.id);
     const release = await holdRootLock(pool, key);
@@ -249,11 +260,13 @@ describe("PostgreSQL search policy", () => {
       name: "stale"
     } as const;
     await seedSnapshot(
+      pool,
       repositories,
       freshKey,
       new Date("2026-08-03T12:00:01.000Z")
     );
     await seedSnapshot(
+      pool,
       repositories,
       staleKey,
       new Date("2026-08-03T11:59:59.000Z")
@@ -305,7 +318,7 @@ describe("PostgreSQL search policy", () => {
       realm: "silvermoon",
       name: "cached"
     } as const;
-    await seedSnapshot(repositories, cachedKey, now);
+    await seedSnapshot(pool, repositories, cachedKey, now);
     const readLimitedConfig = { ...config, PUBLIC_READS_PER_MINUTE: 2 };
     const service = createSearchService({
       repositories,

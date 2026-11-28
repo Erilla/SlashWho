@@ -3,8 +3,11 @@ import type {
   StoredSnapshot,
   StoredSnapshotCharacter
 } from "@slashwho/database";
+import type { GroupRead } from "@slashwho/database";
+import { resolveGroupSubjects } from "./group-subjects";
 import {
   canonicalCharacterId,
+  groupPageMembers,
   type CharacterGuild,
   type CharacterKey
 } from "@slashwho/domain";
@@ -18,6 +21,7 @@ export type DossierSubject = Readonly<{
   guild: CharacterGuild | null;
   raiderIoUrl: string;
   source: StoredSnapshotCharacter["source"] | "submitted" | "manually_added";
+  hasManualConnection?: boolean;
   /** Set on a manually connected character whose own discovery has not run. */
   pending?: boolean;
   /** Set on a manual connection the applicant sheet watcher made; label only. */
@@ -56,8 +60,87 @@ export type ResolvedSubjects = Readonly<{
 
 export type SubjectRepositories = Pick<
   Repositories,
-  "snapshots" | "manualConnections" | "evidence"
+  "snapshots" | "manualConnections" | "evidence" | "groupReads"
 >;
+
+export type LiveResolvedSubjects = Omit<ResolvedSubjects, "snapshot"> & {
+  snapshot: StoredSnapshot | null;
+  group?: GroupRead;
+  research?: { state: "complete" | "partial"; message: string };
+};
+
+export async function resolveSubjects(
+  key: CharacterKey,
+  repositories: SubjectRepositories,
+  config: { DOSSIER_CHARACTER_CEILING: number },
+  logger?: { info(value: Record<string, unknown>): void }
+): Promise<LiveResolvedSubjects | null> {
+  // Test/in-memory adapters may retain the legacy snapshot-only projection.
+  if (!repositories.groupReads)
+    return legacyResolveSubjects(key, repositories, config);
+  const group = await repositories.groupReads.read(key, new Date());
+  if (!group) return null;
+  const originId = group.graph.idOf(key);
+  if (!originId) return null;
+  const pageMemberIds = groupPageMembers(originId, group.graph);
+  const pageSnapshots = group.snapshots.filter((snapshot) =>
+    pageMemberIds.has(group.graph.idOf(snapshot.rootKey) ?? "")
+  );
+  if (pageSnapshots.length === 0) return null;
+  const subjects = resolveGroupSubjects(key, group.graph, config, logger);
+  if (!subjects) return null;
+  const guildOf = (subject: RankedSubject): RankedSubject => ({
+    ...subject,
+    guild:
+      [
+        ...(group.ownSnapshot ? [group.ownSnapshot] : []),
+        ...[...pageSnapshots].sort(
+          (a, b) => b.refreshedAt.getTime() - a.refreshedAt.getTime()
+        )
+      ]
+        .flatMap((s) => s.characters)
+        .find(
+          (c) =>
+            canonicalCharacterId(c.key) === canonicalCharacterId(subject.key)
+        )?.guild ?? null
+  });
+  const members = new Set(
+    [...subjects.selected, ...subjects.skipped, ...subjects.excluded].flatMap(
+      (s) => [
+        canonicalCharacterId(s.key),
+        ...(s.warcraftLogsAliases?.map(canonicalCharacterId) ?? [])
+      ]
+    )
+  );
+  const privateRoots = pageSnapshots
+    .filter(
+      (s) =>
+        s.limitationCode === "privacy_hidden" &&
+        members.has(canonicalCharacterId(s.rootKey))
+    )
+    .map(
+      (s) =>
+        group.graph.characters.get(group.graph.idOf(s.rootKey)!)?.displayName ??
+        s.rootKey.name
+    );
+  return {
+    snapshot: group.ownSnapshot,
+    group,
+    selected: subjects.selected.map(guildOf),
+    skipped: subjects.skipped.map(guildOf),
+    excludedOrdered: subjects.excluded.map(guildOf),
+    provisional: false,
+    research: {
+      state: subjects.research.state,
+      message:
+        privateRoots.length > 0
+          ? `Raider.IO shows no public account claim for ${privateRoots.join(", ")}, so additional linked characters may exist.`
+          : subjects.research.state === "complete"
+            ? "Linked-character research is complete."
+            : "Additional linked characters may exist; this dossier is not exhaustive."
+    }
+  };
+}
 
 /**
  * Another root's snapshot, re-rooted at a character it lists as a

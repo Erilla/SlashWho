@@ -113,6 +113,8 @@ export function notModified(etag: string): Response {
 export function startResultResponse(
   result: Exclude<CreateSearchResult, { kind: "character" }>
 ): Response {
+  if (result.kind === "group_ready")
+    return jsonNoStore(dossierStartResponseSchema, { kind: "ready" });
   if (result.kind === "job") {
     return jsonNoStore(
       dossierStartResponseSchema,
@@ -246,7 +248,14 @@ export async function withHttpRequest(
     });
   } catch (error) {
     failure = errorFields(error);
-    response = apiError("search_failed");
+    const lockTimedOut =
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "55P03";
+    response = lockTimedOut
+      ? apiError("upstream_unavailable", { retryAfterSeconds: 5 })
+      : apiError("search_failed");
   }
   // Every response this wraps is private to its caller, so one that names no
   // caching policy gets the safe one rather than whatever a proxy assumes.

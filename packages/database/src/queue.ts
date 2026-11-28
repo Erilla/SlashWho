@@ -128,6 +128,7 @@ export interface DiscoveryQueue {
 
 export type CreateDiscoveryQueueOptions = {
   connectionString: string;
+  applicationName?: string | undefined;
 };
 
 const uuidPattern =
@@ -230,7 +231,12 @@ export async function updateActiveRetryDelay(
 export function createDiscoveryQueue(
   options: CreateDiscoveryQueueOptions
 ): DiscoveryQueue {
-  const boss = new PgBoss(options.connectionString);
+  const boss = new PgBoss({
+    connectionString: options.connectionString,
+    ...(options.applicationName
+      ? { application_name: options.applicationName }
+      : {})
+  });
   const inFlight = new Set<Promise<void>>();
   /**
    * Aborted by `stop`, so a shutdown can end work it cannot wait out. Every

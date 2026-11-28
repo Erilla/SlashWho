@@ -95,11 +95,13 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
   // flight. Hold Queued's declared related-character read so the initial
   // dossier can independently check the root's tournament eligibility.
   let holdingRelatedCharacterRead = false;
+  let holdingProfilePrefix: string | null = null;
   let discoveryWebhooks = 0;
   const characterRequests = new Map<string, number>();
   const held: Array<() => void> = [];
   const releaseAll = () => {
     holdingRelatedCharacterRead = false;
+    holdingProfilePrefix = null;
     while (held.length > 0) held.shift()?.();
   };
 
@@ -157,7 +159,8 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
     }
 
     if (url.pathname === "/__control/hold") {
-      holdingRelatedCharacterRead = true;
+      holdingProfilePrefix = url.searchParams.get("profile");
+      holdingRelatedCharacterRead = holdingProfilePrefix === null;
       json(response, 200, { holdingRelatedCharacterRead: true });
       return;
     }
@@ -287,10 +290,17 @@ export async function startFakeRaiderIo(): Promise<FakeRaiderIo> {
       );
     if (profiled) {
       const name = profiled[1]!;
-      declaredCharacter(
-        { ...ryii, name: name.charAt(0).toUpperCase() + name.slice(1) },
-        null
-      );
+      const send = () =>
+        declaredCharacter(
+          { ...ryii, name: name.charAt(0).toUpperCase() + name.slice(1) },
+          null
+        );
+      if (
+        holdingProfilePrefix !== null &&
+        name.startsWith(holdingProfilePrefix)
+      )
+        held.push(send);
+      else send();
       return;
     }
 

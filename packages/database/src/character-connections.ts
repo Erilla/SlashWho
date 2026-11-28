@@ -1,6 +1,11 @@
+import {
+  COUNTING_LINKS_FROM,
+  COUNTING_LINKS_WITH_STRENGTH
+} from "./counting-links";
 import type { Pool, PoolClient } from "pg";
 import {
   assignGroupIds,
+  DISCOVERY_SOURCES,
   canonicalCharacterId,
   type CharacterConnectionErrorCode,
   components,
@@ -12,6 +17,7 @@ import {
 import { REBUILD_SQL } from "./character-groups-backfill-sql";
 import type {
   CharacterConnectionRepository,
+  CharacterGroupMerge,
   FamilyObservationWrite,
   Repositories
 } from "./repositories";
@@ -64,12 +70,9 @@ function withGroupsTransaction<T>(
 }
 
 /** Every source discovery can attribute a link to. */
-const ALL_OBSERVATION_SOURCES = [
-  "claimed",
-  "declared_main",
-  "profile_guess",
-  "fingerprint"
-] as const satisfies readonly ObservationSource[];
+const ALL_OBSERVATION_SOURCES = DISCOVERY_SOURCES.filter(
+  (source): source is ObservationSource => source !== "input"
+);
 
 /**
  * The sources a `family`-family `replaced` retraction may remove, derived
@@ -292,15 +295,17 @@ export function createCharacterConnectionRepositories(
     async recomputeGroupsOf(seedIds) {
       const done = new Set<string>();
       let mergedGroups = 0;
+      const merges: CharacterGroupMerge[] = [];
       for (const seed of seedIds) {
         if (done.has(seed)) continue;
         const recomputed = await withGroupsTransaction(pool, (client) =>
           recomputeComponent(client, seed)
         );
         mergedGroups += recomputed.mergedGroups;
+        merges.push(...recomputed.merges);
         for (const id of recomputed.members) done.add(id);
       }
-      return { mergedGroups };
+      return { mergedGroups, ...(merges.length ? { merges } : {}) };
     },
 
     async recomputePass({ budgetMs }) {
@@ -310,6 +315,7 @@ export function createCharacterConnectionRepositories(
       let ungroupedAssigned = 0;
       let cyclesCompleted = 0;
       let mergedGroups = 0;
+      const merges: CharacterGroupMerge[] = [];
       // The start, as stored, of the cycle already in progress when this
       // pass first looked: null when there was none, undefined until then.
       let inheritedCycleStartedAt: string | null | undefined;
@@ -323,7 +329,8 @@ export function createCharacterConnectionRepositories(
         ungroupedAssigned,
         cycleCompleted: cyclesCompleted > 0,
         cyclesCompleted,
-        mergedGroups
+        mergedGroups,
+        ...(merges.length ? { merges } : {})
       });
 
       /**
@@ -360,10 +367,12 @@ export function createCharacterConnectionRepositories(
         const assigned = await withGroupsTransaction(pool, async (client) => {
           const { joinedCycleStartedAt } = await joinCycle(client);
           const ungrouped = await firstUngrouped(client);
-          const merged =
+          const recomputed =
             ungrouped === null
-              ? 0
-              : (await recomputeComponent(client, ungrouped)).mergedGroups;
+              ? null
+              : await recomputeComponent(client, ungrouped);
+          const merged = recomputed?.mergedGroups ?? 0;
+          merges.push(...(recomputed?.merges ?? []));
           return { joinedCycleStartedAt, found: ungrouped !== null, merged };
         });
         noteInherited(assigned.joinedCycleStartedAt);
@@ -405,6 +414,7 @@ export function createCharacterConnectionRepositories(
             const ungrouped = await firstUngrouped(client);
             if (ungrouped !== null) {
               const recomputed = await recomputeComponent(client, ungrouped);
+              merges.push(...recomputed.merges);
               return {
                 kind: "ungrouped_assigned" as const,
                 joinedCycleStartedAt,
@@ -440,6 +450,7 @@ export function createCharacterConnectionRepositories(
             };
           }
           const recomputed = await recomputeComponent(client, group.seed);
+          merges.push(...recomputed.merges);
           await client.query(
             `UPDATE character_groups_maintenance SET cursor_group_id = $1 WHERE id = 1`,
             [group.id]
@@ -530,10 +541,14 @@ async function firstUngrouped(client: PoolClient): Promise<string | null> {
  * does `components` run, over every link collected among them. Returns
  * every character visited, and how many merges it made (see `countMerges`).
  */
-async function recomputeComponent(
+export async function recomputeComponent(
   client: PoolClient,
   seed: string
-): Promise<{ members: string[]; mergedGroups: number }> {
+): Promise<{
+  members: string[];
+  mergedGroups: number;
+  merges: CharacterGroupMerge[];
+}> {
   const nodes = new Set<string>([seed]);
   const links: { a: string; b: string }[] = [];
   let frontier = [seed];
@@ -580,6 +595,60 @@ async function recomputeComponent(
   const membership = new Map(
     membershipRows.rows.map((row) => [row.character_id, row.group_id])
   );
+  const mergedGroups = countMerges(parts, membership);
+  const merges: CharacterGroupMerge[] = [];
+  if (mergedGroups > 0) {
+    const edges = (
+      await client.query<{
+        a: string;
+        b: string;
+        source: ObservationSource | null;
+      }>(
+        `SELECT * FROM (${COUNTING_LINKS_WITH_STRENGTH}) edges WHERE a = ANY($1::uuid[]) AND b = ANY($1::uuid[])`,
+        [[...nodes]]
+      )
+    ).rows;
+    const sizes = new Map<string, number>();
+    for (const group of membership.values())
+      sizes.set(group, (sizes.get(group) ?? 0) + 1);
+    for (const part of parts) {
+      const partIds = new Set(part);
+      const bigGroups = [
+        ...new Set(
+          part.flatMap((id) => {
+            const group = membership.get(id);
+            return group && (sizes.get(group) ?? 0) > 1 ? [group] : [];
+          })
+        )
+      ];
+      if (bigGroups.length < 2) continue;
+      const nodeGroup = (id: string) => membership.get(id) ?? id;
+      const bridges = edges.filter(
+        (edge) =>
+          partIds.has(edge.a) &&
+          partIds.has(edge.b) &&
+          nodeGroup(edge.a) !== nodeGroup(edge.b)
+      );
+      const manualParts = components(
+        new Set(part.map(nodeGroup)),
+        bridges
+          .filter((e) => e.source === null)
+          .map((e) => ({ a: nodeGroup(e.a), b: nodeGroup(e.b) }))
+      );
+      const manualOnly = manualParts.some((component) =>
+        bigGroups.every((group) => component.includes(group))
+      );
+      merges.push({
+        groupSizes: bigGroups
+          .map((group) => sizes.get(group)!)
+          .sort((a, b) => a - b),
+        sources: [
+          ...new Set(bridges.flatMap((e) => (e.source ? [e.source] : [])))
+        ].sort(),
+        throughObserved: !manualOnly
+      });
+    }
+  }
   const groupRows = await client.query<{ id: string; created_at: Date }>(
     `SELECT id, created_at FROM character_groups WHERE id = ANY($1)`,
     [[...new Set(membership.values())]]
@@ -618,7 +687,7 @@ async function recomputeComponent(
       deletedGroupIds
     ]);
   }
-  return { members: [...nodes], mergedGroups: countMerges(parts, membership) };
+  return { members: [...nodes], mergedGroups, merges };
 }
 
 /**
@@ -658,25 +727,6 @@ function countMerges(
  * In phase 1 nothing writes rejections; honouring them now keeps a phase 3
  * rollback safe.
  */
-const COUNTING_LINKS_FROM = `
-  SELECT connection.character_low_id AS a, connection.character_high_id AS b
-  FROM character_connections connection
-  WHERE connection.kind = 'observed'
-    AND (connection.character_low_id = ANY($1) OR connection.character_high_id = ANY($1))
-    AND NOT EXISTS (
-      SELECT 1 FROM character_connections rejection
-      WHERE rejection.kind = 'rejected'
-        AND rejection.character_low_id = connection.character_low_id
-        AND rejection.character_high_id = connection.character_high_id
-    )
-  UNION
-  SELECT manual.root_character_id, target.id
-  FROM manual_dossier_connections manual
-  JOIN characters target ON target.region = manual.connected_region
-    AND target.realm_slug = manual.connected_realm_slug
-    AND target.normalized_name = manual.connected_normalized_name
-  WHERE target.id <> manual.root_character_id
-    AND (manual.root_character_id = ANY($1) OR target.id = ANY($1))`;
 
 /**
  * Appends the ledger row. `written_at` is the clock at this insert, the last

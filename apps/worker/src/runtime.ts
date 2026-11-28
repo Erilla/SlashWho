@@ -48,6 +48,7 @@ import {
   type WarcraftLogsGateway
 } from "@slashwho/warcraftlogs";
 import { Pool } from "pg";
+import { notifyGroupMerges } from "@slashwho/application";
 
 import { createApplicantSheetClient } from "./applicant-sheet";
 import { decodeApplicantIdentity } from "./applicant-identity";
@@ -146,10 +147,16 @@ export type WorkerRuntimeDependencies = {
   startAccountMailWorker?: typeof startAccountMailWorker;
   /** Times each background cycle; monotonic by default. */
   clock?: Clock;
-  createPool: (connectionString: string) => RuntimePool;
+  createPool: (
+    connectionString: string,
+    applicationName?: string
+  ) => RuntimePool;
   runMigrations: (pool: RuntimePool) => Promise<void>;
   createRepositories: (pool: RuntimePool) => Repositories;
-  createQueue: (connectionString: string) => DiscoveryQueue;
+  createQueue: (
+    connectionString: string,
+    applicationName?: string
+  ) => DiscoveryQueue;
   createGateway: (
     config: WorkerConfig,
     logger?: DiscoveryLogger
@@ -431,11 +438,16 @@ export function createAccountWarcraftLogsResolver(
 }
 
 const defaultDependencies: WorkerRuntimeDependencies = {
-  createPool: (connectionString) =>
-    new Pool({ connectionString, connectionTimeoutMillis: 10_000 }),
+  createPool: (connectionString, applicationName) =>
+    new Pool({
+      connectionString,
+      application_name: applicationName,
+      connectionTimeoutMillis: 10_000
+    }),
   runMigrations: (pool) => runMigrations(pool as Pool),
   createRepositories: (pool) => createPostgresRepositories(pool as Pool),
-  createQueue: (connectionString) => createDiscoveryQueue({ connectionString }),
+  createQueue: (connectionString, applicationName) =>
+    createDiscoveryQueue({ connectionString, applicationName }),
   createGateway: createRaiderIoGateway,
   createEvidenceGateway,
   createFingerprintIntegration,
@@ -1270,8 +1282,13 @@ async function characterGroupsRecompute(context: WorkerContext): Promise<void> {
       logger?.info({
         event: "character_groups_merged",
         stage: "maintenance",
-        mergedGroups: result.mergedGroups
+        mergedGroups: result.mergedGroups,
+        ...(result.merges?.length ? { merges: result.merges } : {})
       });
+      await notifyGroupMerges(
+        createFingerprintAlertNotifier(context.config, { logger }),
+        result.merges ?? []
+      );
     }
   } catch (error) {
     const errorCode = characterGroupsErrorCode(error);
@@ -1292,7 +1309,7 @@ export async function createWorkerRuntime(
   dependencies: WorkerRuntimeDependencies = defaultDependencies,
   logger?: DiscoveryLogger
 ): Promise<WorkerRuntime> {
-  const pool = dependencies.createPool(config.databaseUrl);
+  const pool = dependencies.createPool(config.databaseUrl, "slashwho-worker");
   const clock = dependencies.clock ?? monotonicClock;
   let queue: DiscoveryQueue | undefined;
   let ready = false;
@@ -1303,7 +1320,10 @@ export async function createWorkerRuntime(
     await connectWithRetry(pool, config, dependencies.sleep);
     await dependencies.runMigrations(pool);
     const repositories = dependencies.createRepositories(pool);
-    const initializedQueue = dependencies.createQueue(config.databaseUrl);
+    const initializedQueue = dependencies.createQueue(
+      config.databaseUrl,
+      "slashwho-worker"
+    );
     queue = initializedQueue;
     const context: WorkerContext = {
       config,

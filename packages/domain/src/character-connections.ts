@@ -247,6 +247,7 @@ export type GroupGraph = Readonly<{
     makerId: string;
     targetId: string;
     excluded: boolean;
+    origin?: string;
   }>[];
   /**
    * Manual targets with no `characters` row yet, so not in `characters` or
@@ -257,6 +258,7 @@ export type GroupGraph = Readonly<{
     makerId: string;
     targetKey: CharacterKey;
     excluded: boolean;
+    origin?: string;
   }>[];
   discoveredExclusions: readonly Readonly<{
     makerId: string;
@@ -267,9 +269,49 @@ export type GroupGraph = Readonly<{
   sharedIdentity: (id: string) => ReadonlySet<string>; // ids sharing a WCL id, self included
   latestSnapshot: ReadonlyMap<
     string,
-    Readonly<{ state: "complete" | "partial"; limitationCode: string | null }>
-  >; // by root id, suppression-filtered
+    Readonly<{
+      state: "complete" | "partial";
+      limitationCode: string | null;
+      refreshedAt?: Date;
+    }>
+  >; // by root id; consumers restrict facts to page members
+  snapshotMembers?: ReadonlyMap<string, readonly string[]>;
+  snapshotSources?: ReadonlyMap<string, ReadonlyMap<string, DiscoverySource>>;
 }>;
+
+/** Walk current links within the stored group, then fold in the opened snapshot. */
+export function groupPageMembers(
+  originId: string,
+  graph: GroupGraph
+): Set<string> {
+  if (graph.suppressed.has(originId)) return new Set();
+  const group = graph.groupOf.get(originId);
+  const members = new Set([originId]);
+  if (group !== undefined) {
+    const adjacent = new Map<string, string[]>();
+    for (const link of graph.links) {
+      if (
+        graph.groupOf.get(link.a) !== group ||
+        graph.groupOf.get(link.b) !== group
+      )
+        continue;
+      adjacent.set(link.a, [...(adjacent.get(link.a) ?? []), link.b]);
+      adjacent.set(link.b, [...(adjacent.get(link.b) ?? []), link.a]);
+    }
+    const queue = [originId];
+    for (let i = 0; i < queue.length; i++) {
+      for (const next of adjacent.get(queue[i]!) ?? []) {
+        if (members.has(next) || graph.suppressed.has(next)) continue;
+        members.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  for (const id of graph.snapshotMembers?.get(originId) ?? []) {
+    if (!graph.suppressed.has(id)) members.add(id);
+  }
+  return members;
+}
 
 /**
  * Each reachable node's label strength seen from `origin` (#738).

@@ -1,3 +1,4 @@
+import { COUNTING_LINKS_WITH_STRENGTH } from "./counting-links";
 import type { Pool, PoolClient } from "pg";
 import {
   canonicalCharacterId,
@@ -103,30 +104,11 @@ export type CharacterGroupsAudit = Readonly<{
  * every resolved manual connection. Mirrors `COUNTING_LINKS_FROM` in
  * `character-connections.ts` without its `= ANY` filters.
  */
-const COUNTING_LINKS_WITH_STRENGTH = `
-  SELECT DISTINCT connection.character_low_id AS a,
-         connection.character_high_id AS b,
-         connection.source AS source
-  FROM character_connections connection
-  WHERE connection.kind = 'observed'
-    AND NOT EXISTS (
-      SELECT 1 FROM character_connections rejection
-      WHERE rejection.kind = 'rejected'
-        AND rejection.character_low_id = connection.character_low_id
-        AND rejection.character_high_id = connection.character_high_id
-    )
-  UNION
-  SELECT manual.root_character_id, target.id, NULL
-  FROM manual_dossier_connections manual
-  JOIN characters target ON target.region = manual.connected_region
-    AND target.realm_slug = manual.connected_realm_slug
-    AND target.normalized_name = manual.connected_normalized_name
-  WHERE target.id <> manual.root_character_id`;
 
 /** Each root's latest snapshot, as `getCurrent` chooses it, before suppression. */
 const LATEST_SNAPSHOTS = `
   SELECT DISTINCT ON (snapshot.root_character_id)
-    snapshot.id, snapshot.root_character_id, snapshot.state, snapshot.limitation_code
+    snapshot.id, snapshot.root_character_id, snapshot.state, snapshot.limitation_code, snapshot.refreshed_at
   FROM snapshots snapshot
   JOIN discovery_runs run ON run.id = snapshot.discovery_run_id AND run.status = 'complete'
   ORDER BY snapshot.root_character_id, snapshot.refreshed_at DESC, snapshot.id DESC`;
@@ -238,9 +220,10 @@ async function load(
     maker: string;
     target: string;
     excluded: boolean;
+    origin: string | null;
   }>(
     `SELECT manual.root_character_id AS maker, target.id AS target,
-            manual.excluded_at IS NOT NULL AS excluded
+            manual.excluded_at IS NOT NULL AS excluded, manual.origin AS origin
      FROM manual_dossier_connections manual
      JOIN characters target ON target.region = manual.connected_region
        AND target.realm_slug = manual.connected_realm_slug
@@ -255,12 +238,13 @@ async function load(
     realm_slug: string;
     normalized_name: string;
     excluded: boolean;
+    origin: string | null;
   }>(
     `SELECT manual.root_character_id AS maker,
             manual.connected_region AS region,
             manual.connected_realm_slug AS realm_slug,
             manual.connected_normalized_name AS normalized_name,
-            manual.excluded_at IS NOT NULL AS excluded
+            manual.excluded_at IS NOT NULL AS excluded, manual.origin AS origin
      FROM manual_dossier_connections manual
      WHERE NOT EXISTS (
          SELECT 1 FROM characters target
@@ -323,21 +307,27 @@ async function load(
     root_character_id: string;
     state: "complete" | "partial";
     limitation_code: string | null;
+    refreshed_at: Date;
   }>(LATEST_SNAPSHOTS);
   const latestSnapshot = new Map(
     latestRows.rows
       .filter((row) => !suppressed.has(row.root_character_id))
       .map((row) => [
         row.root_character_id,
-        { state: row.state, limitationCode: row.limitation_code }
+        {
+          state: row.state,
+          limitationCode: row.limitation_code,
+          refreshedAt: row.refreshed_at
+        }
       ])
   );
   const rawMembershipRows = await client.query<{
     root_character_id: string;
     character_id: string;
+    source: import("./repositories").DiscoverySource;
   }>(
     `WITH latest AS (${LATEST_SNAPSHOTS})
-     SELECT latest.root_character_id, member.character_id
+     SELECT latest.root_character_id, member.character_id, member.discovery_source AS source
      FROM latest
      JOIN snapshot_characters member ON member.snapshot_id = latest.id
      ORDER BY latest.root_character_id, member.display_order`
@@ -450,7 +440,8 @@ async function load(
     manual: manualRows.rows.map((row) => ({
       makerId: row.maker,
       targetId: row.target,
-      excluded: row.excluded
+      excluded: row.excluded,
+      ...(row.origin ? { origin: row.origin } : {})
     })),
     undiscoveredManualTargets: undiscoveredRows.rows.map((row) => ({
       makerId: row.maker,
@@ -459,7 +450,8 @@ async function load(
         realm: row.realm_slug,
         name: row.normalized_name
       },
-      excluded: row.excluded
+      excluded: row.excluded,
+      ...(row.origin ? { origin: row.origin } : {})
     })),
     discoveredExclusions: exclusionRows.rows.map((row) => ({
       makerId: row.maker,
@@ -474,7 +466,18 @@ async function load(
         ...(wcl === undefined ? [] : (idsByWarcraftLogsId.get(wcl) ?? []))
       ]);
     },
-    latestSnapshot
+    latestSnapshot,
+    snapshotMembers: latestRawMembership,
+    snapshotSources: new Map(
+      [...latestRawMembership.keys()].map((id) => [
+        id,
+        new Map(
+          rawMembershipRows.rows
+            .filter((row) => row.root_character_id === id)
+            .map((row) => [row.character_id, row.source])
+        )
+      ])
+    )
   };
 
   return {

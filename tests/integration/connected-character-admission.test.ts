@@ -79,9 +79,28 @@ describe("connected-character route admission with PostgreSQL", () => {
   });
   beforeEach(async () => {
     await resetRepositoryTables(pool);
-    await seedCompleteSnapshot(repositories, {
-      characters: [observation(rootKey, "Ryii"), observation(altKey, "Other")]
+    const snapshot = await seedCompleteSnapshot(repositories, {
+      characters: [
+        observation(rootKey, "Ryii"),
+        observation(altKey, "Other", "claimed")
+      ]
     });
+    const written = await repositories.characterConnections!.writeObservations({
+      runId: snapshot.runId,
+      observerKey: rootKey,
+      families: [
+        {
+          family: "raiderio",
+          decision: "replaced",
+          reason: "raiderio_complete",
+          sweepReservationId: null,
+          observed: [{ key: altKey, source: "claimed" }]
+        }
+      ]
+    });
+    await repositories.characterConnections!.recomputeGroupsOf(
+      written.changedCharacterIds
+    );
     await repositories.manualConnections.add(rootKey, target);
     const unavailable = async (): Promise<never> => {
       throw new Error("upstream_not_expected");
